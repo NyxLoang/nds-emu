@@ -36,6 +36,16 @@ int main(int argc, char *argv[])
         }
         printf("cart: loaded %s (%zu bytes)\n", rom_path, cart->size);
         fflush(stdout);
+
+        cart_header_t hdr;
+        if (cart_parse_header(cart, &hdr) != 0) {
+            fprintf(stderr, "cart: header too short (%zu bytes)\n", cart->size);
+            fflush(stdout);
+        } else {
+            printf("arm9 offset=%08X entry=%08X ram=%08X size=%08X\n",
+                   hdr.arm9_offset, hdr.arm9_entry, hdr.arm9_ram, hdr.arm9_size);
+            fflush(stdout);
+        }
     }
 
     /* 一台空机器：整机状态容器，后续微步往里装 bus / cpu / ppu */

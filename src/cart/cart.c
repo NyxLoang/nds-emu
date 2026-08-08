@@ -62,3 +62,25 @@ void cart_free(cart_t *cart)
     free(cart->data);
     free(cart);
 }
+
+/* 从缓冲区读 32 位小端整数（低地址先放低字节）。 */
+static uint32_t read_le32(const unsigned char *p)
+{
+    return (uint32_t)p[0]
+         | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16)
+         | ((uint32_t)p[3] << 24);
+}
+
+int cart_parse_header(const cart_t *cart, cart_header_t *hdr)
+{
+    /* 需要读到 0x02C+4，至少 0x30 字节 */
+    if (cart->size < 0x30)
+        return -1;
+
+    hdr->arm9_offset = read_le32(cart->data + 0x020);
+    hdr->arm9_entry  = read_le32(cart->data + 0x024);
+    hdr->arm9_ram    = read_le32(cart->data + 0x028);
+    hdr->arm9_size   = read_le32(cart->data + 0x02C);
+    return 0;
+}

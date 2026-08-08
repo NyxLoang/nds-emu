@@ -27,3 +27,4 @@
 | 2026-08-08 | 0.6 | 窗口/主循环 | 顶/底屏两种纯色区分（上蓝下绿），`SCREEN_W/H` 单屏常量 | [main](src/mainlog.md) |
 | 2026-08-08 | 1.1 | 预习/装载 | 新增 `docs/02-nds-rom-header.md`：ARM9/ARM7 头四字段与偏移 | [02](docs/02-nds-rom-header.md) |
 | 2026-08-08 | 1.2 | 卡带装载 | `cart` 读整个文件到缓冲区，`argv[1]` 传路径，打印文件大小 | [cart](src/cart/cartlog.md) |
+| 2026-08-08 | 1.3 | 卡带装载 | 按偏移解析 ARM9 头四字段并打印（小端 `read_le32`） | [cart](src/cart/cartlog.md) |

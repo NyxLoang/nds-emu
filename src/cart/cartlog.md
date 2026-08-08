@@ -11,3 +11,12 @@
   - `CMakeLists.txt` 加入 `src/cart/cart.c`。
 - **怎么验证**：`cmake --build build` 通过；`.\build\nds-emu.exe tools\sdl2\SDL2-2.26.3.tar.gz` 打印文件大小（8464990 字节，与实际一致）。
 - **结果**：✅ 通过。
+
+## 2026-08-08 · 阶段 1.3 按偏移解析 ARM9 头字段并打印
+
+- **做了什么**：
+  - `cart.h` 新增 `cart_header_t`（`arm9_offset/entry/ram/size`）与 `cart_parse_header` 接口。
+  - `cart.c` 实现小端 `read_le32`（`b0 | b1<<8 | b2<<16 | b3<<24`），按 `0x020/0x024/0x028/0x02C` 解析四字段；文件不足 0x30 字节返回 -1。
+  - `main.c` 在装载后解析并打印 `arm9 offset/entry/ram/size` 四个十六进制值。
+- **怎么验证**：构建通过；用 SDL2 包运行打印四个十六进制（非真 ROM，为数据字节，仅验证机制）。
+- **结果**：✅ 通过。

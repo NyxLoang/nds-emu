@@ -7,6 +7,7 @@
 #include "window/window.h"
 #include "menu/menu.h"
 #include "nds/nds.h"
+#include "cpu/cpu.h"
 #include "cart/cart.h"
 
 int main(int argc, char *argv[])
@@ -91,6 +92,10 @@ int main(int argc, char *argv[])
                 uint32_t readback = bus_read32(nds->bus, hdr.arm9.ram);
                 printf("image : loaded %u bytes into Main RAM @ %08X, first word readback %08X\n",
                        hdr.arm9.size, hdr.arm9.ram, readback);
+
+                /* 阶段 3a：镜像就位后，让 CPU 从 ARM9 入口开始执行 */
+                cpu_reset(nds->cpu, hdr.arm9.entry);
+                printf("cpu   : reset PC=%08X\n", hdr.arm9.entry);
             }
         }
         fflush(stdout);
@@ -99,38 +104,28 @@ int main(int argc, char *argv[])
 #endif
     }
 
-    /* === 阶段 2 自测：bus 读写换算 ===
-       写一个字节到 Main RAM 内地址，读回应一致；未映射区间读应返回 0。
-       16/32 位验证小端拼拆：写 0xABCD 后应读回 0xABCD，且内存字节序为 CD AB。
+    /* === 阶段 3a 自测：CPU 骨架 ===
+       bus 的读写换算已在阶段 2 验证，此处换成 CPU 验证：
+       - 取指：PC 处应读到镜像首字（mini.nds 为 EAFFFFFE）
+       - 单步：死循环分支后 PC 停在同一地址、cycles 递增
        （阶段 5 起换成正式单元测试，此块为各微步的临时验证入口） */
-    bus_write8(nds->bus, BUS_MAIN_RAM_BASE + 0x100, 0xAB);
-    printf("bus test: write8 0xAB -> read8 0x%02X\n",
-           bus_read8(nds->bus, BUS_MAIN_RAM_BASE + 0x100));
-    printf("bus test: unmapped read8 0x%02X\n",
-           bus_read8(nds->bus, 0x0F000000u));
+    if (nds->cpu != NULL) {
+        uint32_t fetched = cpu_fetch(nds->cpu);
+        printf("cpu test: fetch @ %08X = %08X\n", nds->cpu->r[15], fetched);
 
-    bus_write16(nds->bus, BUS_MAIN_RAM_BASE + 0x200, 0xABCD);
-    printf("bus test: write16 0xABCD -> read16 0x%04X, bytes %02X %02X\n",
-           bus_read16(nds->bus, BUS_MAIN_RAM_BASE + 0x200),
-           bus_read8(nds->bus, BUS_MAIN_RAM_BASE + 0x200),
-           bus_read8(nds->bus, BUS_MAIN_RAM_BASE + 0x201));
+        /* 预跑 8 步：mini.nds 入口是死循环，PC 应始终停在入口 */
+        for (int i = 0; i < 8; i++) {
+            uint32_t pc_before = nds->cpu->r[15];
+            cpu_step(nds->cpu);
+            printf("cpu test: step%d pc %08X -> %08X cycles=%llu\n",
+                   i, pc_before, nds->cpu->r[15],
+                   (unsigned long long)nds->cpu->cycles);
+        }
+        fflush(stdout);
+    }
 
-    bus_write32(nds->bus, BUS_MAIN_RAM_BASE + 0x300, 0x12345678);
-    printf("bus test: write32 0x12345678 -> read32 0x%08X, bytes %02X %02X %02X %02X\n",
-           bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x300),
-           bus_read8(nds->bus, BUS_MAIN_RAM_BASE + 0x300),
-           bus_read8(nds->bus, BUS_MAIN_RAM_BASE + 0x301),
-           bus_read8(nds->bus, BUS_MAIN_RAM_BASE + 0x302),
-           bus_read8(nds->bus, BUS_MAIN_RAM_BASE + 0x303));
-
-    bus_write16(nds->bus, BUS_VRAM_BASE + 0x10, 0xBEEF);
-    printf("bus test: VRAM write16 0xBEEF -> read16 0x%04X\n",
-           bus_read16(nds->bus, BUS_VRAM_BASE + 0x10));
-
-    bus_write8(nds->bus, BUS_IO_BASE + 0x04, 0x11); /* IO 桩写应忽略、不崩 */
-    printf("bus test: IO stub read8 0x%02X\n",
-           bus_read8(nds->bus, BUS_IO_BASE + 0x04));
-    fflush(stdout);
+    /* 每帧执行的 CPU 步数（阶段 3a：固定 N 步，画面仍黑） */
+    const int steps_per_frame = 8;
 
     int quit = 0;
     while (!quit) {
@@ -150,6 +145,19 @@ int main(int argc, char *argv[])
                     window_set_scale(new_scale);
                     scale = new_scale;
                 }
+            }
+        }
+
+        /* 阶段 3a：每帧推进固定 N 步 CPU（mini.nds 是死循环，PC 原地打转）。
+           阶段 4 起用 VRAM 内容出图，这里先只推进、画面仍黑。
+           每 60 帧打一次状态，避免死循环时刷屏。 */
+        if (nds->cpu != NULL) {
+            for (int i = 0; i < steps_per_frame; i++)
+                cpu_step(nds->cpu);
+            if (nds->cpu->cycles % 60u == 0) {
+                printf("cpu: frame done, PC=%08X cycles=%llu\n",
+                       nds->cpu->r[15], (unsigned long long)nds->cpu->cycles);
+                fflush(stdout);
             }
         }
 

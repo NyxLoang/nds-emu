@@ -13,6 +13,7 @@
 | 整机状态 | [`src/nds/ndslog.md`](src/nds/ndslog.md) | 整机状态容器 `nds_t`（`src/nds/nds.h` / `src/nds/nds.c`） |
 | 卡带装载 | [`src/cart/cartlog.md`](src/cart/cartlog.md) | 读 `.nds` 文件、解析 ROM 头（`src/cart/cart.h` / `src/cart/cart.c`） |
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
+| CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9 状态、取指/单步循环、死循环识别（`src/cpu/cpu.h` / `src/cpu/cpu.c`） |
 
 ## 按时间索引
 
@@ -42,3 +43,10 @@
 | 2026-08-08 | 2.6 | 内存总线 | VRAM 区间映射（`0x06000000` 656KB），写读回一致 | [bus](src/bus/buslog.md) |
 | 2026-08-08 | 2.7 | 内存总线 | IO 桩：`0x04000000` 区间读 0、写忽略，访问不崩 | [bus](src/bus/buslog.md) |
 | 2026-08-08 | 2.8 | 内存总线 | 装载衔接：ARM9 镜像经 `bus_write8` 装入 Main RAM，`bus_read32` 读回 `EAFFFFFE` | [bus](src/bus/buslog.md) |
+| 2026-08-08 | 3a.1 | CPU | 新增 `docs/04-cpu-loop.md`：取指-执行循环、PC、B 指令位模式 | [04](docs/04-cpu-loop.md) |
+| 2026-08-08 | 3a.2 | CPU | `arm_cpu_t`：`r[16]`（r15=PC）、`cpsr`、`cycles`，挂入 `nds_t` | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3a.3 | CPU | `cpu_fetch`：按 PC 从 bus 读 32 位指令字 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3a.4 | CPU | `cpu_step`：取指后 PC+=4（非分支默认推进） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3a.5 | CPU | 识别「无条件 B 跳自己」死循环（`EAFFFFFE`），PC 原地打转 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3a.6 | CPU | 未实现指令：打印机器码并计数（阶段 3b 逐类实现） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3a.7 | CPU | 主循环每帧执行固定 N 步；修复 `mini.nds` 布局（ram=entry） | [cpu](src/cpu/cpulog.md) |

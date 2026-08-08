@@ -37,6 +37,8 @@ add_executable(nds-emu
     src/main.c
     src/nds/nds.c
     src/cart/cart.c
+    src/cart/arm9.c
+    src/cart/arm7.c
     src/window/window.c
     src/menu/menu.c
 )

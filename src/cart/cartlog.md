@@ -31,3 +31,14 @@
 - **怎么验证**：用中文名真实 ROM（`tools\Z 最终幻想12…(1024Mb).nds`，112MB）运行，成功装载并打印：
   `cart: loaded … / arm9 offset=00004000 entry=02000800 ram=02000000 size=00078038`（ram=02000000 正是 Main RAM 基址，字段合理）。
 - **结果**：✅ 通过。
+
+## 2026-08-08 · 阶段 1.4 拆 arm9/arm7 功能文件 + 解析 ARM7 头
+
+- **做了什么**：
+  - 按模块结构规则拆分：新增 `arm9.h/.c`（ARM9 解析迁入）、`arm7.h/.c`（新增 ARM7 解析 `0x030/034/038/03C`），小端读取各文件内 `static` 自持。
+  - `cart.h/.c` 精简为接口文件：`cart_header_t = { arm9_header_t arm9; arm7_header_t arm7; }`，`cart_parse_header` 编排调用两个子解析；外部只依赖 `cart.h`。
+  - `main.c` 打印 ARM9 + ARM7 两组字段；`CMakeLists.txt` 加 `arm9.c`、`arm7.c`。
+- **怎么验证**：构建通过；真实 ROM 运行打印两组字段：
+  `arm9 offset=00004000 entry=02000800 ram=02000000 size=00078038`
+  `arm7 offset=0007C200 entry=02380000 ram=02380000 size=000286B0`（ram=02380000 是 ARM7 Main RAM 基址，合理）。
+- **结果**：✅ 通过。

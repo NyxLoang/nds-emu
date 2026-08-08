@@ -58,7 +58,9 @@ int main(int argc, char *argv[])
             fflush(stdout);
         } else {
             printf("arm9 offset=%08X entry=%08X ram=%08X size=%08X\n",
-                   hdr.arm9_offset, hdr.arm9_entry, hdr.arm9_ram, hdr.arm9_size);
+                   hdr.arm9.offset, hdr.arm9.entry, hdr.arm9.ram, hdr.arm9.size);
+            printf("arm7 offset=%08X entry=%08X ram=%08X size=%08X\n",
+                   hdr.arm7.offset, hdr.arm7.entry, hdr.arm7.ram, hdr.arm7.size);
             fflush(stdout);
         }
 #ifdef _WIN32

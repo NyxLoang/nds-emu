@@ -10,6 +10,100 @@
 #include "cpu/cpu.h"
 #include "cart/cart.h"
 
+/* 阶段 3b 自测：把一段手工汇编的 ARM 指令序列写进 Main RAM，逐条执行后断言
+   寄存器值。覆盖 MOV/ADD/SUB/CMP/LDR/STR/B/BL/BX 每类指令（验收见计划表）。 */
+
+static int selftest_failures = 0;
+
+/* 断言工具：got 与 want 不一致则计一次失败并打印。 */
+static void check(const char *name, uint32_t got, uint32_t want)
+{
+    if (got == want) {
+        printf("3b test: %-14s PASS (0x%08X)\n", name, got);
+    } else {
+        printf("3b test: %-14s FAIL got=0x%08X want=0x%08X\n", name, got, want);
+        selftest_failures++;
+    }
+}
+
+static void selftest_3b(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+
+    /* 手工汇编的测试程序（指令字来自 ARM 编码手册，见 cpulog.md 附表）。
+       布局：程序 0x00-0x54，数据 0x68，BL 子程序 0x70。 */
+    const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00005, /* MOV r0, #5            → r0=5        */
+        /* 0x04 */ 0xE3A01007, /* MOV r1, #7            → r1=7        */
+        /* 0x08 */ 0xE0802001, /* ADD r2, r0, r1        → r2=12       */
+        /* 0x0C */ 0xE0423000, /* SUB r3, r2, r0        → r3=7        */
+        /* 0x10 */ 0xE2804008, /* ADD r4, r0, #8        → r4=13       */
+        /* 0x14 */ 0xE3500005, /* CMP r0, #5            → Z=1         */
+        /* 0x18 */ 0xE1500001, /* CMP r0, r1            → N=1 C=0     */
+        /* 0x1C */ 0xE3A05402, /* MOV r5, #0x02000000（0x02 ROR 8）→ r5=Main RAM 基址 */
+        /* 0x20 */ 0xE3A0607F, /* MOV r6, #0x7F         → r6=0x7F     */
+        /* 0x24 */ 0xE5856060, /* STR r6, [r5, #0x60]   → mem[0x02000060]=0x7F */
+        /* 0x28 */ 0xE3A07000, /* MOV r7, #0            → r7=0        */
+        /* 0x2C */ 0xE5957060, /* LDR r7, [r5, #0x60]   → r7=0x7F     */
+        /* 0x30 */ 0xE5958068, /* LDR r8, [r5, #0x68]   → r8=0x12345678 */
+        /* 0x34 */ 0xEA000003, /* B 0x48（跳过 0x38-0x44）              */
+        /* 0x38 */ 0xE3A080FF, /* MOV r8, #0xFF（应被跳过）             */
+        /* 0x3C */ 0xE1A00000, /* NOP (MOV r0, r0)                     */
+        /* 0x40 */ 0xE1A00000, /* NOP                                 */
+        /* 0x44 */ 0xE1A00000, /* NOP                                 */
+        /* 0x48 */ 0xE3A0B011, /* MOV r11, #0x11（B 的落点）→ r11=0x11 */
+        /* 0x4C */ 0xEB000007, /* BL 0x70（lr=0x50，跳子程序）         */
+        /* 0x50 */ 0xE3A09022, /* MOV r9, #0x22（返回后执行）→ r9=0x22 */
+        /* 0x54 */ 0xEAFFFFFE, /* B self（停机）                       */
+    };
+    for (size_t i = 0; i < sizeof prog / sizeof prog[0]; i++)
+        bus_write32(nds->bus, base + 4 * i, prog[i]);
+    /* 数据区：LDR r8, [r5, #8] 读的就是这个预置值 */
+    bus_write32(nds->bus, base + 0x68, 0x12345678);
+    /* BL 子程序：0x70 MOV r10,#0x33；0x74 BX lr 返回调用处 */
+    bus_write32(nds->bus, base + 0x70, 0xE3A0A033);
+    bus_write32(nds->bus, base + 0x74, 0xE12FFF1E);
+
+    cpu_reset(nds->cpu, base);
+    printf("3b test: --- begin instruction self-test ---\n");
+    for (int i = 0; i < 64; i++) {
+        cpu_step(nds->cpu);
+        if (nds->cpu->r[15] == base + 0x54)
+            break; /* 到达停机死循环，测试程序执行完毕 */
+    }
+
+    /* 逐项断言 */
+    check("r0 (MOV imm)",  nds->cpu->r[0],  0x00000005u);
+    check("r1 (MOV imm)",  nds->cpu->r[1],  0x00000007u);
+    check("r2 (ADD reg)",  nds->cpu->r[2],  0x0000000Cu);
+    check("r3 (SUB reg)",  nds->cpu->r[3],  0x00000007u);
+    check("r4 (ADD imm)",  nds->cpu->r[4],  0x0000000Du);
+    check("r5 (MOV addr)", nds->cpu->r[5],  0x02000000u);
+    check("r7 (LDR mem)",  nds->cpu->r[7],  0x0000007Fu);
+    check("r8 (LDR off)",  nds->cpu->r[8],  0x12345678u);
+    check("r9 (BL ret)",   nds->cpu->r[9],  0x00000022u);
+    check("r10 (BL sub)",  nds->cpu->r[10], 0x00000033u);
+    check("r11 (B tgt)",   nds->cpu->r[11], 0x00000011u);
+    check("lr (BL saved)", nds->cpu->r[14], base + 0x50u);
+
+    /* CMP 更新了 flags：CMP r0,#5 → Z=1；CMP r0,r1 → N=1 C=0（V 未知，只看 N/Z/C） */
+    uint32_t cpsr = nds->cpu->cpsr;
+    printf("3b test: cpsr=0x%08X (N=%d Z=%d C=%d V=%d)\n",
+           cpsr, (cpsr >> 31) & 1, (cpsr >> 30) & 1, (cpsr >> 29) & 1, (cpsr >> 28) & 1);
+    if ((cpsr & (1u << 31)) && !(cpsr & (1u << 30)) && !(cpsr & (1u << 29))) {
+        printf("3b test: flags (N=1 Z=0 C=0)   PASS\n");
+    } else {
+        printf("3b test: flags (N=1 Z=0 C=0)   FAIL cpsr=%08X\n", cpsr);
+        selftest_failures++;
+    }
+
+    if (selftest_failures == 0)
+        printf("3b test: --- ALL PASS ---\n");
+    else
+        printf("3b test: --- %d FAILURES ---\n", selftest_failures);
+    fflush(stdout);
+}
+
 int main(int argc, char *argv[])
 {
     (void)argc;
@@ -104,23 +198,13 @@ int main(int argc, char *argv[])
 #endif
     }
 
-    /* === 阶段 3a 自测：CPU 骨架 ===
-       bus 的读写换算已在阶段 2 验证，此处换成 CPU 验证：
-       - 取指：PC 处应读到镜像首字（mini.nds 为 EAFFFFFE）
-       - 单步：死循环分支后 PC 停在同一地址、cycles 递增
+    /* === 阶段 3b 自测：指令序列（MOV/ADD/SUB/CMP/LDR/STR/B/BL/BX）===
+       把手工汇编的测试程序装入 Main RAM 执行，断言各寄存器值。
        （阶段 5 起换成正式单元测试，此块为各微步的临时验证入口） */
     if (nds->cpu != NULL) {
-        uint32_t fetched = cpu_fetch(nds->cpu);
-        printf("cpu test: fetch @ %08X = %08X\n", nds->cpu->r[15], fetched);
-
-        /* 预跑 8 步：mini.nds 入口是死循环，PC 应始终停在入口 */
-        for (int i = 0; i < 8; i++) {
-            uint32_t pc_before = nds->cpu->r[15];
-            cpu_step(nds->cpu);
-            printf("cpu test: step%d pc %08X -> %08X cycles=%llu\n",
-                   i, pc_before, nds->cpu->r[15],
-                   (unsigned long long)nds->cpu->cycles);
-        }
+        selftest_3b(nds);
+        /* 自测完毕后恢复 mini.nds 入口，让主循环继续死循环空转 */
+        cpu_reset(nds->cpu, 0x02000800);
         fflush(stdout);
     }
 

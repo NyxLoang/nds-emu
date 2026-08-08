@@ -31,3 +31,50 @@
 - 假 ROM 原设 `ram=0x02000000` 但 `entry=0x02000800`，入口落在镜像外（读 0）。
 - `make_fake_rom.py` 改为 `ram = entry = 0x02000800`，重新生成 `mini.nds`；
   取指读回 `EAFFFFFE`（死循环指令），PC 稳定停在入口。
+
+## 3b.1 — 条件码执行框架
+
+- `cond_ok()`：按 CPSR 的 N/Z/C/V 判断 15 种条件（EQ/NE/CS/CC/MI/PL/VS/VC/HI/LS/GE/LT/GT/LE/AL）。
+- `cpu_step` 开头检查条件，不满足则跳过指令（无副作用，仅 PC+4）。
+
+## 3b.2 — MOV 立即数
+
+- `arm_rotate()`：ARM 立即数 = `imm8 ROR (rot4*2)`（经典 8 位立即数旋转编码）。
+- `decode_op2()`：I=1 立即数 / I=0 寄存器。
+- `exec_dataop()`：opcode=1101(MOV) 写入 `Rd`。
+
+## 3b.3 — ADD / SUB
+
+- opcode=0100(ADD)、0010(SUB)；支持立即数与寄存器操作数。
+- 更新标志：`set_carry_add`（C=进位，V=同号相加异号）、`set_carry_sub`（C=无借位）。
+
+## 3b.4 — CMP + flags
+
+- opcode=1010：`Rn - op2` 只更新 N/Z/C/V，不写寄存器（后接条件分支的基础）。
+
+## 3b.5 / 3b.6 — LDR / STR 立即偏移
+
+- bit27-26=01 大类：P=1 前变址、U=±偏移、L=读/写。
+- 地址 = `Rn ± offset12`，`bus_read32` / `bus_write32` 访存。
+
+## 3b.7 — B 相对跳转
+
+- 分支目标 = `PC+8 + 符号扩展(offset24<<2)`（ARM 流水线 PC+8 语义）。
+- 「B 自己」死循环识别保留，只打印一次。
+
+## 3b.8 — BL + BX lr
+
+- BL：`lr = PC+4`（返回地址），再跳转；BX Rm：`PC = Rm`（用于 `BX lr` 返回）。
+- 自测：`BL 0x70` → 子程序 `MOV r10,#0x33` → `BX lr` → 返回执行 `MOV r9,#0x22`。
+
+## 修复：分支立即数符号扩展
+
+- 3b 重写时误写成 `(int32_t)((imm24 << 8) >> 8)`：cast 在移位之后，无符号移位成
+  逻辑右移，`0xFFFFFE` 被当成 +16777214 而非 -2，死循环跳到 `0x06000800`。
+- 改为 `((int32_t)(imm24 << 8) >> 8) << 2`：先转 int32 再算术右移，符号扩展正确。
+
+## 3b 自测（main.c `selftest_3b`）
+
+- 手工汇编 22 条指令写入 Main RAM（0x02000000 起），逐条执行后断言寄存器。
+- 覆盖：MOV/ADD/SUB/CMP、STR/LDR 立即偏移、B 跳转、BL/BX lr 调用返回。
+- 12 项断言 + flags 全部 PASS；阶段 5 换正式单元测试。

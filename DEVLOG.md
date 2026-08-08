@@ -50,3 +50,11 @@
 | 2026-08-08 | 3a.5 | CPU | 识别「无条件 B 跳自己」死循环（`EAFFFFFE`），PC 原地打转 | [cpu](src/cpu/cpulog.md) |
 | 2026-08-08 | 3a.6 | CPU | 未实现指令：打印机器码并计数（阶段 3b 逐类实现） | [cpu](src/cpu/cpulog.md) |
 | 2026-08-08 | 3a.7 | CPU | 主循环每帧执行固定 N 步；修复 `mini.nds` 布局（ram=entry） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3b.1 | CPU | 条件码执行框架（15 种条件按 N/Z/C/V 判断，不满足跳过） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3b.2 | CPU | `MOV` 立即数（`imm8 ROR (rot4*2)` 旋转编码） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3b.3 | CPU | `ADD`/`SUB` 立即数或寄存器，更新进位/溢出标志 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3b.4 | CPU | `CMP` + flags 更新（N/Z/C/V，只比较不写回） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3b.5 | CPU | `LDR` 立即偏移（前变址 ±offset，`bus_read32`） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3b.6 | CPU | `STR` 立即偏移（`bus_write32`） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3b.7 | CPU | `B` 相对跳转（PC+8 语义）；修复分支符号扩展 bug | [cpu](src/cpu/cpulog.md) |
+| 2026-08-08 | 3b.8 | CPU | `BL`+`BX lr` 最小调用返回（lr=PC+4） | [cpu](src/cpu/cpulog.md) |

@@ -19,6 +19,28 @@ build/nds-emu.exe
 
 `main` 可执行文件需要 SDL 的 `SDL2main` 入口（Windows 窗口子系统），CMakeLists 已链接。
 
+## 运行测试
+
+测试是**统一入口** `tests/test_nds.c`，只链核心库 `ndscore`（不依赖 SDL、不开窗口），
+覆盖：bus 读写换算/小端、ARM 指令集（MOV/ADD/SUB/CMP/LDR/STR/B/BL/BX/AND/ORR/EOR）、
+CPU 写 VRAM 出图、以及三个验收用例（清屏、画矩形、死循环保活）。
+
+```sh
+cmake -S . -B build        # 配置（生成 nds_test 目标）
+cmake --build build        # 构建模拟器 + 测试
+ctest --test-dir build     # 一键跑全部测试（等价的直接命令见下）
+```
+
+`ctest` 内部就是运行 `build/test_nds.exe`，也可以直接执行它：
+
+```sh
+./build/test_nds.exe
+```
+
+- 退出码 `0` = 全部通过；非 `0` = 有失败（并打印 `FAIL` 与期望/实际值）。
+- 新增用例：在 `tests/test_nds.c` 里加一个 `test_xxx(nds)` 函数并在 `main` 中调用即可；
+  断言用 `CHECK_EQ(name, got, want)` 宏。
+
 ## 目录结构
 
 见 `docs/01-project-layout.md`。

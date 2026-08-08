@@ -33,20 +33,32 @@ set(TTF_SDL2_TEST OFF CACHE BOOL "" FORCE)
 set(SDL2TTF_VENDORED ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(SDL2_ttf)
 
-add_executable(nds-emu
-    src/main.c
+# 核心库：不含任何 SDL 依赖，供模拟器可执行程序与单元测试共用。
+# 测试程序只链 ndscore，不开窗口即可验证 CPU/内存总线/指令语义。
+add_library(ndscore STATIC
     src/nds/nds.c
     src/bus/bus.c
     src/cpu/cpu.c
     src/cpu/exec.c
-    src/ppu/ppu.c
     src/cart/cart.c
     src/cart/arm9.c
     src/cart/arm7.c
+)
+# PUBLIC：include 路径随链接传递，nds-emu 与 test_nds 都能 #include "nds/..." 等
+target_include_directories(ndscore PUBLIC src)
+
+# 模拟器本体：核心库 + SDL 显示/菜单部分
+add_executable(nds-emu
+    src/main.c
+    src/ppu/ppu.c
     src/window/window.c
     src/menu/menu.c
 )
+target_link_libraries(nds-emu PRIVATE ndscore SDL2-static SDL2main SDL2_ttf)
 
-target_include_directories(nds-emu PRIVATE src)
-
-target_link_libraries(nds-emu PRIVATE SDL2-static SDL2main SDL2_ttf)
+# 单元测试：统一测试入口（阶段 5.1）。
+# 只链核心库、不碰 SDL，可直接运行也可被 ctest 收集。
+enable_testing()
+add_executable(test_nds tests/test_nds.c)
+target_link_libraries(test_nds PRIVATE ndscore)
+add_test(NAME nds_test COMMAND test_nds)

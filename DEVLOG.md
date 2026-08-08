@@ -15,6 +15,7 @@
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 | CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/exec.h/.c`） |
 | 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 读 VRAM framebuffer 转 SDL 纹理上屏、缩放（`src/ppu/ppu.h` / `src/ppu/ppu.c`） |
+| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环） |
 
 ## 按时间索引
 
@@ -68,3 +69,9 @@
 | 2026-08-09 | 4.4 | 显示 | 顶屏 6 色带+白框测试图、底屏纯蓝（主机直写 VRAM 验证管线） | [ppu](src/ppu/ppulog.md) |
 | 2026-08-09 | 4.5 | 显示 | 模拟 CPU 跑写 VRAM 的测试码出图（黄十字顶屏+底屏纯绿），修复 3 个手工汇编编码错误 | [ppu](src/ppu/ppulog.md) |
 | 2026-08-09 | 4.6 | 显示 | 默认 2× 缩放启动，菜单可切 1x/2x，双屏比例不变，阶段 4 完成 | [ppu](src/ppu/ppulog.md) |
+| 2026-08-09 | 5.1 | 测试 | 抽 `ndscore` 核心库 + `tests/test_nds.c` 统一测试入口 + `ctest`，迁移 bus/3b/4.5 自测 | [tests](tests/testlog.md) |
+| 2026-08-09 | 5.2 | 测试 | 用例：清屏（CPU 整屏填约定底色 `0x0000`，先涂乱码再验证全清） | [tests](tests/testlog.md) |
+| 2026-08-09 | 5.3 | 测试 | 用例：画矩形（左上象限 128×96 红）；修复「STR 32 位写只着 1 像素」bug | [tests](tests/testlog.md) |
+| 2026-08-09 | 5.4 | 测试 | 用例：死循环保活（10 万步不崩、PC 稳定、cycles=100000） | [tests](tests/testlog.md) |
+| 2026-08-09 | 5.5 | 测试 | README 新增「运行测试」小节（构建/ctest/直接运行/退出码/新增用例） | [tests](tests/testlog.md) |
+| 2026-08-09 | 5.6 | 测试 | 新增 `docs/06-devkitarm.md`：未来 devkitARM 接入说明（仅文档） | [tests](tests/testlog.md) |

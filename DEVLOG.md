@@ -75,3 +75,4 @@
 | 2026-08-09 | 5.4 | 测试 | 用例：死循环保活（10 万步不崩、PC 稳定、cycles=100000） | [tests](tests/testlog.md) |
 | 2026-08-09 | 5.5 | 测试 | README 新增「运行测试」小节（构建/ctest/直接运行/退出码/新增用例） | [tests](tests/testlog.md) |
 | 2026-08-09 | 5.6 | 测试 | 新增 `docs/06-devkitarm.md`：未来 devkitARM 接入说明（仅文档） | [tests](tests/testlog.md) |
+| 2026-08-09 | 4.5修 | 显示 | 修复十字 demo：竖线只画上半屏（终点 `+0xC000` 应 `+0x18000`）；横线 1px vs 竖线 2px 粗细不一（横线改双行嵌套循环） | [ppu](src/ppu/ppulog.md) |

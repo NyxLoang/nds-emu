@@ -59,36 +59,44 @@ static void selftest_4_cpu_draw(nds_t *nds)
     const uint32_t base = BUS_MAIN_RAM_BASE;
 
     /* 手工汇编（指令字编码注释见 docs/04-cpu-loop.md 与 cpulog.md）：
-       程序布局：0x00-0x64，B self 停机在 0x64。
+       程序布局：0x00-0x74，B self 停机在 0x74。
+       十字要对称，两臂都必须 2px：
+       - 横线画 y=95、y=96 两行（STR 一次写 2 像素 → 行内成对推进）；
+       - 竖线画 x=128、129 两列，从 y=0 一直画到 y=191（终点 = 起点 + 0x18000，
+         越过顶屏最后一行，保证下半段完整）。
        STR 是 32 位写 = 2 个 RGB555 像素，颜色值放进两个字半
        （0xFF00FF00 / 0x03E003E0）保证 2 像素同色、线条实心。 */
     const uint32_t drawprog[] = {
         /* 0x00 */ 0xE3A00406, /* MOV r0, #0x06000000       r0 = 顶屏基址 */
-        /* 0x04 */ 0xE2800CC0, /* ADD r0, r0, #0xC000       r0 = 0x0600C000（y=96 行起点） */
+        /* 0x04 */ 0xE2800CBE, /* ADD r0, r0, #0xBE00       r0 = 0x0600BE00（y=95 行起点） */
         /* 0x08 */ 0xE3A014FF, /* MOV r1, #0xFF000000       黄色高半字（0xFF ROR 8） */
         /* 0x0C */ 0xE3811CFF, /* ORR r1, r1, #0xFF00       → r1=0xFF00FF00（2 像素同色） */
-        /* 0x10 */ 0xE2803C02, /* ADD r3, r0, #0x200        r3 = 行终点 0x0600C200 */
-        /* 0x14 */ 0xE5801000, /* STR r1, [r0]              写 2 像素黄 */
-        /* 0x18 */ 0xE2800004, /* ADD r0, r0, #4            前进 2 像素 */
-        /* 0x1C */ 0xE1500003, /* CMP r0, r3                行画完了吗 */
-        /* 0x20 */ 0x1AFFFFFB, /* BNE 0x14                  未到终点继续 */
-        /* 0x24 */ 0xE3A00406, /* MOV r0, #0x06000000       r0 = 顶屏基址 */
-        /* 0x28 */ 0xE2800C01, /* ADD r0, r0, #0x100        r0 = 0x06000100（x=128 列起点） */
-        /* 0x2C */ 0xE2804CC0, /* ADD r4, r0, #0xC000       r4 = 列终点 0x0600C100 */
-        /* 0x30 */ 0xE5801000, /* STR r1, [r0]              写 2 像素黄 */
-        /* 0x34 */ 0xE2800C02, /* ADD r0, r0, #0x200        跳到下一行同一列 */
-        /* 0x38 */ 0xE1500004, /* CMP r0, r4                列画完了吗 */
-        /* 0x3C */ 0x1AFFFFFB, /* BNE 0x30                  未到终点继续 */
-        /* 0x40 */ 0xE3A00406, /* MOV r0, #0x06000000       r0 = 顶屏基址 */
-        /* 0x44 */ 0xE2801A18, /* ADD r1, r0, #0x18000      r1 = 底屏基址 0x06018000 */
-        /* 0x48 */ 0xE2815A18, /* ADD r5, r1, #0x18000      r5 = 底屏终点 0x06030000 */
-        /* 0x4C */ 0xE3A0263E, /* MOV r2, #0x03E00000       绿色高半字（0x3E ROR 12） */
-        /* 0x50 */ 0xE3822E3E, /* ORR r2, r2, #0x03E0       → r2=0x03E003E0（2 像素同色） */
-        /* 0x54 */ 0xE5812000, /* STR r2, [r1]              写 2 像素绿 */
-        /* 0x58 */ 0xE2811004, /* ADD r1, r1, #4            前进 2 像素 */
-        /* 0x5C */ 0xE1510005, /* CMP r1, r5                底屏画完了吗 */
-        /* 0x60 */ 0x1AFFFFFB, /* BNE 0x54                  未到终点继续 */
-        /* 0x64 */ 0xEAFFFFFE, /* B self（停机） */
+        /* 0x10 */ 0xE3A02002, /* MOV r2, #2                r2 = 2 行（横线 2px 粗） */
+        /* 0x14 */ 0xE3A03080, /* MOV r3, #0x80             r3 = 每行 128 字（256 像素） */
+        /* 0x18 */ 0xE5801000, /* STR r1, [r0]              写 2 像素黄 */
+        /* 0x1C */ 0xE2800004, /* ADD r0, r0, #4            行内前进 */
+        /* 0x20 */ 0xE2533001, /* SUBS r3, r3, #1           行内字数-1 */
+        /* 0x24 */ 0x1AFFFFFB, /* BNE 0x18                  行内循环（r0 自动到下一行行首） */
+        /* 0x28 */ 0xE3A03080, /* MOV r3, #0x80             重置行内计数 */
+        /* 0x2C */ 0xE2522001, /* SUBS r2, r2, #1           行数-1 */
+        /* 0x30 */ 0x1AFFFFF8, /* BNE 0x18                  行循环（画第 2 行 y=96） */
+        /* 0x34 */ 0xE3A00406, /* MOV r0, #0x06000000       r0 = 顶屏基址 */
+        /* 0x38 */ 0xE2800C01, /* ADD r0, r0, #0x100        r0 = 0x06000100（x=128, y=0） */
+        /* 0x3C */ 0xE2804A18, /* ADD r4, r0, #0x18000      r4 = 0x06018100（越过末行 y=191） */
+        /* 0x40 */ 0xE5801000, /* STR r1, [r0]              写 2 像素黄（x=128,129） */
+        /* 0x44 */ 0xE2800C02, /* ADD r0, r0, #0x200        下一行同一列 */
+        /* 0x48 */ 0xE1500004, /* CMP r0, r4                列画完了吗 */
+        /* 0x4C */ 0x1AFFFFFB, /* BNE 0x40                  未到终点继续 */
+        /* 0x50 */ 0xE3A00406, /* MOV r0, #0x06000000       r0 = 顶屏基址 */
+        /* 0x54 */ 0xE2801A18, /* ADD r1, r0, #0x18000      r1 = 底屏基址 0x06018000 */
+        /* 0x58 */ 0xE2815A18, /* ADD r5, r1, #0x18000      r5 = 底屏终点 0x06030000 */
+        /* 0x5C */ 0xE3A0263E, /* MOV r2, #0x03E00000       绿色高半字（0x3E ROR 12） */
+        /* 0x60 */ 0xE3822E3E, /* ORR r2, r2, #0x03E0       → r2=0x03E003E0（2 像素同色） */
+        /* 0x64 */ 0xE5812000, /* STR r2, [r1]              写 2 像素绿 */
+        /* 0x68 */ 0xE2811004, /* ADD r1, r1, #4            前进 2 像素 */
+        /* 0x6C */ 0xE1510005, /* CMP r1, r5                底屏画完了吗 */
+        /* 0x70 */ 0x1AFFFFFB, /* BNE 0x64                  未到终点继续 */
+        /* 0x74 */ 0xEAFFFFFE, /* B self（停机） */
     };
     for (size_t i = 0; i < sizeof drawprog / sizeof drawprog[0]; i++)
         bus_write32(nds->bus, base + 4 * i, drawprog[i]);
@@ -98,18 +106,20 @@ static void selftest_4_cpu_draw(nds_t *nds)
     cpu_reset(nds->cpu, base);
     int steps = 0;
     int max_steps = 1 << 20; /* 顶屏行/列 + 底屏整屏，安全上限 100 万步 */
-    while (steps++ < max_steps && nds->cpu->r[15] != base + 0x64)
+    while (steps++ < max_steps && nds->cpu->r[15] != base + 0x74)
         cpu_step(nds->cpu);
     exec_set_trace(1);
 
     /* 回读 CPU 实际写过的像素验证真写进去了：
        顶屏 (x=128,y=0) 竖线起点 = 0x06000100 → 黄 0xFF00；
+       顶屏 (x=128,y=191) 竖线末行 = 0x06017F00 → 黄（验证下半段完整）；
        底屏 (0,0) = 0x06018000 → 绿 0x03E0。 */
     uint32_t top_px = bus_read16(nds->bus, BUS_VRAM_BASE + PPU_VRAM_TOP_OFFSET + 0x100u);
+    uint32_t top_end_px = bus_read16(nds->bus, BUS_VRAM_BASE + PPU_VRAM_TOP_OFFSET + 0x17F00u);
     uint32_t bot_px = bus_read16(nds->bus, BUS_VRAM_BASE + PPU_VRAM_BOTTOM_OFFSET);
-    printf("4 display: CPU drew to VRAM, top(x=128)=%04X bot(0,0)=%04X (steps=%d)\n",
-           top_px, bot_px, steps);
-    if (top_px != 0xFF00u || bot_px != 0x03E0u)
+    printf("4 display: CPU drew to VRAM, top(x=128,y=0)=%04X top(x=128,y=191)=%04X bot(0,0)=%04X (steps=%d)\n",
+           top_px, top_end_px, bot_px, steps);
+    if (top_px != 0xFF00u || top_end_px != 0xFF00u || bot_px != 0x03E0u)
         printf("4 display: WARNING unexpected VRAM readback\n");
     fflush(stdout);
 }

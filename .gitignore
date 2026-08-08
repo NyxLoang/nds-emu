@@ -1,5 +1,8 @@
 # 构建产物
 build/
 
+# 真实卡带 ROM：体积大且受版权保护，不进入版本库（测试用假 ROM 见 homebrew/）
+tools/*.nds
+
 # 历史遗留：早期中断安装时下载的 CMake 便携包（工具链已由 WinLibs 提供）
 tools/cmake.zip

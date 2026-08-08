@@ -36,6 +36,7 @@ FetchContent_MakeAvailable(SDL2_ttf)
 add_executable(nds-emu
     src/main.c
     src/nds/nds.c
+    src/bus/bus.c
     src/cart/cart.c
     src/cart/arm9.c
     src/cart/arm7.c

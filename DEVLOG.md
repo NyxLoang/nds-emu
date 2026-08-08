@@ -12,6 +12,7 @@
 | 菜单 | [`src/menu/menulog.md`](src/menu/menulog.md) | 菜单 UI、字体、文本渲染、语言切换 |
 | 整机状态 | [`src/nds/ndslog.md`](src/nds/ndslog.md) | 整机状态容器 `nds_t`（`src/nds/nds.h` / `src/nds/nds.c`） |
 | 卡带装载 | [`src/cart/cartlog.md`](src/cart/cartlog.md) | 读 `.nds` 文件、解析 ROM 头（`src/cart/cart.h` / `src/cart/cart.c`） |
+| 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 
 ## 按时间索引
 
@@ -33,3 +34,11 @@
 | 2026-08-08 | 1.5 | 卡带装载 | 最小假 `.nds`：`homebrew/make_fake_rom.py` + `mini.nds` | [cart](src/cart/cartlog.md) |
 | 2026-08-08 | 1.6 | 卡带装载 | ARM9 镜像拷入 RAM 缓冲区（裸数组过渡），首字节对照 | [cart](src/cart/cartlog.md) |
 | 2026-08-08 | 1.7 | 卡带装载 | CLI 装载摘要 `=== NDS cartridge ===`（file/arm9/arm7/image） | [cart](src/cart/cartlog.md) |
+| 2026-08-08 | 2.1 | 内存总线 | 新增 `docs/03-memory-map.md`：Main RAM / VRAM / IO 地址区间与换算 | [03](docs/03-memory-map.md) |
+| 2026-08-08 | 2.2 | 内存总线 | `bus` 分配 Main RAM/VRAM/IO 数组，挂到 `nds_t`，`calloc` 清零 | [bus](src/bus/buslog.md) |
+| 2026-08-08 | 2.3 | 内存总线 | `bus_read8/write8` + `bus_resolve` 区间命中换算，未映射读 0 写忽略 | [bus](src/bus/buslog.md) |
+| 2026-08-08 | 2.4 | 内存总线 | `read16/write16` 小端拼拆（写 `0xABCD` 字节序 `CD AB`） | [bus](src/bus/buslog.md) |
+| 2026-08-08 | 2.5 | 内存总线 | `read32/write32` 小端拼拆（`0x12345678` → `78 56 34 12`） | [bus](src/bus/buslog.md) |
+| 2026-08-08 | 2.6 | 内存总线 | VRAM 区间映射（`0x06000000` 656KB），写读回一致 | [bus](src/bus/buslog.md) |
+| 2026-08-08 | 2.7 | 内存总线 | IO 桩：`0x04000000` 区间读 0、写忽略，访问不崩 | [bus](src/bus/buslog.md) |
+| 2026-08-08 | 2.8 | 内存总线 | 装载衔接：ARM9 镜像经 `bus_write8` 装入 Main RAM，`bus_read32` 读回 `EAFFFFFE` | [bus](src/bus/buslog.md) |

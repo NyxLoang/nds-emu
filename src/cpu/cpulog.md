@@ -1,5 +1,13 @@
 # cpu 模块日志
 
+## 重构：指令执行拆分为 exec 功能文件
+
+- 遵循模块结构规则，`src/cpu/` 拆为：
+  - `cpu.h/.c`：对外接口——`arm_cpu_t` 状态、生命周期、`cpu_fetch`、`cpu_step`（取指 + 计数，委托 exec）。
+  - `exec.h/.c`：功能文件——指令执行语义（条件码、标志更新、`arm_rotate`、数据运算、B/BL/BX、LDR/STR、未实现打印）。
+- `cpu_step` 简化为三行：取指 → cycles++ → `exec_step(cpu, insn)`。
+- 行为零变化：3b 自测 12 项断言 + flags 全部 PASS，死循环 PC 稳定。
+
 ## 3a.2 — arm_cpu_t
 
 - 新建 `src/cpu/cpu.h` / `cpu.c`（模块目录结构见 `docs/01`）。

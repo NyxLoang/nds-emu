@@ -22,3 +22,20 @@ build/nds-emu.exe
 ## 目录结构
 
 见 `docs/01-project-layout.md`。
+
+## 分支工作流
+
+采用 git-flow 精简版：
+
+```
+main ──────────── 只放稳定版本（受保护，只能 PR 合并）
+develop ───────── 日常开发主线（默认分支）
+  ├─ feature/*   功能分支：从 develop 拉出，完成后 PR 合回 develop
+  └─ debug/*     Bug 修复分支：从 develop 拉出，修复后 PR 合回 develop
+```
+
+- **develop**：GitHub 默认分支，所有开发都在此进行。
+- **main**：受保护分支，`enforce_admins=true` 且要求 1 个 review，只能通过 PR 合并，禁止直接 push。
+- **Bug 修复**：从 `develop` 拉出 `debug/<名字>` 分支，修复并自测后 PR 合回 `develop`；功能稳定需要发布时再从 `develop` PR 合到 `main`。
+- 本机推送需走代理 `http://127.0.0.1:7897`（已写入本仓库 git 配置 `http.proxy`）。
+

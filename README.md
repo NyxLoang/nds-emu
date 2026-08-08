@@ -26,7 +26,7 @@ build/nds-emu.exe
 ## 开发日志
 
 - **总索引**：[`DEVLOG.md`](DEVLOG.md)（只做索引）
-- **模块详情**：`devlog/<模块>.md`（每个功能模块一份，模板见 `devlog/_template.md`）
+- **模块详情**：放在各模块自己的目录下（如 `src/cpu/DEVLOG.md`），模板见 `devlog/_template.md`
 
 ## 分支工作流
 

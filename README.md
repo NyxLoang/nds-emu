@@ -23,6 +23,11 @@ build/nds-emu.exe
 
 见 `docs/01-project-layout.md`。
 
+## 开发日志
+
+- **总索引**：[`DEVLOG.md`](DEVLOG.md)（只做索引）
+- **模块详情**：`devlog/<模块>.md`（每个功能模块一份，模板见 `devlog/_template.md`）
+
 ## 分支工作流
 
 采用 git-flow 精简版：

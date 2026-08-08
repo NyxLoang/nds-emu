@@ -54,6 +54,8 @@ while (还在运行) {
 
 NDS 的 ARM CPU 就是小端。我们的 `bus_read32` 必须按这个规则拼起来。
 
+更完整的十六进制与字节序说明（含大端对比、`bus_read/write` 拼接）见 [docs/00b](00b-hex-endianness.md)。
+
 ### 寄存器 vs 内存
 
 - **寄存器**：CPU “手里的便签”，只有十几格（`r0`～`r15`），读写极快。

@@ -86,6 +86,48 @@ static void selftest_3b(nds_t *nds)
     check("r11 (B tgt)",   nds->cpu->r[11], 0x00000011u);
     check("lr (BL saved)", nds->cpu->r[14], base + 0x50u);
 
+    /* 3b.9 位运算程序（0x80 起）：
+       AND r7, r5, r6 / ORR r8, r5, r6 / EOR r9, r5, r6 */
+    const uint32_t bitop[] = {
+        /* 0x80 */ 0xE3A0500F, /* MOV r5, #0x0F        → r5=0x0F */
+        /* 0x84 */ 0xE3A06033, /* MOV r6, #0x33        → r6=0x33 */
+        /* 0x88 */ 0xE0057006, /* AND r7, r5, r6       → r7=0x0F & 0x33 = 0x03 */
+        /* 0x8C */ 0xE1858006, /* ORR r8, r5, r6       → r8=0x0F | 0x33 = 0x3F */
+        /* 0x90 */ 0xE0259006, /* EOR r9, r5, r6       → r9=0x0F ^ 0x33 = 0x3C */
+        /* 0x94 */ 0xEAFFFFFE, /* B self（停机） */
+    };
+    for (size_t i = 0; i < sizeof bitop / sizeof bitop[0]; i++)
+        bus_write32(nds->bus, base + 0x80 + 4 * i, bitop[i]);
+    cpu_reset(nds->cpu, base + 0x80);
+    for (int i = 0; i < 16; i++) {
+        cpu_step(nds->cpu);
+        if (nds->cpu->r[15] == base + 0x94)
+            break;
+    }
+    check("r7 (AND)",  nds->cpu->r[7],  0x00000003u);
+    check("r8 (ORR)",  nds->cpu->r[8],  0x0000003Fu);
+    check("r9 (EOR)",  nds->cpu->r[9],  0x0000003Cu);
+
+    /* 3b.10 综合：用纯机器码把一个 RGB555 颜色字写进 VRAM，再读回。
+       相当于模拟 CPU 直接驱动显存的第一步（阶段 4 用这套数据出图）。 */
+    const uint32_t vramprog[] = {
+        /* 0x98 */ 0xE3A00406, /* MOV r0, #0x06000000（0x06 ROR 8）→ VRAM 基址 */
+        /* 0x9C */ 0xE3A01C7C, /* MOV r1, #0x7C00（0x7C ROR 24）→ 红色（RGB555） */
+        /* 0xA0 */ 0xE5801000, /* STR r1, [r0]           → VRAM[0] = 0x7C00 */
+        /* 0xA4 */ 0xE5902000, /* LDR r2, [r0]           → r2 = 读回 */
+        /* 0xA8 */ 0xEAFFFFFE, /* B self（停机） */
+    };
+    for (size_t i = 0; i < sizeof vramprog / sizeof vramprog[0]; i++)
+        bus_write32(nds->bus, base + 0x98 + 4 * i, vramprog[i]);
+    cpu_reset(nds->cpu, base + 0x98);
+    for (int i = 0; i < 16; i++) {
+        cpu_step(nds->cpu);
+        if (nds->cpu->r[15] == base + 0xA8)
+            break;
+    }
+    check("r2 (VRAM readback)", nds->cpu->r[2], 0x00007C00u);
+    check("VRAM[0] color word", bus_read32(nds->bus, BUS_VRAM_BASE), 0x00007C00u);
+
     /* CMP 更新了 flags：CMP r0,#5 → Z=1；CMP r0,r1 → N=1 C=0（V 未知，只看 N/Z/C） */
     uint32_t cpsr = nds->cpu->cpsr;
     printf("3b test: cpsr=0x%08X (N=%d Z=%d C=%d V=%d)\n",

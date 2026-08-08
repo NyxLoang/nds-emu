@@ -86,3 +86,16 @@
 - 手工汇编 22 条指令写入 Main RAM（0x02000000 起），逐条执行后断言寄存器。
 - 覆盖：MOV/ADD/SUB/CMP、STR/LDR 立即偏移、B 跳转、BL/BX lr 调用返回。
 - 12 项断言 + flags 全部 PASS；阶段 5 换正式单元测试。
+
+## 3b.9 — AND / ORR / EOR 位运算
+
+- `exec_dataop` 增加 opcode 0x0(AND)、0x1(EOR)、0xC(ORR)，支持立即数/寄存器操作数。
+- 逻辑运算按 S 位更新 N/Z（不更新 C/V，与真机一致）。
+- 自测：`0x0F & 0x33 = 0x03`、`0x0F | 0x33 = 0x3F`、`0x0F ^ 0x33 = 0x3C` 全部 PASS。
+
+## 3b.10 — 综合：机器码写 VRAM
+
+- 纯机器码程序（MOV r0,#0x06000000 → MOV r1,#0x7C00 → STR r1,[r0] → LDR r2,[r0]）
+  把 RGB555 红色 `0x7C00` 写进 VRAM 基址，再读回。
+- 自测：`r2 = 0x7C00`、`bus_read32(VRAM) = 0x7C00` 全部 PASS。
+- 意义：模拟 CPU 已能直接驱动显存，为阶段 4 出图铺路。

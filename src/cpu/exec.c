@@ -95,14 +95,17 @@ static void exec_dataop(arm_cpu_t *cpu, uint32_t insn, uint32_t op2)
     uint32_t rn_val = cpu->r[rn];
 
     switch (opcode) {
-    case 0xD: /* MOV：直接写入操作数 */
-        if (s) set_nz(op2, cpu);
-        cpu->r[rd] = op2;
-        break;
-    case 0x4: /* ADD */
+    case 0x0: /* AND：按位与 */
     {
-        uint32_t result = rn_val + op2;
-        if (s) { set_nz(result, cpu); set_carry_add(rn_val, op2, result, cpu); }
+        uint32_t result = rn_val & op2;
+        if (s) set_nz(result, cpu);
+        cpu->r[rd] = result;
+        break;
+    }
+    case 0x1: /* EOR：按位异或 */
+    {
+        uint32_t result = rn_val ^ op2;
+        if (s) set_nz(result, cpu);
         cpu->r[rd] = result;
         break;
     }
@@ -113,6 +116,24 @@ static void exec_dataop(arm_cpu_t *cpu, uint32_t insn, uint32_t op2)
         cpu->r[rd] = result;
         break;
     }
+    case 0x4: /* ADD */
+    {
+        uint32_t result = rn_val + op2;
+        if (s) { set_nz(result, cpu); set_carry_add(rn_val, op2, result, cpu); }
+        cpu->r[rd] = result;
+        break;
+    }
+    case 0xC: /* ORR：按位或 */
+    {
+        uint32_t result = rn_val | op2;
+        if (s) set_nz(result, cpu);
+        cpu->r[rd] = result;
+        break;
+    }
+    case 0xD: /* MOV：直接写入操作数 */
+        if (s) set_nz(op2, cpu);
+        cpu->r[rd] = op2;
+        break;
     case 0xA: /* CMP：Rn - op2，只更新标志 */
     {
         uint32_t result = rn_val - op2;

@@ -22,6 +22,12 @@ typedef struct cart_header {
 /* 读整份文件到堆缓冲。失败返回 NULL（错误信息写入 err）。 */
 cart_t *cart_load(const char *path, char *err, size_t errsz);
 
+#ifdef _WIN32
+#include <wchar.h>
+/* 宽字符版：支持含中文/Unicode 的路径（Windows 用 _wfopen）。 */
+cart_t *cart_load_w(const wchar_t *path, char *err, size_t errsz);
+#endif
+
 /* 按偏移解析 ROM 头。文件不足头长时返回 -1。 */
 int cart_parse_header(const cart_t *cart, cart_header_t *hdr);
 

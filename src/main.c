@@ -1,4 +1,7 @@
 #include <stdio.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <SDL.h>
 #include <SDL_ttf.h>
 #include "window/window.h"
@@ -8,8 +11,16 @@
 
 int main(int argc, char *argv[])
 {
-    /* 阶段 1：argv[1] 是 .nds 文件路径；暂未提供时为 NULL，跳过装载 */
+    (void)argc;
+    (void)argv;
+    /* Windows：用宽字符命令行拿路径，避免窄 argv 在非 UTF-8 代码页下中文乱码 */
+#ifdef _WIN32
+    int wargc = 0;
+    wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    const wchar_t *rom_path = (wargc > 1) ? wargv[1] : NULL;
+#else
     const char *rom_path = (argc > 1) ? argv[1] : NULL;
+#endif
 
     char err[256];
     if (window_init(err, sizeof err) != 0) {
@@ -27,14 +38,18 @@ int main(int argc, char *argv[])
     /* 阶段 1：装载 .nds（若有）；仅打印文件大小，尚未解析头 */
     cart_t *cart = NULL;
     if (rom_path != NULL) {
+#ifdef _WIN32
+        cart = cart_load_w(rom_path, err, sizeof err);
+#else
         cart = cart_load(rom_path, err, sizeof err);
+#endif
         if (cart == NULL) {
             fprintf(stderr, "%s\n", err);
             menu_shutdown();
             window_shutdown();
             return 1;
         }
-        printf("cart: loaded %s (%zu bytes)\n", rom_path, cart->size);
+        printf("cart: loaded %ls (%zu bytes)\n", rom_path, cart->size);
         fflush(stdout);
 
         cart_header_t hdr;
@@ -46,6 +61,9 @@ int main(int argc, char *argv[])
                    hdr.arm9_offset, hdr.arm9_entry, hdr.arm9_ram, hdr.arm9_size);
             fflush(stdout);
         }
+#ifdef _WIN32
+        LocalFree(wargv);
+#endif
     }
 
     /* 一台空机器：整机状态容器，后续微步往里装 bus / cpu / ppu */

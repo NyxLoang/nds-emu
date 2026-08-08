@@ -20,3 +20,14 @@
   - `main.c` 在装载后解析并打印 `arm9 offset/entry/ram/size` 四个十六进制值。
 - **怎么验证**：构建通过；用 SDL2 包运行打印四个十六进制（非真 ROM，为数据字节，仅验证机制）。
 - **结果**：✅ 通过。
+
+## 2026-08-08 · 修复：支持中文/Unicode ROM 路径
+
+- **做了什么**：
+  - 根因：Windows 下 `main` 的窄字符 `argv` 受控制台代码页影响，中文路径变成乱码，`fopen` 打不开。
+  - `cart.c` 重构：抽出 `cart_load_fp` 共用读取逻辑；新增 `cart_load_w`（`_wfopen` 宽字符打开，仅 `_WIN32`）。
+  - `cart.h` 增加 `cart_load_w` 声明。
+  - `main.c` 用 `CommandLineToArgvW` + `GetCommandLineW` 拿宽字符 `argv[1]`（保留普通 `main` 入口兼容 SDL2main），调用 `cart_load_w`，用完 `LocalFree`；`printf` 用 `%ls` 打印宽路径。
+- **怎么验证**：用中文名真实 ROM（`tools\Z 最终幻想12…(1024Mb).nds`，112MB）运行，成功装载并打印：
+  `cart: loaded … / arm9 offset=00004000 entry=02000800 ram=02000000 size=00078038`（ram=02000000 正是 Main RAM 基址，字段合理）。
+- **结果**：✅ 通过。

@@ -1,0 +1,28 @@
+cmake_minimum_required(VERSION 3.16)
+project(nds-emu C)
+
+# SDL 2.26.3 的 CMake 脚本仍声明支持 CMake < 3.5，CMake 4.x 默认拒绝；
+# 显式允许用 3.5 策略继续配置（仅影响第三方依赖，不影响本项目）
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
+include(FetchContent)
+FetchContent_Declare(SDL2
+    URL ${CMAKE_CURRENT_SOURCE_DIR}/tools/sdl2/SDL2-2.26.3.tar.gz
+    URL_HASH SHA256=AF0FF86E4A268BC12C915A0EA19EA1A16419AB1426D92BAD5F4E26EB31583967
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+# SDL 同时会建 main 重定义等机制；我们只要静态库本体
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(SDL2)
+
+add_executable(nds-emu
+    src/main.c
+)
+
+target_link_libraries(nds-emu PRIVATE SDL2-static SDL2main)

@@ -1,0 +1,5 @@
+# 构建产物
+build/
+
+# 历史遗留：早期中断安装时下载的 CMake 便携包（工具链已由 WinLibs 提供）
+tools/cmake.zip

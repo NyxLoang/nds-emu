@@ -4,11 +4,12 @@
 #include "window/window.h"
 #include "menu/menu.h"
 #include "nds/nds.h"
+#include "cart/cart.h"
 
 int main(int argc, char *argv[])
 {
-    (void)argc;
-    (void)argv;
+    /* 阶段 1：argv[1] 是 .nds 文件路径；暂未提供时为 NULL，跳过装载 */
+    const char *rom_path = (argc > 1) ? argv[1] : NULL;
 
     char err[256];
     if (window_init(err, sizeof err) != 0) {
@@ -21,6 +22,20 @@ int main(int argc, char *argv[])
         fprintf(stderr, "menu_init failed, TTF error: %s\n", TTF_GetError());
         window_shutdown();
         return 1;
+    }
+
+    /* 阶段 1：装载 .nds（若有）；仅打印文件大小，尚未解析头 */
+    cart_t *cart = NULL;
+    if (rom_path != NULL) {
+        cart = cart_load(rom_path, err, sizeof err);
+        if (cart == NULL) {
+            fprintf(stderr, "%s\n", err);
+            menu_shutdown();
+            window_shutdown();
+            return 1;
+        }
+        printf("cart: loaded %s (%zu bytes)\n", rom_path, cart->size);
+        fflush(stdout);
     }
 
     /* 一台空机器：整机状态容器，后续微步往里装 bus / cpu / ppu */
@@ -77,5 +92,6 @@ int main(int argc, char *argv[])
     menu_shutdown();
     window_shutdown();
     nds_destroy(nds);
+    cart_free(cart);
     return 0;
 }

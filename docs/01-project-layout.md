@@ -12,7 +12,7 @@ test/
 │   ├── nds/            # 整机状态 nds_t（把各模块捏在一起，nds.h/.c/ndslog.md）
 │   ├── cpu/            # ARM 解释器（先 ARM9，后 ARM7）
 │   ├── bus/            # 内存读写：地址 → 哪一块数组
-│   ├── cart/           # 打开 .nds，把代码拷进 RAM
+│   ├── cart/           # 打开 .nds，把代码拷进 RAM（cart.h/.c/cartlog.md，已建）
 │   ├── ppu/            # 把显存变成屏幕像素
 │   ├── irq/            # 中断、定时器、按键
 │   └── dma/            # DMA（硬件搬运内存）

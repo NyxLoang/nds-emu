@@ -35,6 +35,7 @@ FetchContent_MakeAvailable(SDL2_ttf)
 
 add_executable(nds-emu
     src/main.c
+    src/nds/nds.c
     src/window/window.c
     src/menu/menu.c
 )

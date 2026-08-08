@@ -4,8 +4,10 @@
 #include <stddef.h>
 #include <SDL.h>
 
-#define GAME_W 256
-#define GAME_H 384 /* 顶屏 256x192 + 底屏 256x192 */
+#define SCREEN_W 256            /* 单屏宽 */
+#define SCREEN_H 192            /* 单屏高 */
+#define GAME_W SCREEN_W
+#define GAME_H (SCREEN_H * 2)   /* 顶屏 256x192 + 底屏 256x192 */
 #define MENU_H 28
 #define WIN_W GAME_W
 #define WIN_H (MENU_H + GAME_H)

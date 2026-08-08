@@ -3,6 +3,7 @@
 #include <SDL_ttf.h>
 #include "window/window.h"
 #include "menu/menu.h"
+#include "nds/nds.h"
 
 int main(int argc, char *argv[])
 {
@@ -18,6 +19,15 @@ int main(int argc, char *argv[])
 
     if (menu_init(renderer) != 0) {
         fprintf(stderr, "menu_init failed, TTF error: %s\n", TTF_GetError());
+        window_shutdown();
+        return 1;
+    }
+
+    /* 一台空机器：整机状态容器，后续微步往里装 bus / cpu / ppu */
+    nds_t *nds = nds_create();
+    if (nds == NULL) {
+        fprintf(stderr, "nds_create failed\n");
+        menu_shutdown();
         window_shutdown();
         return 1;
     }
@@ -49,10 +59,14 @@ int main(int argc, char *argv[])
 
         menu_render_bar(renderer, scale);
 
-        /* 游戏画面区（占位：纯黑，物理坐标；将来画双屏 framebuffer） */
-        SDL_Rect game = { 0, MENU_H * scale, GAME_W * scale, GAME_H * scale };
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderFillRect(renderer, &game);
+        /* 游戏画面区（占位：顶/底屏两种纯色，物理坐标；将来画双屏 framebuffer） */
+        SDL_Rect top_screen = { 0, MENU_H * scale, SCREEN_W * scale, SCREEN_H * scale };
+        SDL_SetRenderDrawColor(renderer, 24, 90, 200, 255); /* 顶屏：蓝 */
+        SDL_RenderFillRect(renderer, &top_screen);
+
+        SDL_Rect bot_screen = { 0, (MENU_H + SCREEN_H) * scale, SCREEN_W * scale, SCREEN_H * scale };
+        SDL_SetRenderDrawColor(renderer, 24, 160, 60, 255); /* 底屏：绿 */
+        SDL_RenderFillRect(renderer, &bot_screen);
 
         /* 下拉菜单（画在游戏区之上） */
         menu_render_dropdown(renderer, scale);
@@ -62,5 +76,6 @@ int main(int argc, char *argv[])
 
     menu_shutdown();
     window_shutdown();
+    nds_destroy(nds);
     return 0;
 }

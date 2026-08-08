@@ -21,8 +21,24 @@ set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(SDL2)
 
+FetchContent_Declare(SDL2_ttf
+    URL ${CMAKE_CURRENT_SOURCE_DIR}/tools/sdl2_ttf/SDL2_ttf-2.24.0.tar.gz
+    URL_HASH SHA256=0B2BF1E7B6568ADBDBC9BB924643F79D9DEDAFE061FA1ED687D1D9AC4E453BFD
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+# 关闭 SDL_ttf 的可选依赖与共享库；用内置 freetype（release 包已含 vendored 源码）
+# SDL2_ttf 2.24 以 BUILD_SHARED_LIBS 决定库形态，须先强制为 OFF 以匹配静态 SDL2
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+set(TTF_SDL2_TEST OFF CACHE BOOL "" FORCE)
+set(SDL2TTF_VENDORED ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(SDL2_ttf)
+
 add_executable(nds-emu
     src/main.c
+    src/window/window.c
+    src/menu/menu.c
 )
 
-target_link_libraries(nds-emu PRIVATE SDL2-static SDL2main)
+target_include_directories(nds-emu PRIVATE src)
+
+target_link_libraries(nds-emu PRIVATE SDL2-static SDL2main SDL2_ttf)

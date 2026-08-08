@@ -34,3 +34,12 @@
   - 新增本模块日志体系：根 `DEVLOG.md` 索引 + `devlog/<模块>.md` 详情。
 - **怎么验证**：`git branch -a`、`gh repo view --json defaultBranchRef`。
 - **结果**：✅ 通过。
+
+## 2026-08-08 · 拆分 window 与 menu 模块
+
+- **做了什么**：
+  - `main.c`（325 行）拆成三部分：`src/window/window.h/.c`（窗口/渲染器/缩放/退出）、`src/menu/menu.h/.c`（字体/文本/菜单 UI/语言），`main.c` 只留主循环编排与游戏区占位。
+  - `CMakeLists.txt` 加入两个新源文件，并加 `target_include_directories(nds-emu PRIVATE src)` 统一 include 前缀。
+  - 依赖方向单向：menu 的缩放变更经返回值通知 main → `window_set_scale`，window/menu 互不直接调用。
+- **怎么验证**：构建通过；运行后缩放、语言、点击行为与拆分前一致。
+- **结果**：✅ 通过。

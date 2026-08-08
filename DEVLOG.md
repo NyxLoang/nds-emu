@@ -14,6 +14,7 @@
 | 卡带装载 | [`src/cart/cartlog.md`](src/cart/cartlog.md) | 读 `.nds` 文件、解析 ROM 头（`src/cart/cart.h` / `src/cart/cart.c`） |
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 | CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/exec.h/.c`） |
+| 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 读 VRAM framebuffer 转 SDL 纹理上屏、缩放（`src/ppu/ppu.h` / `src/ppu/ppu.c`） |
 
 ## 按时间索引
 
@@ -61,3 +62,9 @@
 | 2026-08-08 | 重构 | CPU | 指令执行拆分为 `src/cpu/exec.h/.c` 功能文件（接口 `cpu.h/.c` 只留框架），行为不变 | [cpu](src/cpu/cpulog.md) |
 | 2026-08-08 | 3b.9 | CPU | `AND`/`ORR`/`EOR` 位运算（逻辑运算按 S 位更新 N/Z） | [cpu](src/cpu/cpulog.md) |
 | 2026-08-08 | 3b.10 | CPU | 综合：纯机器码把 RGB555 红色 `0x7C00` 写进 VRAM 并读回，阶段 3b 完成 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-09 | 4.1 | 显示 | 新增 `docs/05-framebuffer.md`：像素与 RGB555/888、线性 framebuffer | [05](docs/05-framebuffer.md) |
+| 2026-08-09 | 4.2 | 显示 | 约定：顶屏=VRAM 起 256×192 RGB555，底屏=VRAM+`0x18000` | [ppu](src/ppu/ppulog.md) |
+| 2026-08-09 | 4.3 | 显示 | `ppu` 模块：`bus_read16` 读 VRAM → RGB555 转 RGB888 → SDL 纹理上屏 | [ppu](src/ppu/ppulog.md) |
+| 2026-08-09 | 4.4 | 显示 | 顶屏 6 色带+白框测试图、底屏纯蓝（主机直写 VRAM 验证管线） | [ppu](src/ppu/ppulog.md) |
+| 2026-08-09 | 4.5 | 显示 | 模拟 CPU 跑写 VRAM 的测试码出图（黄十字顶屏+底屏纯绿），修复 3 个手工汇编编码错误 | [ppu](src/ppu/ppulog.md) |
+| 2026-08-09 | 4.6 | 显示 | 默认 2× 缩放启动，菜单可切 1x/2x，双屏比例不变，阶段 4 完成 | [ppu](src/ppu/ppulog.md) |

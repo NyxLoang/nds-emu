@@ -39,6 +39,7 @@ add_executable(nds-emu
     src/bus/bus.c
     src/cpu/cpu.c
     src/cpu/exec.c
+    src/ppu/ppu.c
     src/cart/cart.c
     src/cart/arm9.c
     src/cart/arm7.c

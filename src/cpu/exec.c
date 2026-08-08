@@ -2,6 +2,14 @@
 #include "exec.h"
 #include "bus/bus.h"
 
+/* 指令级跟踪开关（exec_set_trace 控制） */
+static int g_trace = 1;
+
+void exec_set_trace(int on)
+{
+    g_trace = on;
+}
+
 /* 分支大类：bit27-25 = 101 */
 #define ARM_OP_BRANCH 0x5u
 #define BRANCH_OFFSET_MINUS1 0xFFFFFEu  /* 24 位立即数全 1：跳 0 步（跳自己） */
@@ -142,8 +150,9 @@ static void exec_dataop(arm_cpu_t *cpu, uint32_t insn, uint32_t op2)
         break;
     }
     default:
-        printf("cpu: PC=%08X insn=%08X dataop 0x%X unimplemented\n",
-               cpu->r[15], insn, opcode);
+        if (g_trace)
+            printf("cpu: PC=%08X insn=%08X dataop 0x%X unimplemented\n",
+                   cpu->r[15], insn, opcode);
         break;
     }
 }
@@ -180,9 +189,10 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         uint32_t target = branch_target(cpu->r[15], insn);
         if (insn & (1u << 24)) { /* BL */
             cpu->r[14] = cpu->r[15] + 4; /* lr = 下一条指令地址 */
-            printf("cpu: PC=%08X insn=%08X BL %08X (lr=%08X) cycles=%llu\n",
-                   cpu->r[15], insn, target, cpu->r[14],
-                   (unsigned long long)cpu->cycles);
+            if (g_trace)
+                printf("cpu: PC=%08X insn=%08X BL %08X (lr=%08X) cycles=%llu\n",
+                       cpu->r[15], insn, target, cpu->r[14],
+                       (unsigned long long)cpu->cycles);
         } else if (imm24 == BRANCH_OFFSET_MINUS1) {
             /* B 自己（死循环）：目标 = PC+8-8 = PC，原地打转。
                只在第一次命中时打印，避免主循环每帧刷屏。 */
@@ -191,7 +201,7 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
                        cpu->r[15], insn, (unsigned long long)cpu->cycles);
                 cpu->deadloop_reported = 1;
             }
-        } else {
+        } else if (g_trace) {
             printf("cpu: PC=%08X insn=%08X B %08X cycles=%llu\n",
                    cpu->r[15], insn, target, (unsigned long long)cpu->cycles);
         }
@@ -203,9 +213,10 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
        必须放在数据运算判定之前：BX 的 bit27-26 也是 00。 */
     if ((insn & 0x0FFFFFF0u) == 0x012FFF10u) {
         unsigned rm = insn & 0xFu;
-        printf("cpu: PC=%08X insn=%08X BX r%u -> %08X cycles=%llu\n",
-               cpu->r[15], insn, rm, cpu->r[rm],
-               (unsigned long long)cpu->cycles);
+        if (g_trace)
+            printf("cpu: PC=%08X insn=%08X BX r%u -> %08X cycles=%llu\n",
+                   cpu->r[15], insn, rm, cpu->r[rm],
+                   (unsigned long long)cpu->cycles);
         cpu->r[15] = cpu->r[rm];
         return 1;
     }
@@ -230,8 +241,9 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         unsigned rn = (insn >> 16) & 0xFu;
         unsigned rd = (insn >> 12) & 0xFu;
         if (insn & (1u << 25)) { /* 寄存器偏移：本阶段未实现 */
-            printf("cpu: PC=%08X insn=%08X ldr/str reg-offset unimplemented\n",
-                   cpu->r[15], insn);
+            if (g_trace)
+                printf("cpu: PC=%08X insn=%08X ldr/str reg-offset unimplemented\n",
+                       cpu->r[15], insn);
             cpu->r[15] += 4;
             return 1;
         }
@@ -243,23 +255,26 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         if (l) {
             if (b) cpu->r[rd] = bus_read8(cpu->nds->bus, addr);
             else   cpu->r[rd] = bus_read32(cpu->nds->bus, addr);
-            printf("cpu: PC=%08X insn=%08X LDR r%u, [r%u%s%X] = %08X cycles=%llu\n",
-                   cpu->r[15], insn, rd, rn, u ? "+" : "-", offset, cpu->r[rd],
-                   (unsigned long long)cpu->cycles);
+            if (g_trace)
+                printf("cpu: PC=%08X insn=%08X LDR r%u, [r%u%s%X] = %08X cycles=%llu\n",
+                       cpu->r[15], insn, rd, rn, u ? "+" : "-", offset, cpu->r[rd],
+                       (unsigned long long)cpu->cycles);
         } else {
             if (b) bus_write8(cpu->nds->bus, addr, (uint8_t)cpu->r[rd]);
             else   bus_write32(cpu->nds->bus, addr, cpu->r[rd]);
-            printf("cpu: PC=%08X insn=%08X STR r%u, [r%u%s%X] cycles=%llu\n",
-                   cpu->r[15], insn, rd, rn, u ? "+" : "-", offset,
-                   (unsigned long long)cpu->cycles);
+            if (g_trace)
+                printf("cpu: PC=%08X insn=%08X STR r%u, [r%u%s%X] cycles=%llu\n",
+                       cpu->r[15], insn, rd, rn, u ? "+" : "-", offset,
+                       (unsigned long long)cpu->cycles);
         }
         cpu->r[15] += 4;
         return 1;
     }
 
     /* 其余未实现指令：打印机器码并继续（后续阶段逐类补充）。 */
-    printf("cpu: PC=%08X insn=%08X unimplemented (cycles=%llu)\n",
-           cpu->r[15], insn, (unsigned long long)cpu->cycles);
+    if (g_trace)
+        printf("cpu: PC=%08X insn=%08X unimplemented (cycles=%llu)\n",
+               cpu->r[15], insn, (unsigned long long)cpu->cycles);
     cpu->r[15] += 4;
     return 1;
 }

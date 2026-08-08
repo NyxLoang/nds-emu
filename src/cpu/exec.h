@@ -15,4 +15,8 @@
    返回 0 表示停机，1 表示继续。 */
 int exec_step(arm_cpu_t *cpu, uint32_t insn);
 
+/* 指令级跟踪日志开关：默认开。批量跑 LDR/STR 循环时（如 4.5 写屏测试码）
+   临时关闭，避免每条指令 printf 刷屏并拖慢模拟。 */
+void exec_set_trace(int on);
+
 #endif /* NDS_EMU_CPU_EXEC_H */

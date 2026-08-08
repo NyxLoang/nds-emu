@@ -1,4 +1,4 @@
-# 窗口 / 主循环（main）开发日志
+# mainlog
 
 > 覆盖：工程骨架、SDL2 引入、窗口与主循环，即 `src/main.c` 与根 `CMakeLists.txt` 相关部分。
 > 按时间从旧到新记录。

@@ -42,3 +42,21 @@
   `arm9 offset=00004000 entry=02000800 ram=02000000 size=00078038`
   `arm7 offset=0007C200 entry=02380000 ram=02380000 size=000286B0`（ram=02380000 是 ARM7 Main RAM 基址，合理）。
 - **结果**：✅ 通过。
+
+## 2026-08-08 · 阶段 1.5 最小假 .nds
+
+- **做了什么**：新建 `homebrew/make_fake_rom.py`（Python 生成小端假 ROM，头字段可核对 + ARM9 死循环 `0xEAFFFFFE` / ARM7 `BX lr` 占位），生成 `homebrew/mini.nds`（20992 字节）。
+- **怎么验证**：`nds-emu homebrew\mini.nds` 打印头字段与构造值完全一致。
+- **结果**：✅ 通过。
+
+## 2026-08-08 · 阶段 1.6 ARM9 镜像拷入 RAM 缓冲区
+
+- **做了什么**：`main.c` 声明 `static unsigned char arm9_ram[4MB]`（过渡，阶段 2 换 bus），装载后 `memcpy` 从 `cart->data + arm9.offset` 拷 `arm9.size` 字节，并打印首 4 字节对照。
+- **怎么验证**：假 ROM 拷贝后首字节 `FE FF FF EA`（即写入的死循环小端），与文件一致；真实 ROM 拷 491576 字节，首字节 `FF DE FF E7`。
+- **结果**：✅ 通过。
+
+## 2026-08-08 · 阶段 1.7 CLI 装载摘要
+
+- **做了什么**：`main.c` 装载块整理为 `=== NDS cartridge ===` 结构：file 大小 + arm9/arm7 头字段 + image 拷贝行（首字节对照）。一条命令展示 1.3–1.6 全部内容。
+- **怎么验证**：假 ROM 与真实 ROM 运行均输出完整摘要。
+- **结果**：✅ 通过。

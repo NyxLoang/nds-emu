@@ -9,6 +9,10 @@
 #include "nds/nds.h"
 #include "cart/cart.h"
 
+/* 阶段 1 过渡：ARM9 镜像的 RAM 缓冲区（4MB = NDS Main RAM 大小）。
+   阶段 2 换成 bus 管理，这里先满足「拷入后能读回」的验收。 */
+static unsigned char arm9_ram[4 * 1024 * 1024];
+
 int main(int argc, char *argv[])
 {
     (void)argc;
@@ -49,20 +53,35 @@ int main(int argc, char *argv[])
             window_shutdown();
             return 1;
         }
-        printf("cart: loaded %ls (%zu bytes)\n", rom_path, cart->size);
+        printf("=== NDS cartridge ===\n");
+        printf("file  : %ls (%zu bytes)\n", rom_path, cart->size);
         fflush(stdout);
 
         cart_header_t hdr;
         if (cart_parse_header(cart, &hdr) != 0) {
-            fprintf(stderr, "cart: header too short (%zu bytes)\n", cart->size);
-            fflush(stdout);
+            printf("header: too short (%zu bytes), cannot parse\n", cart->size);
         } else {
-            printf("arm9 offset=%08X entry=%08X ram=%08X size=%08X\n",
+            printf("arm9  : offset=%08X entry=%08X ram=%08X size=%08X\n",
                    hdr.arm9.offset, hdr.arm9.entry, hdr.arm9.ram, hdr.arm9.size);
-            printf("arm7 offset=%08X entry=%08X ram=%08X size=%08X\n",
+            printf("arm7  : offset=%08X entry=%08X ram=%08X size=%08X\n",
                    hdr.arm7.offset, hdr.arm7.entry, hdr.arm7.ram, hdr.arm7.size);
-            fflush(stdout);
+
+            /* 把 ARM9 镜像从文件拷入 RAM 缓冲区（暂用裸数组，阶段 2 换 bus） */
+            if (hdr.arm9.offset + hdr.arm9.size > cart->size) {
+                printf("image : arm9 out of file range\n");
+            } else if (hdr.arm9.size > sizeof arm9_ram) {
+                printf("image : arm9 too large for RAM buffer (%u bytes)\n",
+                       hdr.arm9.size);
+            } else {
+                memcpy(arm9_ram, cart->data + hdr.arm9.offset, hdr.arm9.size);
+                printf("image : copied %u bytes to RAM, first bytes: ",
+                       hdr.arm9.size);
+                for (size_t i = 0; i < 4 && i < hdr.arm9.size; i++)
+                    printf("%02X ", arm9_ram[i]);
+                printf("\n");
+            }
         }
+        fflush(stdout);
 #ifdef _WIN32
         LocalFree(wargv);
 #endif

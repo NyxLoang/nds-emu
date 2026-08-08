@@ -30,3 +30,6 @@
 | 2026-08-08 | 1.3 | 卡带装载 | 按偏移解析 ARM9 头四字段并打印（小端 `read_le32`） | [cart](src/cart/cartlog.md) |
 | 2026-08-08 | 1.3+ | 卡带装载 | 修复中文/Unicode ROM 路径打不开（`cart_load_w` + `CommandLineToArgvW`） | [cart](src/cart/cartlog.md) |
 | 2026-08-08 | 1.4 | 卡带装载 | cart 拆 arm9/arm7 功能文件（接口+功能），解析 ARM7 头四字段 | [cart](src/cart/cartlog.md) |
+| 2026-08-08 | 1.5 | 卡带装载 | 最小假 `.nds`：`homebrew/make_fake_rom.py` + `mini.nds` | [cart](src/cart/cartlog.md) |
+| 2026-08-08 | 1.6 | 卡带装载 | ARM9 镜像拷入 RAM 缓冲区（裸数组过渡），首字节对照 | [cart](src/cart/cartlog.md) |
+| 2026-08-08 | 1.7 | 卡带装载 | CLI 装载摘要 `=== NDS cartridge ===`（file/arm9/arm7/image） | [cart](src/cart/cartlog.md) |

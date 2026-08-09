@@ -40,6 +40,10 @@ add_library(ndscore STATIC
     src/bus/bus.c
     src/cpu/cpu.c
     src/cpu/exec.c
+    src/io/io.c
+    src/io/irq.c
+    src/io/timer.c
+    src/io/key.c
     src/cart/cart.c
     src/cart/arm9.c
     src/cart/arm7.c

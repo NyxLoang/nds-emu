@@ -14,14 +14,17 @@
 #define BUS_MAIN_RAM_BASE 0x02000000u
 #define BUS_VRAM_BASE     0x06000000u
 #define BUS_IO_BASE       0x04000000u
-#define BUS_IO_SIZE       0x00010000u   /* IO 区间暂定 64KB，只做桩 */
+#define BUS_IO_SIZE       0x00010000u   /* IO 区间 64KB，具体寄存器由 io 模块实现 */
+
+/* 前向声明：bus 只存指针，IO 寄存器语义在 src/io/ 模块实现（阶段 6） */
+typedef struct io io_t;
 
 /* 总线：持有各内存数组，按地址区间换算读写。
-   本阶段（2.2）只建数组与区间范围，读写函数在后续微步补齐。 */
+   阶段 2：只建数组与区间范围；阶段 6 起 IO 区间转发给 io 模块。 */
 typedef struct bus {
     uint8_t  main_ram[BUS_MAIN_RAM_SIZE]; /* Main RAM：4MB */
     uint8_t  vram[BUS_VRAM_SIZE];         /* VRAM：656KB */
-    uint8_t  io[BUS_IO_SIZE];             /* IO 寄存器区：64KB（桩） */
+    io_t    *io;                          /* IO 寄存器区实现（由 nds 挂入） */
 } bus_t;
 
 bus_t *bus_create(void);

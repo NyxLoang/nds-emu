@@ -53,6 +53,32 @@
 - 新增 `docs/06-devkitarm.md`：devkitARM 是什么、当前为何不需要、未来接入清单、
   与真机地址/阶段 9 的关系。只写文档不实现。
 
+## 6.2 — 用例：中断寄存器 IME / IE / IF
+
+- 写读回：IME/IE 32 位写读一致；`io_set_vblank` 后 IF bit3=1。
+- **IF 写 1 清除**：写 `0xFFFFFFFF` 全清、只写 `0x8` 只清 VBlank 位（写 0 的位不受影响）。
+
+## 6.3 / 6.4 — 用例：VBlank 标志 + 最小 IRQ 检测
+
+- `IF == 0x0008` 即 VBlank 已置位。
+- pending 四态：只挂起→0；+使能→0；+总开关→1；程序清 IF→0。验证「IF&IE&IME 缺一不可」。
+
+## 6.5 — 用例：定时器 0-3
+
+- `run_program` 型驱动（B self 死循环）跑 640 步：TM0(1:1)=640、TM1(1:64)=10、TM2(禁止)=0。
+- 修 `timer.c` 字节偏移 bug（`% IO_TIMER_STRIDE`，见 iolog）。
+
+## 6.6 — 用例：KEYINPUT
+
+- 未按键读 `0xFFFF`（高 4 位恒 1）；按 A 读 `0xFFFE`；按 UP+B 读 `0xFFBD`（按下=0）。
+
+## 6.7 — 用例：等 VBlank 轮询 + 读键程序
+
+- 等 VBlank 程序两轮跑：不置 VBlank 停在轮询循环（PC 在 0x0C-0x18、不写屏）；置 VBlank 后走出循环、写黄屏停机（PC=0x28、VRAM[0]=0xFF00）。
+- 读键程序：按 A 写蓝 `0x001F`、未按写红 `0x7C00`。
+- 修 3 个手写汇编编码错误（ADD 立即数旋转、STR 寄存器位序、B offset），排查靠 `exec_set_trace(1)` 逐步打印（详见 iolog）。
+
 ## 全量验证
 
 `ctest --test-dir build` 与直接运行均 40 项检查 0 失败。
+阶段 6 收尾时共 70 项检查 0 失败。

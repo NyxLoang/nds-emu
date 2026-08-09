@@ -11,6 +11,7 @@
 #include "bus/bus.h"
 #include "cpu/cpu.h"
 #include "cpu/exec.h"
+#include "io/io.h"
 
 /* 与 ppu.h 的 framebuffer 约定保持一致（此处不 include SDL 头，故重复定义）：
    顶屏 = VRAM 起始 256×192；底屏 = VRAM + 0x18000（见 docs/05-framebuffer.md）。 */
@@ -384,6 +385,181 @@ static void test_dead_loop(nds_t *nds)
     printf("  dead-loop survived 100000 steps, PC=0x%08X\n", nds->cpu->r[15]);
 }
 
+/* ---- 6.2 用例：IME / IE / IF 读写（含 IF 写 1 清除） ---- */
+static void test_irq_regs(nds_t *nds)
+{
+    /* IME：写 0x00000001 读回（32 位寄存器，只用了 bit0） */
+    bus_write32(nds->bus, IO_IME_ADDR, 0x00000001u);
+    CHECK_EQ("IME write/read", bus_read32(nds->bus, IO_IME_ADDR), 0x00000001u);
+
+    /* IE：使能 VBlank（bit3）与其他位 */
+    bus_write32(nds->bus, IO_IE_ADDR, 0x00000008u);
+    CHECK_EQ("IE write/read", bus_read32(nds->bus, IO_IE_ADDR), 0x00000008u);
+
+    /* IF：硬件（io_set_vblank）置位后能读到 */
+    io_set_vblank(nds->io);
+    CHECK_EQ("IF vblank set", bus_read32(nds->bus, IO_IF_ADDR), 0x00000008u);
+
+    /* IF 写 1 清除：只清被写 1 的位，写 0 的位不受影响 */
+    io_set_vblank(nds->io);              /* 重新挂起 */
+    bus_write32(nds->bus, IO_IF_ADDR, 0xFFFFFFFFu); /* 全部清掉 */
+    CHECK_EQ("IF clear-all", bus_read32(nds->bus, IO_IF_ADDR), 0x00000000u);
+
+    io_set_vblank(nds->io);
+    bus_write32(nds->bus, IO_IF_ADDR, 0x00000008u); /* 只清 VBlank 位 */
+    CHECK_EQ("IF clear vblank only", bus_read32(nds->bus, IO_IF_ADDR), 0x00000000u);
+}
+
+/* ---- 6.3 用例：指令计数产生 VBlank（IF bit3 位置位） ---- */
+static void test_vblank_flag(nds_t *nds)
+{
+    /* 每帧跑完固定步数后 io_set_vblank，IF 的 bit3 应为 1 */
+    io_set_vblank(nds->io);
+    CHECK_EQ("IF bit3 (VBlank) set", bus_read32(nds->bus, IO_IF_ADDR), IO_IF_VBLANK);
+}
+
+/* ---- 6.4 用例：最小 IRQ 响应（pending 检测） ----
+   只有 IF 有挂起 + IE 使能 + IME 总开关打开，才算真中断。 */
+static void test_irq_pending(nds_t *nds)
+{
+    /* 1) 有挂起但没使能/没总开关 → 不 pending */
+    io_set_vblank(nds->io);
+    CHECK_EQ("no IE/IME -> not pending", io_irq_pending(nds->io), 0);
+
+    /* 2) 使能了但总开关没开 → 仍不 pending */
+    bus_write32(nds->bus, IO_IE_ADDR, IO_IF_VBLANK);
+    CHECK_EQ("no IME -> not pending", io_irq_pending(nds->io), 0);
+
+    /* 3) 三者齐 → pending */
+    bus_write32(nds->bus, IO_IME_ADDR, 0x00000001u);
+    CHECK_EQ("IME+IE+IF -> pending", io_irq_pending(nds->io), 1);
+
+    /* 4) 程序写 IF 清掉挂起 → 不再 pending */
+    bus_write32(nds->bus, IO_IF_ADDR, IO_IF_VBLANK);
+    CHECK_EQ("after IF clear -> not pending", io_irq_pending(nds->io), 0);
+}
+
+/* ---- 6.5 用例：Timers 0-3 启停 / 分频 / 计数 ----
+   每个定时器 4 字节：base+0/1 = CNT_L，base+2/3 = CNT_H（bit7 使能，bit0-1 分频）。
+   用 B self 死循环跑固定步数，观察计数值随指令数增长。 */
+static void test_timers(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+
+    /* 死循环程序（3a.5 已支持）：跑 N 步时 PC 不动、定时器照走 */
+    bus_write32(nds->bus, base, 0xEAFFFFFE);
+    exec_set_trace(0);
+    cpu_reset(nds->cpu, base);
+
+    /* TM0 使能 + 1:1 分频（CNT_H=0x80）：每 1 条指令涨 1 */
+    bus_write16(nds->bus, IO_TIMER0_BASE + 2, 0x0080);
+    /* TM1 使能 + 1:64 分频（CNT_H=0x81）：每 64 条指令涨 1 */
+    bus_write16(nds->bus, IO_TIMER0_BASE + 4 + 2, 0x0081);
+    /* TM2 保持禁止（CNT_H=0x00）：不计数 */
+    bus_write16(nds->bus, IO_TIMER0_BASE + 8 + 2, 0x0000);
+
+    const int n = 640;
+    for (int i = 0; i < n; i++)
+        cpu_step(nds->cpu);
+    exec_set_trace(1);
+
+    uint32_t t0 = bus_read16(nds->bus, IO_TIMER0_BASE);
+    uint32_t t1 = bus_read16(nds->bus, IO_TIMER0_BASE + 4);
+    uint32_t t2 = bus_read16(nds->bus, IO_TIMER0_BASE + 8);
+    printf("  timers after %d steps: t0=%u t1=%u t2=%u\n", n, t0, t1, t2);
+    CHECK_EQ("TM0 1:1 counts steps", t0, (uint32_t)n);
+    CHECK_EQ("TM1 1:64 counts div",  t1, (uint32_t)(n / 64));
+    CHECK_EQ("TM2 disabled stays 0", t2, 0u);
+}
+
+/* ---- 6.6 用例：KEYINPUT 读写（按下=0） ---- */
+static void test_keyinput(nds_t *nds)
+{
+    /* 未按键：全部位为 1（含高 4 位恒 1） */
+    io_set_keyinput(nds->io, 0x0000);
+    CHECK_EQ("no key pressed", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FFFu);
+
+    /* 按下 A（bit0）：读值该位变 0 */
+    io_set_keyinput(nds->io, KEY_A);
+    CHECK_EQ("A pressed -> bit0=0", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FFEu);
+
+    /* 按下 UP + B */
+    io_set_keyinput(nds->io, KEY_UP | KEY_B);
+    CHECK_EQ("UP+B pressed", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FBDu);
+}
+
+/* ---- 6.7 用例：等 VBlank（CPU 轮询 IF，置位后写 VRAM） ----
+   程序：读 IF → 检查 bit3 → 没置位就继续转圈 → 置位后把黄色写进 VRAM。
+   测试先跑一段（不给 VBlank），应停在轮询循环、不写屏；
+   再 io_set_vblank 后继续，应走出循环并写屏。 */
+static void test_wait_vblank(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00404, /* MOV r0, #0x04000000       r0 = IO 基址 */
+        /* 0x04 */ 0xE2800C02, /* ADD r0, r0, #0x200        r0 = 0x04000200（0x02 ROR 24） */
+        /* 0x08 */ 0xE2800014, /* ADD r0, r0, #0x14         r0 = 0x04000214（IF） */
+        /* 0x0C */ 0xE5901000, /* LDR r1, [r0]              r1 = IF */
+        /* 0x10 */ 0xE2112008, /* ANDS r2, r1, #8           VBlank 位（bit3）→ Z 标志 */
+        /* 0x14 */ 0x1A000000, /* BNE 0x1C                  置位则跳出等待 */
+        /* 0x18 */ 0xEAFFFFFB, /* B 0x0C                    没置位继续轮询 */
+        /* 0x1C */ 0xE3A03406, /* MOV r3, #0x06000000       r3 = VRAM 基址 */
+        /* 0x20 */ 0xE3A04CFF, /* MOV r4, #0xFF00           r4 = 黄色 */
+        /* 0x24 */ 0xE5834000, /* STR r4, [r3]              VRAM[0] = 黄 */
+        /* 0x28 */ 0xEAFFFFFE, /* B self（停机） */
+    };
+
+    /* 第一次运行：不触发 VBlank，程序应停在 0x0C-0x18 轮询循环里，
+       PC 不会到停机点 0x28，也不会写屏。 */
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x28, 64);
+    CHECK_EQ("wait: PC in poll loop", nds->cpu->r[15] != base + 0x28, 1);
+    CHECK_EQ("wait: no pixel yet", bus_read16(nds->bus, BUS_VRAM_BASE), 0x0000u);
+
+    /* 第二次运行（全新 reset）：先触发 VBlank 再从头跑，应走出循环、写屏、停机 */
+    io_set_vblank(nds->io);
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x28, 64);
+    CHECK_EQ("wait: PC reaches halt", nds->cpu->r[15], base + 0x28);
+    CHECK_EQ("wait: pixel written", bus_read16(nds->bus, BUS_VRAM_BASE), 0xFF00u);
+}
+
+/* ---- 6.7 用例：读键改变显示（CPU 读 KEYINPUT，按 A 显示蓝、否则红） ----
+   程序：读 KEYINPUT → ANDS 检查 bit0（A 键）→ 按下则写蓝色、否则写红色到 VRAM。 */
+static void test_key_program(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00404, /* MOV r0, #0x04000000       r0 = IO 基址 */
+        /* 0x04 */ 0xE2800C01, /* ADD r0, r0, #0x100        r0 = 0x04000100 */
+        /* 0x08 */ 0xE2800030, /* ADD r0, r0, #0x30         r0 = 0x04000130（KEYINPUT） */
+        /* 0x0C */ 0xE5901000, /* LDR r1, [r0]              r1 = 按键读值（按下=0） */
+        /* 0x10 */ 0xE3A02001, /* MOV r2, #1                r2 = A 键位（bit0） */
+        /* 0x14 */ 0xE0113002, /* ANDS r3, r1, r2           A 按下→0、未按→1 → Z 标志 */
+        /* 0x18 */ 0x1A000001, /* BNE 0x24                  未按 A → 红色 */
+        /* 0x1C */ 0xE3A0401F, /* MOV r4, #0x001F           r4 = 蓝色 */
+        /* 0x20 */ 0xEA000000, /* B 0x28（pc+8=0x28）        跳过红色分支 */
+        /* 0x24 */ 0xE3A04C7C, /* MOV r4, #0x7C00           r4 = 红色 */
+        /* 0x28 */ 0xE3A05406, /* MOV r5, #0x06000000       r5 = VRAM 基址 */
+        /* 0x2C */ 0xE5854000, /* STR r4, [r5]              VRAM[0] = 颜色 */
+        /* 0x30 */ 0xEAFFFFFE, /* B self（停机） */
+    };
+
+    /* 按 A：读值 bit0=0，程序写蓝色 */
+    io_set_keyinput(nds->io, KEY_A);
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x30, 64);
+    CHECK_EQ("key: A pressed -> blue", bus_read16(nds->bus, BUS_VRAM_BASE), 0x001Fu);
+
+    /* 未按：读值 bit0=1，程序写红色 */
+    io_set_keyinput(nds->io, 0x0000);
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x30, 64);
+    CHECK_EQ("key: no A -> red", bus_read16(nds->bus, BUS_VRAM_BASE), 0x7C00u);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -428,6 +604,54 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_dead_loop(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 6.2] 中断寄存器 IME/IE/IF\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_irq_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 6.3] VBlank 标志\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_vblank_flag(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 6.4] 最小 IRQ 检测\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_irq_pending(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 6.5] 定时器 0-3\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_timers(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 6.6] KEYINPUT\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_keyinput(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 6.7] 等 VBlank / 读键程序\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_wait_vblank(nds);
+        nds_destroy(nds);
+    }
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_key_program(nds);
         nds_destroy(nds);
     }
 

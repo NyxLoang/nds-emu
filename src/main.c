@@ -10,6 +10,7 @@
 #include "bus/bus.h"
 #include "cpu/cpu.h"
 #include "cpu/exec.h"
+#include "io/io.h"
 #include "ppu/ppu.h"
 #include "cart/cart.h"
 
@@ -246,6 +247,13 @@ int main(int argc, char *argv[])
     /* 每帧执行的 CPU 步数（阶段 3a 起固定 N 步；阶段 4 已能出图） */
     const int steps_per_frame = 8;
 
+    /* 阶段 6：SDL 按键 → NDS 按键状态（pressed 位=1 表示按下，按下=0 是 NDS 读值）。
+       映射见下方 switch；KEY_* 常量来自 io/key.h。 */
+    uint16_t keys_pressed = 0;
+
+    /* 阶段 6.4：IRQ pending 只在首次出现时打印一次，避免每帧刷屏 */
+    int irq_logged = 0;
+
     int quit = 0;
     while (!quit) {
         int scale = window_get_scale();
@@ -264,6 +272,30 @@ int main(int argc, char *argv[])
                     window_set_scale(new_scale);
                     scale = new_scale;
                 }
+            } else if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
+                /* 阶段 6.6：把 SDL 键码映射成 NDS 键位并写入 io 模块 */
+                int down = (e.type == SDL_KEYDOWN);
+                uint16_t bit = 0;
+                switch (e.key.keysym.sym) {
+                case SDLK_z:       bit = KEY_A;     break;
+                case SDLK_x:       bit = KEY_B;     break;
+                case SDLK_s:       bit = KEY_X;     break;
+                case SDLK_d:       bit = KEY_Y;     break;
+                case SDLK_a:       bit = KEY_L;     break;
+                case SDLK_f:       bit = KEY_R;     break;
+                case SDLK_RETURN:  bit = KEY_START; break;
+                case SDLK_BACKSPACE: bit = KEY_SELECT; break;
+                case SDLK_UP:      bit = KEY_UP;    break;
+                case SDLK_DOWN:    bit = KEY_DOWN;  break;
+                case SDLK_LEFT:    bit = KEY_LEFT;  break;
+                case SDLK_RIGHT:   bit = KEY_RIGHT; break;
+                default:           bit = 0;         break;
+                }
+                if (bit != 0) {
+                    if (down) keys_pressed |= bit;
+                    else      keys_pressed &= (uint16_t)~bit;
+                    io_set_keyinput(nds->io, keys_pressed);
+                }
             }
         }
 
@@ -278,6 +310,21 @@ int main(int argc, char *argv[])
                        nds->cpu->r[15], (unsigned long long)nds->cpu->cycles);
                 fflush(stdout);
             }
+        }
+
+        /* 阶段 6.3：指令计数近似产生 VBlank——每帧步数跑完即视为一帧结束。
+           真机是显示硬件自动置位，这里模拟同一件事。 */
+        io_set_vblank(nds->io);
+
+        /* 阶段 6.4：最小 IRQ 检测（不进异常向量，仅观察挂起）。
+           真机上这时 CPU 会被叫走跑 handler；本阶段只打印一次。 */
+        if (io_irq_pending(nds->io) && !irq_logged) {
+            printf("irq: IRQ pending (VBlank IF=%08X IE=%08X IME=%u)\n",
+                   bus_read32(nds->bus, IO_IF_ADDR),
+                   bus_read32(nds->bus, IO_IE_ADDR),
+                   bus_read32(nds->bus, IO_IME_ADDR) & 1u);
+            fflush(stdout);
+            irq_logged = 1;
         }
 
         /* 清屏（物理坐标） */

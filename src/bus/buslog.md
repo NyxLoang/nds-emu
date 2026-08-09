@@ -33,3 +33,9 @@
 
 - main.c 移除临时 `arm9_ram` 静态数组，改为 `nds_create` 后经 `bus_write8` 把 ARM9 镜像逐字节写入 Main RAM（地址 = 头 `ram` 字段）。
 - 用 `bus_read32` 从 RAM 读回镜像首字验证：`FE FF FF EA` → `EAFFFFFE`，装载-读回闭环成立。
+
+## 6.2 — IO 桩 → io 模块路由
+
+- `bus_t` 移除 `io[64KB]` 桩数组，改持 `io_t *io` 指针（前向声明 `typedef struct io io_t;`）。
+- `bus_read8/write8` 对 IO 区间（`0x04000000` 起 64KB）转发给 `io_read8/io_write8`（真实寄存器语义），未挂 io 时读 0 兜底；其余地址仍走 `bus_resolve`。
+- `nds_create` 创建 io 后 `bus->io = nds->io`，逆序销毁。桩语义（未实现寄存器读 0 写忽略）由 io 模块保留，原 IO 桩自测不回归。

@@ -2,6 +2,7 @@
 #include "cpu.h"
 #include "exec.h"
 #include "bus/bus.h"
+#include "io/io.h"
 
 arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc)
 {
@@ -40,5 +41,7 @@ int cpu_step(arm_cpu_t *cpu)
 {
     uint32_t insn = cpu_fetch(cpu);
     cpu->cycles++;
+    /* 6.5：一条指令 ≈ 一个周期，推进所有使能定时器（分频在 timer.c 内处理） */
+    io_advance_timers(cpu->nds->io);
     return exec_step(cpu, insn);
 }

@@ -15,7 +15,8 @@
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 | CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/exec.h/.c`） |
 | 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 读 VRAM framebuffer 转 SDL 纹理上屏、缩放（`src/ppu/ppu.h` / `src/ppu/ppu.c`） |
-| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环） |
+| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF、定时器 0-3、KEYINPUT（`src/io/io.h/.c` + 功能文件 irq/timer/key） |
+| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键） |
 
 ## 按时间索引
 
@@ -76,3 +77,11 @@
 | 2026-08-09 | 5.5 | 测试 | README 新增「运行测试」小节（构建/ctest/直接运行/退出码/新增用例） | [tests](tests/testlog.md) |
 | 2026-08-09 | 5.6 | 测试 | 新增 `docs/06-devkitarm.md`：未来 devkitARM 接入说明（仅文档） | [tests](tests/testlog.md) |
 | 2026-08-09 | 4.5修 | 显示 | 修复十字 demo：竖线只画上半屏（终点 `+0xC000` 应 `+0x18000`）；横线 1px vs 竖线 2px 粗细不一（横线改双行嵌套循环） | [ppu](src/ppu/ppulog.md) |
+| 2026-08-09 | 6.1 | 预习 | 新增 `docs/07-interrupts.md`：中断=CPU 被打断去跑处理程序；IME/IE/IF 三者配合 | [07](docs/07-interrupts.md) |
+| 2026-08-09 | 6.2 | IO 寄存器 | 新建 `src/io/` 模块（接口 + irq/timer/key 功能文件）；bus IO 桩改路由 io 模块；IME/IE/IF 读写、IF 写 1 清除 | [io](src/io/iolog.md) |
+| 2026-08-09 | 6.3 | IO 寄存器 | 指令计数近似产生 VBlank：主循环每帧跑完 N 步 `io_set_vblank`，IF bit3 置位 | [io](src/io/iolog.md) |
+| 2026-08-09 | 6.4 | IO 寄存器 | 最小 IRQ 检测：`(IF & IE & IME)!=0`，首次 pending 打印一次（不进异常向量） | [io](src/io/iolog.md) |
+| 2026-08-09 | 6.5 | IO 寄存器 | Timers 0-3：CNT_L/H、bit7 使能、bit0-1 分频(1/64/256/1024)、每条指令 tick；修字节偏移 `<<32` UB bug | [io](src/io/iolog.md) · [cpu](src/cpu/cpulog.md) |
+| 2026-08-09 | 6.6 | IO 寄存器 | KEYINPUT（按下=0）+ SDL 键映射（main.c 组合根，window/menu 不依赖机器） | [io](src/io/iolog.md) · [main](src/mainlog.md) |
+| 2026-08-09 | 6.7 | 测试 | 等 VBlank 轮询程序（置位前卡循环、置位后写屏）+ 读键程序（按 A 蓝/未按红）；修 3 个手写汇编编码错误 | [tests](tests/testlog.md) |
+| 2026-08-09 | 6 完成 | 收尾 | 阶段 6 完成：io 模块 + VBlank/IRQ 检测/定时器/按键；70 项检查 0 失败 | [io](src/io/iolog.md) · [tests](tests/testlog.md) |

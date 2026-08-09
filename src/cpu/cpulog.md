@@ -99,3 +99,9 @@
   把 RGB555 红色 `0x7C00` 写进 VRAM 基址，再读回。
 - 自测：`r2 = 0x7C00`、`bus_read32(VRAM) = 0x7C00` 全部 PASS。
 - 意义：模拟 CPU 已能直接驱动显存，为阶段 4 出图铺路。
+
+## 6.5 — cpu_step 接入定时器
+
+- `cpu_step` 在 `cycles++` 后调 `io_advance_timers(cpu->nds->io)`：一条指令 ≈ 一个周期，
+  推进所有使能定时器（分频逻辑在 io/timer.c 内）。cpu.c 增加对 io/io.h 的依赖。
+- 定时器自测（阶段 6）：TM0 1:1 计 640、TM1 1:64 计 10、TM2 禁止计 0，全过。

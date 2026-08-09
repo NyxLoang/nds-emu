@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include "bus.h"
+#include "io/io.h"
 
 bus_t *bus_create(void)
 {
@@ -32,29 +33,34 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - BUS_VRAM_BASE);
         return 1;
     }
-    /* IO 寄存器区（0x04000000 起）：本阶段做桩——读 0、写忽略。
-       显式列出该区间，便于后续微步（阶段 6 等）逐个实现真实寄存器。 */
-    if (addr >= BUS_IO_BASE && addr - BUS_IO_BASE < BUS_IO_SIZE)
-        return 0;
-    /* 其余未映射空间：同样读 0 / 写忽略，保证任意地址访问不崩 */
+    /* IO 寄存器区不在这里命中（阶段 6 起由 io 模块处理），返回 0 表示非内存数组 */
     return 0;
 }
 
 uint8_t bus_read8(const bus_t *bus, uint32_t addr)
 {
+    /* IO 区间转发给 io 模块（真实寄存器语义），未挂 io 时读 0 兜底 */
+    if (addr >= BUS_IO_BASE && addr - BUS_IO_BASE < BUS_IO_SIZE)
+        return bus->io != NULL ? io_read8(bus->io, addr) : 0;
     const uint8_t *region;
     size_t off;
     if (!bus_resolve(bus, addr, &region, &off))
-        return 0; /* IO / 未映射：读返回 0 */
+        return 0; /* 未映射空间：读返回 0 */
     return region[off];
 }
 
 void bus_write8(bus_t *bus, uint32_t addr, uint8_t val)
 {
+    /* IO 区间转发给 io 模块（含未实现寄存器写忽略的桩语义） */
+    if (addr >= BUS_IO_BASE && addr - BUS_IO_BASE < BUS_IO_SIZE) {
+        if (bus->io != NULL)
+            io_write8(bus->io, addr, val);
+        return;
+    }
     const uint8_t *region;
     size_t off;
     if (!bus_resolve(bus, addr, &region, &off))
-        return; /* IO / 未映射：写忽略 */
+        return; /* 未映射空间：写忽略 */
     ((uint8_t *)region)[off] = val; /* region 指向调用方拥有的可变内存，cast 仅用于复用只读换算 */
 }
 

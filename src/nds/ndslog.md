@@ -17,3 +17,7 @@
 
 - `nds_t` 新增 `io_t *io` 字段（前向声明），`nds_create` 依次创建 bus → io → cpu，并 `bus->io = nds->io`；`nds_destroy` 逆序释放 cpu → io → bus。
 - 职责划分：bus 负责地址换算，io 负责寄存器语义（中断/定时器/按键），CPU 经 io 接口读 IF/KEYINPUT、推进定时器。
+
+## 2026-08-09 · 阶段 7 io 增加 bus 反指
+
+- `nds_create` 里 `io->bus = nds->bus`：io 模块需要经 bus 访存（DMA 搬运的源/目的可落在任意区间），与 `bus->io` 对称建立双向联系。

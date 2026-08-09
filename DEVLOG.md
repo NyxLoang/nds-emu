@@ -15,8 +15,8 @@
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 | CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/exec.h/.c`） |
 | 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 读 VRAM framebuffer 转 SDL 纹理上屏、缩放（`src/ppu/ppu.h` / `src/ppu/ppu.c`） |
-| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF、定时器 0-3、KEYINPUT（`src/io/io.h/.c` + 功能文件 irq/timer/key） |
-| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键） |
+| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF、定时器 0-3、KEYINPUT、DMA0（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma） |
+| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA） |
 
 ## 按时间索引
 
@@ -85,3 +85,8 @@
 | 2026-08-09 | 6.6 | IO 寄存器 | KEYINPUT（按下=0）+ SDL 键映射（main.c 组合根，window/menu 不依赖机器） | [io](src/io/iolog.md) · [main](src/mainlog.md) |
 | 2026-08-09 | 6.7 | 测试 | 等 VBlank 轮询程序（置位前卡循环、置位后写屏）+ 读键程序（按 A 蓝/未按红）；修 3 个手写汇编编码错误 | [tests](tests/testlog.md) |
 | 2026-08-09 | 6 完成 | 收尾 | 阶段 6 完成：io 模块 + VBlank/IRQ 检测/定时器/按键；70 项检查 0 失败 | [io](src/io/iolog.md) · [tests](tests/testlog.md) |
+| 2026-08-09 | 7.1 | 预习 | 新增 `docs/08-dma.md`：DMA = 硬件搬内存（源/目的/长度/启动，CPU 不参与） | [08](docs/08-dma.md) |
+| 2026-08-09 | 7.2 | IO 寄存器 | `src/io/dma.h/.c` 功能文件：DMA0 的 SAD/DAD/CNT_L/CNT_H 读写；io 加 bus 反指并路由 | [io](src/io/iolog.md) |
+| 2026-08-09 | 7.3 | IO 寄存器 | 立即模式：写 CNT_H 使能位同步拷贝（16/32 位块、源/目的可固定），搬完自动清使能 | [io](src/io/iolog.md) |
+| 2026-08-09 | 7.4 | 测试 | CPU 程序触发 DMA 填 VRAM 色块（128 像素红）；修 `ADD #0x1000` 立即数旋转编码 bug | [tests](tests/testlog.md) |
+| 2026-08-09 | 7 完成 | 收尾 | 阶段 7 完成：DMA0 立即模式搬运/填色；90 项检查 0 失败 | [io](src/io/iolog.md) · [tests](tests/testlog.md) |

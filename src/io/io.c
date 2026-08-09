@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include "io.h"
+#include "bus/bus.h"
 
 io_t *io_create(void)
 {
@@ -20,6 +21,8 @@ uint8_t io_read8(const io_t *io, uint32_t addr)
         return timer_read8(&io->timer[(addr - IO_TIMER0_BASE) / IO_TIMER_STRIDE], addr);
     if (addr >= IO_KEYINPUT_ADDR && addr < IO_KEYINPUT_END)
         return key_read8(&io->keypad, addr);
+    if (dma_is_addr(addr))
+        return dma_read8(&io->dma, addr);
     return 0;
 }
 
@@ -35,6 +38,11 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val)
     }
     if (addr >= IO_KEYINPUT_ADDR && addr < IO_KEYINPUT_END) {
         key_write8(&io->keypad, addr, val);
+        return;
+    }
+    if (dma_is_addr(addr)) {
+        /* 写 CNT_H 且使能=1 时在 dma_write8 内同步触发搬运 */
+        dma_write8(&io->dma, addr, val, io->bus);
         return;
     }
     /* 其余 IO 地址：写忽略（沿用阶段 2 的桩语义） */

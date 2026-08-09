@@ -55,3 +55,26 @@
   3. `B 0x28` 写成 offset 1（跳到 0x2C），正确 offset 0。
   排查方法：`exec_set_trace(1)` 逐步打印 `STR r3, [r4]` 暴露真实解码结果。
 - **怎么验证**：两个用例全过，阶段 6 累计 70 项检查 0 失败（ctest 通过）。
+
+## 7.2/7.3 — DMA 功能文件 + 立即模式搬运
+
+- 新建 `src/io/dma.h/.c`：`dma_channel_t`（sad/dad/cnt_l/cnt_h），只实现 DMA0 一条通道。
+- 寄存器：SAD=`0x040000B0`、DAD=`0x040000B4`、CNT_L=`0x040000B8`（字数，0 按 0x4000）、
+  CNT_H=`0x040000BA`（控制）。CNT_H 是 16 位寄存器 = 真机 32 位 CR 的高 16 位，
+  因此 bit15=使能、bit10=32 位块、bit8=源固定、bit6=目的固定、bit11-13=模式（只支持立即）。
+- **立即模式**：写 CNT_H 高位字节且使能位置位、模式=立即时，`dma_transfer` 同步拷贝 N 个
+  字/半字（`bus_read/write16/32` 走完整地址换算），源/目的默认递增、可固定；搬完自动清使能。
+- `io_t` 增加 `dma_channel_t dma` 与 `struct bus *bus` 反指（`nds_create` 里 `io->bus = nds->bus`），
+  io_read8/write8 路由 DMA 区；`CMakeLists` 的 ndscore 加入 `dma.c`。
+- **踩坑**：`dma.h` 参数列表里首次出现 `struct bus` 会被 C 视为参数域内新类型（与 bus.h 的
+  `struct bus` 不同），需在头文件顶部先 `struct bus;` 前向声明；搬运要写 bus，用非 const 指针。
+- **怎么验证**：`test_dma_regs` 4 项、`test_dma_copy` 字块拷贝 4 项 + 自动清使能 + 8 像素填色，全过。
+
+## 7.4 — CPU 程序触发 DMA 填 VRAM
+
+- 手写机器码程序：r0=DMA0 基址 → STR 写 SAD(颜色单元) → DAD(VRAM) → 一次 STR 32 位写
+  CNT=`0x81000080`（SRC_FIX|ENABLE + 字数 128）触发 → 停机。测试断言 128 像素全红 + 自动清使能。
+- **踩坑（ARM 立即数旋转再翻车）**：`ADD r1,r1,#0x1000` 最初编码 `0xE2811410`（imm8=0x10,
+  rot4=4→ROR8）实际得到 `0x10000000`；正确是 `0xE2811A01`（imm8=0x01, rot4=10→ROR20，bit12=0x1000）。
+  教训：构造立即数时用 `arm_rotate` 反推，或直接验证 `imm8 ROR (rot4*2) == 期望值`。
+- 阶段 7 累计 90 项检查 0 失败（ctest 通过）。

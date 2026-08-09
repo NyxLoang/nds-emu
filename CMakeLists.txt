@@ -44,6 +44,7 @@ add_library(ndscore STATIC
     src/io/irq.c
     src/io/timer.c
     src/io/key.c
+    src/io/dma.c
     src/cart/cart.c
     src/cart/arm9.c
     src/cart/arm7.c

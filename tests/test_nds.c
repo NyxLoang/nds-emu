@@ -560,6 +560,99 @@ static void test_key_program(nds_t *nds)
     CHECK_EQ("key: no A -> red", bus_read16(nds->bus, BUS_VRAM_BASE), 0x7C00u);
 }
 
+/* ---- 7.2 用例：DMA0 寄存器写读回 ---- */
+static void test_dma_regs(nds_t *nds)
+{
+    const uint32_t dma = IO_DMA0_BASE;
+
+    bus_write32(nds->bus, dma + 0, 0x02001000u);   /* SAD */
+    bus_write32(nds->bus, dma + 4, 0x06000000u);   /* DAD */
+    bus_write16(nds->bus, dma + 8, 0x0080u);       /* CNT_L 字数 */
+    bus_write16(nds->bus, dma + 10, 0x0000u);      /* CNT_H 控制（不置使能，不触发） */
+
+    CHECK_EQ("DMA SAD write/read",  bus_read32(nds->bus, dma + 0), 0x02001000u);
+    CHECK_EQ("DMA DAD write/read",  bus_read32(nds->bus, dma + 4), 0x06000000u);
+    CHECK_EQ("DMA CNT_L write/read", bus_read16(nds->bus, dma + 8), 0x0080u);
+    CHECK_EQ("DMA CNT_H write/read", bus_read16(nds->bus, dma + 10), 0x0000u);
+}
+
+/* ---- 7.3 用例：立即模式同步拷贝 ----
+   a) 字块拷贝：Main RAM → VRAM（源/目的递增）；
+   b) 半字填色：SRC_FIX 固定源，把一种颜色刷满 VRAM 目标区；
+   c) 搬完自动清使能。 */
+static void test_dma_copy(nds_t *nds)
+{
+    const uint32_t dma  = IO_DMA0_BASE;
+    const uint32_t src  = 0x02001000u;
+    const uint32_t vram = BUS_VRAM_BASE;
+
+    /* a) 4 个字从 Main RAM 拷到 VRAM */
+    static const uint32_t words[4] = { 0x11112222u, 0x33334444u, 0x55556666u, 0x77778888u };
+    for (int i = 0; i < 4; i++)
+        bus_write32(nds->bus, src + 4u * i, words[i]);
+
+    bus_write32(nds->bus, dma + 0, src);            /* SAD = 源 */
+    bus_write32(nds->bus, dma + 4, vram);           /* DAD = VRAM 起点 */
+    bus_write16(nds->bus, dma + 8, 4u);             /* CNT_L = 4 块 */
+    bus_write16(nds->bus, dma + 10, DMA_CNT_32BIT | DMA_CNT_ENABLE); /* 32 位 + 启动 */
+
+    CHECK_EQ("DMA word copy [0]", bus_read32(nds->bus, vram + 0), 0x11112222u);
+    CHECK_EQ("DMA word copy [1]", bus_read32(nds->bus, vram + 4), 0x33334444u);
+    CHECK_EQ("DMA word copy [2]", bus_read32(nds->bus, vram + 8), 0x55556666u);
+    CHECK_EQ("DMA word copy [3]", bus_read32(nds->bus, vram + 12), 0x77778888u);
+    CHECK_EQ("DMA enable auto-clear", bus_read16(nds->bus, dma + 10),
+             DMA_CNT_32BIT /* 使能位已被硬件清 0 */);
+
+    /* b) 半字填色：源固定，把 0x7C00 刷满 8 个像素（覆盖上面的拷贝结果） */
+    bus_write16(nds->bus, src, 0x7C00u);
+    bus_write32(nds->bus, dma + 0, src);            /* SAD = 颜色单元 */
+    bus_write32(nds->bus, dma + 4, vram);           /* DAD = VRAM 起点 */
+    bus_write16(nds->bus, dma + 8, 8u);             /* CNT_L = 8 个半字 */
+    bus_write16(nds->bus, dma + 10, DMA_CNT_SRC_FIX | DMA_CNT_ENABLE);
+
+    for (int i = 0; i < 8; i++)
+        CHECK_EQ("DMA fill pixel", bus_read16(nds->bus, vram + 2u * i), 0x7C00u);
+}
+
+/* ---- 7.4 用例：CPU 程序触发 DMA 填 VRAM 色块 ----
+   程序：r0=DMA0 基址 → 写 SAD(颜色单元) → 写 DAD(VRAM) → 一次 STR 32 位写
+   CNT(0x81000080：SRC_FIX|ENABLE + 字数 128) 触发搬运 → 停机。
+   颜色单元提前放在 0x02001000（程序区之外）。 */
+static void test_dma_program(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t color_cell = 0x02001000u;
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00404, /* MOV r0, #0x04000000       r0 = IO 基址 */
+        /* 0x04 */ 0xE28000B0, /* ADD r0, r0, #0xB0         r0 = 0x040000B0（DMA0） */
+        /* 0x08 */ 0xE3A01402, /* MOV r1, #0x02000000       r1 = Main RAM 基址 */
+        /* 0x0C */ 0xE2811A01, /* ADD r1, r1, #0x1000       r1 = 0x02001000（0x01 ROR20） */
+        /* 0x10 */ 0xE5801000, /* STR r1, [r0]              SAD = 颜色单元 */
+        /* 0x14 */ 0xE3A02406, /* MOV r2, #0x06000000       r2 = VRAM 基址 */
+        /* 0x18 */ 0xE5802004, /* STR r2, [r0, #4]          DAD = VRAM */
+        /* 0x1C */ 0xE3A03481, /* MOV r3, #0x81000000       r3 = 使能+源固定 */
+        /* 0x20 */ 0xE3833080, /* ORR r3, r3, #0x80         r3 = 0x81000080（字数 128） */
+        /* 0x24 */ 0xE5803008, /* STR r3, [r0, #8]          CNT → 触发搬运 */
+        /* 0x28 */ 0xEAFFFFFE, /* B self（停机） */
+    };
+
+    /* 颜色单元：红色 0x7C00（DMA 半字源，SRC_FIX 反复读取） */
+    bus_write16(nds->bus, color_cell, 0x7C00u);
+
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x28, 64);
+    CHECK_EQ("dma prog: PC reaches halt", nds->cpu->r[15], base + 0x28);
+    CHECK_EQ("dma prog: enable auto-clear", bus_read16(nds->bus, IO_DMA0_BASE + 10),
+             DMA_CNT_SRC_FIX);
+
+    /* 128 个半字 = 128 个像素全为红 */
+    int ok = 1;
+    for (int i = 0; i < 128; i++)
+        if (bus_read16(nds->bus, BUS_VRAM_BASE + 2u * i) != 0x7C00u) { ok = 0; break; }
+    CHECK_EQ("dma prog: 128px red fill", ok, 1);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -652,6 +745,27 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_key_program(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 7.2] DMA0 寄存器\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_dma_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 7.3] DMA 立即模式拷贝/填色\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_dma_copy(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 7.4] CPU 程序触发 DMA 填 VRAM\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_dma_program(nds);
         nds_destroy(nds);
     }
 

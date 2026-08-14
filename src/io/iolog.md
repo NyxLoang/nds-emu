@@ -78,3 +78,28 @@
   rot4=4→ROR8）实际得到 `0x10000000`；正确是 `0xE2811A01`（imm8=0x01, rot4=10→ROR20，bit12=0x1000）。
   教训：构造立即数时用 `arm_rotate` 反推，或直接验证 `imm8 ROR (rot4*2) == 期望值`。
 - 阶段 7 累计 90 项检查 0 失败（ctest 通过）。
+
+## 8.5 — 中断按 CPU 分流（IME/IE/IF 两套）
+
+- `io_t` 的 `irq_t irq` 改为 `irq_t irq[2]`（`[0]`=ARM9、`[1]`=ARM7）；`io_read8/io_write8` 增
+  `is_arm7` 参数，中断区按 `irq[is_arm7]` 选实例（IME/IE/IF 同址 `0x04000208/10/14`，按访问者分流）。
+- `io_set_vblank` 仍只置 ARM9 的 IF（VBlank 是 ARM9 显示事件）；`io_irq_pending` 检测 ARM9 视角（主循环用）。
+- **为什么必须分流**：真机 ARM9/ARM7 各有独立中断控制器；不拆则两核读同一套 IF/IE/IME 会串扰，
+  且 FIFO 中断 IF17/18 无法落到正确核。
+- **怎么验证**：`test_irq_split`——ARM9 写 IME/IE，ARM7 读得独立清零值，ARM9 读回自己的值。
+
+## 8.6 — IPC FIFO 完整（队列 + CNT 状态位 + IF17/18）
+
+- 新建 `src/io/fifo.h/.c`：两条 16 字环形队列 `from9`（ARM9 写、ARM7 读）、`from7`（ARM7 写、ARM9 读），
+  与各自 CNT 实例 `cnt9/cnt7`（16 位）。
+- **寄存器布局（GBATEK）**：`IPCFIFOCNT=0x04000184`（bit0 发送空/bit1 发送满/bit2 送空 IRQ/bit3 清发送/
+  bit8 收空/bit9 收满/bit10 收非空 IRQ/bit14 错误/bit15 使能）、`IPCFIFOSEND=0x04000188`（写 32 位）、
+  `IPCFIFORECV=0x04100000`（读 32 位，IO 区间外）。
+- 语义：未使能写 SEND 忽略；读空 RECV 返回 0 并置错误位；写满 SEND 置错误位；CNT 空满位实时算、
+  其余位存 cnt 实例。
+- **FIFO 中断（边沿触发）**：条件 `(CNT.2 & CNT.0)` 0→1 置 IF17（送空）、`(CNT.10 & !CNT.8)` 0→1 置
+  IF18（收非空）。因一方发送 → 另一方接收非空，任何 FIFO 操作后对两核都做边沿检测（`io_fifo_update_irq_all`）。
+- io 层新增 `io_recv32/io_send32` 供 bus 整字路由；`io_write8` 的 CNT 写、`io_recv32/io_send32` 后统一
+  更新两核 IF。
+- **怎么验证**：`test_fifo_basic`（跨核收发 + 空/非空状态位）、`test_fifo_irq`（IF17 送空、IF18 收非空）。
+- 踩坑：`fifo.h` 参数列表首次出现 `struct irq` 需顶部先前向声明（同 7.2 的 `struct bus`）。

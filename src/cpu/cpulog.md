@@ -105,3 +105,15 @@
 - `cpu_step` 在 `cycles++` 后调 `io_advance_timers(cpu->nds->io)`：一条指令 ≈ 一个周期，
   推进所有使能定时器（分频逻辑在 io/timer.c 内）。cpu.c 增加对 io/io.h 的依赖。
 - 定时器自测（阶段 6）：TM0 1:1 计 640、TM1 1:64 计 10、TM2 禁止计 0，全过。
+
+## 8.2 — CPU 拆分出 ARM9/ARM7 功能文件 + is_arm7
+
+- 沿用 cart 的「接口 + 功能文件」规则，`src/cpu/` 进一步拆分：
+  - `cpu.h/.c`：对外接口——`arm_cpu_t` 状态（含新增 `is_arm7` 身份标志）、生命周期、`cpu_fetch`、`cpu_step`。
+  - `arm9.h/.c`：ARM9 功能文件——`arm9_create(nds)` 内部 `cpu_create(nds, 0, 0)`。
+  - `arm7.h/.c`：ARM7 功能文件——`arm7_create(nds)` 内部 `cpu_create(nds, 0, 1)`。
+  - `exec.h/.c`：指令执行语义，两核共用（ARM9/ARM7 指令集差异极小，本阶段不区分）。
+- `cpu_create` 签名加第 3 参 `is_arm7`；`cpu_step` 取指前 `nds->bus->active_is_arm7 = cpu->is_arm7`，
+  让中断/FIFO 等按访问者身份分流。
+- **怎么验证**：`test_dual_core_step`——两核各跑 NOP，step 后 PC 均 +4、`is_arm7` 正确；`test_interleave`
+  交错 2:1 跑 6 步，ARM9 cycles=4、ARM7 cycles=2。

@@ -33,15 +33,23 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - BUS_VRAM_BASE);
         return 1;
     }
+    /* ARM7 WRAM：64KB（阶段 8，ARM7 镜像装载于此；ARM9 也可访问） */
+    if (addr >= BUS_ARM7_WRAM_BASE &&
+        addr - BUS_ARM7_WRAM_BASE < BUS_ARM7_WRAM_SIZE) {
+        *region = bus->arm7_wram;
+        *off = (size_t)(addr - BUS_ARM7_WRAM_BASE);
+        return 1;
+    }
     /* IO 寄存器区不在这里命中（阶段 6 起由 io 模块处理），返回 0 表示非内存数组 */
     return 0;
 }
 
 uint8_t bus_read8(const bus_t *bus, uint32_t addr)
 {
-    /* IO 区间转发给 io 模块（真实寄存器语义），未挂 io 时读 0 兜底 */
+    /* IO 区间转发给 io 模块（真实寄存器语义），未挂 io 时读 0 兜底。
+       active_is_arm7 让中断/FIFO CNT 等按访问者身份分流。 */
     if (addr >= BUS_IO_BASE && addr - BUS_IO_BASE < BUS_IO_SIZE)
-        return bus->io != NULL ? io_read8(bus->io, addr) : 0;
+        return bus->io != NULL ? io_read8(bus->io, addr, bus->active_is_arm7) : 0;
     const uint8_t *region;
     size_t off;
     if (!bus_resolve(bus, addr, &region, &off))
@@ -54,7 +62,7 @@ void bus_write8(bus_t *bus, uint32_t addr, uint8_t val)
     /* IO 区间转发给 io 模块（含未实现寄存器写忽略的桩语义） */
     if (addr >= BUS_IO_BASE && addr - BUS_IO_BASE < BUS_IO_SIZE) {
         if (bus->io != NULL)
-            io_write8(bus->io, addr, val);
+            io_write8(bus->io, addr, val, bus->active_is_arm7);
         return;
     }
     const uint8_t *region;
@@ -82,6 +90,9 @@ void bus_write16(bus_t *bus, uint32_t addr, uint16_t val)
 /* 小端 32 位：四个字节按 b0<<0 | b1<<8 | b2<<16 | b3<<24 拼成字。 */
 uint32_t bus_read32(const bus_t *bus, uint32_t addr)
 {
+    /* IPC FIFO RECV（0x04100000）在 IO 区间外，需整体读（拆字节会破坏队列） */
+    if (addr == BUS_IPC_FIFO_RECV)
+        return bus->io != NULL ? io_recv32(bus->io, bus->active_is_arm7) : 0;
     return (uint32_t)bus_read8(bus, addr)
          | ((uint32_t)bus_read8(bus, addr + 1) << 8)
          | ((uint32_t)bus_read8(bus, addr + 2) << 16)
@@ -91,6 +102,12 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
 /* 小端 32 位写：最低字节 → addr，最高字节 → addr+3。 */
 void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
 {
+    /* IPC FIFO SEND（0x04000188）是 32 位寄存器，需整体入队（拆字节会被忽略） */
+    if (addr == IO_FIFO_SEND) {
+        if (bus->io != NULL)
+            io_send32(bus->io, bus->active_is_arm7, val);
+        return;
+    }
     bus_write8(bus, addr,     (uint8_t)(val & 0xFF));
     bus_write8(bus, addr + 1, (uint8_t)(val >> 8));
     bus_write8(bus, addr + 2, (uint8_t)(val >> 16));

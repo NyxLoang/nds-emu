@@ -92,7 +92,37 @@
 - 修 `ADD r1,r1,#0x1000` 编码：`0xE2811410`（imm8=0x10,ROR8）实得 `0x10000000`，
   正确 `0xE2811A01`（imm8=0x01,ROR20→0x1000）。教训：立即数要用 `arm_rotate` 反推验证。
 
+## 8.2/8.4 — 用例：双核 step + 交错调度
+
+- 新增 `run_cpu7` 驱动（与 `run_program` 对称，操作 `nds->cpu7`）。
+- `test_dual_core_step`：两核各跑 NOP，step 后 PC 均 +4、`is_arm7` 正确。
+  （初版用 `B self` 断言 PC 前进，实际 B self 死循环 PC 原地打转，改 NOP。）
+- `test_interleave`：`i%3==2` 跑 ARM7 的交错 6 步，ARM9 cycles=4、ARM7 cycles=2。
+
+## 8.3 — 用例：ARM7 WRAM + 入口取指
+
+- `test_arm7_wram`：`0x03800000` 写读回、越界（`0x03900000`）读 0。
+- `test_arm7_fetch`：WRAM 写 `MOV r0,#5`，`cpu_reset(cpu7, 0x03800000)` 后 step，r0=5、PC+4。
+
+## 8.5 — 用例：中断按 CPU 分流
+
+- `test_irq_split`：手动切 `bus->active_is_arm7`，ARM9 写 IME/IE 后 ARM7 读得独立清零值、
+  ARM9 读回自己的值，验证 `irq[2]` 分流。
+
+## 8.6 — 用例：IPC FIFO 收发/状态位/中断
+
+- `test_fifo_basic`：使能两核 FIFO 后，ARM9 发 `0xDEADBEEF` → ARM7 收得原值（反向 `0x11223344` 同理）；
+  空队列 send/recv empty 位、发送后 send 非空、对方 recv 非空。
+- `test_fifo_irq`：使能 send-empty IRQ → IF17 置位；使能 recv-not-empty IRQ 后由 ARM7 发一字 →
+  ARM9 的 IF18 置位（边沿触发）。
+
+## 8.7 — 用例：双核 FIFO 传值 + 底屏体现
+
+- ARM7 程序（WRAM）：发 `0x7C00`（红）到 SEND；ARM9 程序（Main RAM）：读 RECV 后写底屏 VRAM。
+- 两程序都用「数据区预写地址 + LDR 加载」避免复杂立即数（SEND/RECV 地址不易用 MOV 立即数表示）。
+- 先跑 ARM7 发送、再跑 ARM9 接收写屏；断言两核停机 PC 与底屏首像素 `0x7C00`。
+
 ## 全量验证
 
-`ctest --test-dir build` 与直接运行均 40 项检查 0 失败。
-阶段 6 收尾时共 70 项检查 0 失败；阶段 7 收尾时共 **90 项检查 0 失败**。
+`ctest --test-dir build` 与直接运行均通过。
+阶段 6 收尾时 70 项检查 0 失败；阶段 7 收尾时 90 项检查 0 失败；阶段 8 收尾时 **117 项检查 0 失败**。

@@ -54,6 +54,22 @@ static int run_program(nds_t *nds, uint32_t base, const uint32_t *prog,
     return steps;
 }
 
+/* 同上，但驱动第二颗 ARM7 核（阶段 8）。程序写进指定 base（通常是 ARM7 WRAM）。 */
+static int run_cpu7(nds_t *nds, uint32_t base, const uint32_t *prog,
+                    size_t count, uint32_t start_pc, uint32_t halt_pc,
+                    int max_steps)
+{
+    for (size_t i = 0; i < count; i++)
+        bus_write32(nds->bus, base + 4 * i, prog[i]);
+    exec_set_trace(0);
+    cpu_reset(nds->cpu7, start_pc);
+    int steps = 0;
+    while (steps++ < max_steps && nds->cpu7->r[15] != halt_pc)
+        cpu_step(nds->cpu7);
+    exec_set_trace(1);
+    return steps;
+}
+
 /* 顶屏像素(x,y) 的颜色字（RGB555）。地址 = VRAM 基址 + (y*宽 + x)*2 字节。 */
 static uint16_t top_px(nds_t *nds, int x, int y)
 {
@@ -653,6 +669,197 @@ static void test_dma_program(nds_t *nds)
     CHECK_EQ("dma prog: 128px red fill", ok, 1);
 }
 
+/* ---- 8.2 用例：双核都能 step ---- */
+static void test_dual_core_step(nds_t *nds)
+{
+    /* 两核各写一条 NOP（MOV r0,r0），reset 到各自入口，step 一次后 PC 应前进 4 */
+    bus_write32(nds->bus, 0x02000800u, 0xE1A00000u);
+    bus_write32(nds->bus, 0x03800000u, 0xE1A00000u);
+
+    cpu_reset(nds->cpu,  0x02000800u);
+    cpu_reset(nds->cpu7, 0x03800000u);
+
+    cpu_step(nds->cpu);
+    cpu_step(nds->cpu7);
+
+    CHECK_EQ("arm9 step PC",  nds->cpu->r[15],  0x02000804u);
+    CHECK_EQ("arm7 step PC",  nds->cpu7->r[15], 0x03800004u);
+    CHECK_EQ("arm9 is_arm7=0", nds->cpu->is_arm7, 0);
+    CHECK_EQ("arm7 is_arm7=1", nds->cpu7->is_arm7, 1);
+}
+
+/* ---- 8.3 用例：ARM7 WRAM 映射 ---- */
+static void test_arm7_wram(nds_t *nds)
+{
+    bus_write8(nds->bus, BUS_ARM7_WRAM_BASE, 0xAB);
+    CHECK_EQ("arm7 wram read8", bus_read8(nds->bus, BUS_ARM7_WRAM_BASE), 0xAB);
+    bus_write32(nds->bus, BUS_ARM7_WRAM_BASE + 0x100, 0x12345678u);
+    CHECK_EQ("arm7 wram read32", bus_read32(nds->bus, BUS_ARM7_WRAM_BASE + 0x100), 0x12345678u);
+    /* 越界（0x03900000 在 64KB WRAM 之外）读 0 */
+    CHECK_EQ("arm7 wram beyond", bus_read8(nds->bus, 0x03900000u), 0x00);
+}
+
+/* ---- 8.3 用例：ARM7 入口取指执行 ---- */
+static void test_arm7_fetch(nds_t *nds)
+{
+    bus_write32(nds->bus, BUS_ARM7_WRAM_BASE, 0xE3A00005u); /* MOV r0, #5 */
+    cpu_reset(nds->cpu7, BUS_ARM7_WRAM_BASE);
+    cpu_step(nds->cpu7);
+    CHECK_EQ("arm7 fetch r0", nds->cpu7->r[0], 5u);
+    CHECK_EQ("arm7 fetch PC", nds->cpu7->r[15], BUS_ARM7_WRAM_BASE + 4);
+}
+
+/* ---- 8.4 用例：交错调度 2:1 ---- */
+static void test_interleave(nds_t *nds)
+{
+    bus_write32(nds->bus, 0x02000800u, 0xE1A00000u); /* NOP */
+    bus_write32(nds->bus, 0x03800000u, 0xE1A00000u); /* NOP */
+    cpu_reset(nds->cpu,  0x02000800u);
+    cpu_reset(nds->cpu7, 0x03800000u);
+
+    /* 跑 6 步，i%3==2 时跑 ARM7，其余 ARM9：ARM9 4 步、ARM7 2 步 */
+    for (int i = 0; i < 6; i++) {
+        if (i % 3 == 2)
+            cpu_step(nds->cpu7);
+        else
+            cpu_step(nds->cpu);
+    }
+    CHECK_EQ("interleave arm9 cycles", (uint32_t)nds->cpu->cycles, 4u);
+    CHECK_EQ("interleave arm7 cycles", (uint32_t)nds->cpu7->cycles, 2u);
+}
+
+/* ---- 8.5 用例：中断寄存器按 CPU 分流 ---- */
+static void test_irq_split(nds_t *nds)
+{
+    /* ARM9 写 IME/IE，ARM7 应读到独立（清零）的值 */
+    nds->bus->active_is_arm7 = 0;
+    bus_write32(nds->bus, IO_IME_ADDR, 0x00000001u);
+    bus_write32(nds->bus, IO_IE_ADDR,  0x00000008u);
+
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("arm7 IME independent", bus_read32(nds->bus, IO_IME_ADDR), 0x00000000u);
+    CHECK_EQ("arm7 IE independent",  bus_read32(nds->bus, IO_IE_ADDR),  0x00000000u);
+
+    /* ARM9 视角读回应得自己写过的值 */
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("arm9 IME", bus_read32(nds->bus, IO_IME_ADDR), 0x00000001u);
+    CHECK_EQ("arm9 IE",  bus_read32(nds->bus, IO_IE_ADDR),  0x00000008u);
+    nds->bus->active_is_arm7 = 0; /* 恢复默认 */
+}
+
+/* ---- 8.6 用例：FIFO 收发 + 状态位 ---- */
+static void test_fifo_basic(nds_t *nds)
+{
+    /* 使能两核 FIFO */
+    nds->bus->active_is_arm7 = 0;
+    bus_write16(nds->bus, IO_FIFO_CNT, FIFO_CNT_ENABLE);
+    nds->bus->active_is_arm7 = 1;
+    bus_write16(nds->bus, IO_FIFO_CNT, FIFO_CNT_ENABLE);
+    nds->bus->active_is_arm7 = 0;
+
+    /* 空队列：ARM9 视角 send/recv 都应空 */
+    uint16_t c = bus_read16(nds->bus, IO_FIFO_CNT);
+    CHECK_EQ("fifo arm9 send empty", c & FIFO_CNT_SEND_EMPTY, FIFO_CNT_SEND_EMPTY);
+    CHECK_EQ("fifo arm9 recv empty", c & FIFO_CNT_RECV_EMPTY, FIFO_CNT_RECV_EMPTY);
+
+    /* ARM9 发一个字 → ARM9 的 send 非空；ARM7 的 recv 非空 */
+    bus_write32(nds->bus, IO_FIFO_SEND, 0xDEADBEEFu);
+    c = bus_read16(nds->bus, IO_FIFO_CNT);
+    CHECK_EQ("fifo arm9 send not empty", c & FIFO_CNT_SEND_EMPTY, 0u);
+
+    nds->bus->active_is_arm7 = 1;
+    c = bus_read16(nds->bus, IO_FIFO_CNT);
+    CHECK_EQ("fifo arm7 recv not empty", c & FIFO_CNT_RECV_EMPTY, 0u);
+    /* ARM7 收，应得原值 */
+    uint32_t v = bus_read32(nds->bus, IO_FIFO_RECV);
+    CHECK_EQ("fifo arm7 recv value", v, 0xDEADBEEFu);
+    nds->bus->active_is_arm7 = 0;
+
+    /* 反向：ARM7 发 → ARM9 收 */
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, IO_FIFO_SEND, 0x11223344u);
+    nds->bus->active_is_arm7 = 0;
+    v = bus_read32(nds->bus, IO_FIFO_RECV);
+    CHECK_EQ("fifo arm9 recv value", v, 0x11223344u);
+}
+
+/* ---- 8.6 用例：FIFO 中断 IF17/18 ---- */
+static void test_fifo_irq(nds_t *nds)
+{
+    /* 清 ARM9 的 IF，再使能 send-empty IRQ：空队列 + IRQ 使能 → 边沿 0→1 → IF17 置位 */
+    nds->bus->active_is_arm7 = 0;
+    bus_write32(nds->bus, IO_IF_ADDR, 0xFFFFFFFFu); /* 写 1 清全部 IF */
+    bus_write16(nds->bus, IO_FIFO_CNT, FIFO_CNT_ENABLE | FIFO_CNT_SEND_IRQ);
+    CHECK_EQ("fifo send-empty IF17", bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_FIFO_SEND_EMPTY,
+             IO_IF_FIFO_SEND_EMPTY);
+
+    /* 使能 recv-not-empty IRQ（初始 recv 空，不触发），再由 ARM7 发一个字
+       → ARM9 的 recv 变非空 → IF18 置位 */
+    bus_write32(nds->bus, IO_IF_ADDR, 0xFFFFFFFFu); /* 再清 IF */
+    bus_write16(nds->bus, IO_FIFO_CNT, FIFO_CNT_ENABLE | FIFO_CNT_RECV_IRQ);
+    CHECK_EQ("fifo recv empty no IF18", bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_FIFO_RECV_NOT_EMPTY, 0u);
+
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, IO_FIFO_SEND, 0x0000ABCDu); /* ARM7 发 → ARM9 收非空 */
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("fifo recv-not-empty IF18", bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_FIFO_RECV_NOT_EMPTY,
+             IO_IF_FIFO_RECV_NOT_EMPTY);
+}
+
+/* ---- 8.7 用例：双核经 FIFO 传值 + 写底屏 ----
+   ARM7 程序发 0x7C00（红）到 SEND；ARM9 程序读 RECV 后写到底屏 VRAM。 */
+static void test_fifo_program(nds_t *nds)
+{
+    const uint32_t arm9_base = BUS_MAIN_RAM_BASE;
+    const uint32_t arm7_base = BUS_ARM7_WRAM_BASE;
+
+    /* 数据区（Main RAM 0x02001000）：预写 RECV/SEND 地址，避免复杂立即数 */
+    bus_write32(nds->bus, 0x02001000u, IO_FIFO_RECV);   /* ARM9 加载 RECV 地址用 */
+    bus_write32(nds->bus, 0x02001004u, IO_FIFO_SEND);   /* ARM7 加载 SEND 地址用 */
+
+    /* ARM7 程序：发 0x7C00 到 SEND */
+    static const uint32_t prog7[] = {
+        /* 0x00 */ 0xE3A00C7C, /* MOV r0, #0x7C00        r0 = 要发的值（红） */
+        /* 0x04 */ 0xE3A01402, /* MOV r1, #0x02000000    r1 = Main RAM 基址 */
+        /* 0x08 */ 0xE2811A01, /* ADD r1, r1, #0x1000    r1 = 0x02001000 */
+        /* 0x0C */ 0xE5911004, /* LDR r1, [r1, #4]       r1 = SEND 地址 */
+        /* 0x10 */ 0xE5810000, /* STR r0, [r1]           发送 */
+        /* 0x14 */ 0xEAFFFFFE, /* B self（停机） */
+    };
+
+    /* ARM9 程序：读 RECV → 写底屏 */
+    static const uint32_t prog9[] = {
+        /* 0x00 */ 0xE3A00402, /* MOV r0, #0x02000000    r0 = Main RAM 基址 */
+        /* 0x04 */ 0xE2800A01, /* ADD r0, r0, #0x1000    r0 = 0x02001000 */
+        /* 0x08 */ 0xE5900000, /* LDR r0, [r0]           r0 = RECV 地址 */
+        /* 0x0C */ 0xE5901000, /* LDR r1, [r0]           r1 = 收到的值 */
+        /* 0x10 */ 0xE3A02406, /* MOV r2, #0x06000000    r2 = VRAM 基址 */
+        /* 0x14 */ 0xE2822A18, /* ADD r2, r2, #0x18000   r2 = 底屏起点 */
+        /* 0x18 */ 0xE5821000, /* STR r1, [r2]           写底屏 */
+        /* 0x1C */ 0xEAFFFFFE, /* B self（停机） */
+    };
+
+    /* 使能两核 FIFO */
+    nds->bus->active_is_arm7 = 0;
+    bus_write16(nds->bus, IO_FIFO_CNT, FIFO_CNT_ENABLE);
+    nds->bus->active_is_arm7 = 1;
+    bus_write16(nds->bus, IO_FIFO_CNT, FIFO_CNT_ENABLE);
+    nds->bus->active_is_arm7 = 0;
+
+    /* 先跑 ARM7（发送），再跑 ARM9（接收写屏） */
+    run_cpu7(nds, arm7_base, prog7, sizeof prog7 / sizeof prog7[0],
+             arm7_base, arm7_base + 0x14, 32);
+    run_program(nds, arm9_base, prog9, sizeof prog9 / sizeof prog9[0],
+                arm9_base, arm9_base + 0x1C, 32);
+
+    CHECK_EQ("fifo prog arm7 halt", nds->cpu7->r[15], arm7_base + 0x14);
+    CHECK_EQ("fifo prog arm9 halt", nds->cpu->r[15],  arm9_base + 0x1C);
+
+    /* 底屏第一个像素应为收到的红色 0x7C00 */
+    CHECK_EQ("fifo prog bottom px", bus_read16(nds->bus, BUS_VRAM_BASE + TEST_VRAM_BOTTOM_OFFSET),
+             0x7C00u);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -766,6 +973,50 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_dma_program(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 8.2] 双核都能 step\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_dual_core_step(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 8.3] ARM7 WRAM + 入口取指\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_arm7_wram(nds);
+        test_arm7_fetch(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 8.4] 交错调度 2:1\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_interleave(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 8.5] 中断按 CPU 分流\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_irq_split(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 8.6] IPC FIFO 收发/状态位/中断\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_fifo_basic(nds);
+        test_fifo_irq(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 8.7] 双核 FIFO 传值 + 底屏体现\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_fifo_program(nds);
         nds_destroy(nds);
     }
 

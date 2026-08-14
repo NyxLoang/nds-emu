@@ -39,3 +39,15 @@
 - `bus_t` 移除 `io[64KB]` 桩数组，改持 `io_t *io` 指针（前向声明 `typedef struct io io_t;`）。
 - `bus_read8/write8` 对 IO 区间（`0x04000000` 起 64KB）转发给 `io_read8/io_write8`（真实寄存器语义），未挂 io 时读 0 兜底；其余地址仍走 `bus_resolve`。
 - `nds_create` 创建 io 后 `bus->io = nds->io`，逆序销毁。桩语义（未实现寄存器读 0 写忽略）由 io 模块保留，原 IO 桩自测不回归。
+
+## 8.3 — ARM7 WRAM 映射 + active_is_arm7 + FIFO RECV/SEND 整字路由
+
+- `bus_t` 新增 `arm7_wram[64KB]`（`0x03800000` 起）与 `int active_is_arm7`（当前访问者身份，由
+  `cpu_step` 在取指前设置）。`bus_resolve` 增加 ARM7 WRAM 分支。
+- `bus_read8/write8` 转发 IO 时把 `active_is_arm7` 传给 `io_read8/io_write8`，使中断寄存器
+  （IME/IE/IF）与 FIFO CNT 按 CPU 分流（`irq[0]`=ARM9、`irq[1]`=ARM7）。
+- **FIFO 整字路由**：IPC FIFO RECV 地址 `0x04100000` 在 IO 区间之外，`bus_read32` 检测该地址
+  整体走 `io_recv32`；SEND 地址 `0x04000188` 是 32 位寄存器，`bus_write32` 检测该地址整体走
+  `io_send32`——避免拆成 4 字节破坏队列/被忽略。
+- **怎么验证**：`test_arm7_wram`（写读回 + 越界读 0）、`test_irq_split`（两核 IME/IE 独立）、
+  `test_fifo_basic`（跨核收发一字）。

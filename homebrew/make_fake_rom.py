@@ -23,8 +23,7 @@ ARM7_SIZE = 0x00000080
 # ARM9 死循环：B 自己 (0xEAFFFFFE)，小端
 B_SELF = bytes.fromhex("FE FF FF EA")
 
-# BX lr（返回），ARM7 占位用：0xE12FFF1E 小端
-BX_LR = bytes.fromhex("1E FF 2F E1")
+# ARM7 镜像：B self 死循环（阶段 8 起真正执行 ARM7，让它停在自己的 WRAM 里）
 
 
 def main() -> None:
@@ -49,8 +48,8 @@ def main() -> None:
 
     # ARM9 镜像：死循环，入口处开始
     rom[ARM9_OFFSET:ARM9_OFFSET + len(B_SELF)] = B_SELF
-    # ARM7 镜像：BX lr 占位
-    rom[ARM7_OFFSET:ARM7_OFFSET + len(BX_LR)] = BX_LR
+    # ARM7 镜像：B self 死循环
+    rom[ARM7_OFFSET:ARM7_OFFSET + len(B_SELF)] = B_SELF
 
     out.write_bytes(rom)
     print(f"wrote {out} ({len(rom)} bytes)")

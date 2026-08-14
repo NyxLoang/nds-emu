@@ -222,6 +222,27 @@ int main(int argc, char *argv[])
                 cpu_reset(nds->cpu, hdr.arm9.entry);
                 printf("cpu   : reset PC=%08X\n", hdr.arm9.entry);
             }
+
+            /* 阶段 8.3：把 ARM7 镜像逐字节写进 ARM7 WRAM（0x03800000）。
+               与 ARM9 装载对称：逐字节走 bus_write8，再读回验证。 */
+            if (hdr.arm7.offset + hdr.arm7.size > cart->size) {
+                printf("image : arm7 out of file range\n");
+            } else if (hdr.arm7.size > BUS_ARM7_WRAM_SIZE) {
+                printf("image : arm7 too large for WRAM (%u bytes)\n",
+                       hdr.arm7.size);
+            } else {
+                for (uint32_t i = 0; i < hdr.arm7.size; i++)
+                    bus_write8(nds->bus, hdr.arm7.ram + i,
+                               cart->data[hdr.arm7.offset + i]);
+
+                uint32_t readback7 = bus_read32(nds->bus, hdr.arm7.ram);
+                printf("image : loaded %u bytes into ARM7 WRAM @ %08X, first word readback %08X\n",
+                       hdr.arm7.size, hdr.arm7.ram, readback7);
+
+                /* 阶段 8.3：ARM7 镜像就位，让第二颗 CPU 从 ARM7 入口开始执行 */
+                cpu_reset(nds->cpu7, hdr.arm7.entry);
+                printf("cpu7  : reset PC=%08X\n", hdr.arm7.entry);
+            }
         }
         fflush(stdout);
 #ifdef _WIN32
@@ -301,13 +322,19 @@ int main(int argc, char *argv[])
 
         /* 阶段 3a 起：每帧推进固定 N 步 CPU（mini.nds 是死循环，PC 原地打转）。
            阶段 4 的画面由上面 CPU 写 VRAM 的测试码产生，这里继续空转。
+           阶段 8.4：双核按 ARM9:ARM7 = 2:1 交错调度（i%3==2 时跑 ARM7）。
            每 60 周期打一次状态，避免死循环时刷屏。 */
-        if (nds->cpu != NULL) {
-            for (int i = 0; i < steps_per_frame; i++)
-                cpu_step(nds->cpu);
+        if (nds->cpu != NULL && nds->cpu7 != NULL) {
+            for (int i = 0; i < steps_per_frame; i++) {
+                if (i % 3 == 2)
+                    cpu_step(nds->cpu7);
+                else
+                    cpu_step(nds->cpu);
+            }
             if (nds->cpu->cycles % 60u == 0) {
-                printf("cpu: frame done, PC=%08X cycles=%llu\n",
-                       nds->cpu->r[15], (unsigned long long)nds->cpu->cycles);
+                printf("cpu: frame done, ARM9 PC=%08X cycles=%llu | ARM7 PC=%08X cycles=%llu\n",
+                       nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
+                       nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles);
                 fflush(stdout);
             }
         }

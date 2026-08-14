@@ -4,12 +4,13 @@
 #include "bus/bus.h"
 #include "io/io.h"
 
-arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc)
+arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc, int is_arm7)
 {
     arm_cpu_t *cpu = calloc(1, sizeof(arm_cpu_t));
     if (cpu == NULL)
         return NULL;
     cpu->nds = nds;
+    cpu->is_arm7 = is_arm7;
     /* r15 = PC，初始指向镜像入口；cpsr 清零（真机复位后是 SVC 模式，此处简化） */
     cpu->r[15] = reset_pc;
     return cpu;
@@ -41,6 +42,8 @@ int cpu_step(arm_cpu_t *cpu)
 {
     uint32_t insn = cpu_fetch(cpu);
     cpu->cycles++;
+    /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
+    cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
     /* 6.5：一条指令 ≈ 一个周期，推进所有使能定时器（分频在 timer.c 内处理） */
     io_advance_timers(cpu->nds->io);
     return exec_step(cpu, insn);

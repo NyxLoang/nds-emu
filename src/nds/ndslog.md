@@ -21,3 +21,9 @@
 ## 2026-08-09 · 阶段 7 io 增加 bus 反指
 
 - `nds_create` 里 `io->bus = nds->bus`：io 模块需要经 bus 访存（DMA 搬运的源/目的可落在任意区间），与 `bus->io` 对称建立双向联系。
+
+## 2026-08-09 · 阶段 8 挂入第二颗 CPU（cpu7）
+
+- `nds_t` 新增 `arm_cpu_t *cpu7`（ARM7）；`nds_create` 改用 `arm9_create(nds)` + `arm7_create(nds)`
+  创建两核（不再直接 `cpu_create`），`nds_destroy` 逆序释放 cpu7 → cpu → io → bus。
+- ARM7 镜像装载后由 main 调 `cpu_reset(nds->cpu7, arm7.entry)` 指到入口（`0x03800000`）。

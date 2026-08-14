@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-/* 中断寄存器地址（ARM9；ARM7 在 0x040003xx，本模拟器暂只实现 ARM9） */
+/* 中断寄存器地址（NDS9 与 NDS7 同址分流，各自独立实例）。
+   按 CPU 身份选择实例：ARM9 用 [0]、ARM7 用 [1]。 */
 #define IO_IME_ADDR 0x04000208u   /* 总开关：bit0=1 才允许中断 */
 #define IO_IE_ADDR  0x04000210u   /* 各中断源使能位 */
 #define IO_IF_ADDR  0x04000214u   /* 挂起位：硬件置 1，软件写 1 清除 */
@@ -11,6 +12,10 @@
 
 /* IF 里的 VBlank 位（bit3）。其余中断源阶段 6 不产生，先不定义。 */
 #define IO_IF_VBLANK (1u << 3)
+
+/* FIFO 中断位（阶段 8）：bit17 = 发送 FIFO 空，bit18 = 接收 FIFO 非空 */
+#define IO_IF_FIFO_SEND_EMPTY    (1u << 17)
+#define IO_IF_FIFO_RECV_NOT_EMPTY (1u << 18)
 
 /* 中断控制器状态：三个 32 位寄存器。
    真机 IME/IE/IF 多为 32 位寄存器，这里按整字存储，按字节访问。 */

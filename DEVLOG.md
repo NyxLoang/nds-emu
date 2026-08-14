@@ -13,10 +13,10 @@
 | 整机状态 | [`src/nds/ndslog.md`](src/nds/ndslog.md) | 整机状态容器 `nds_t`（`src/nds/nds.h` / `src/nds/nds.c`） |
 | 卡带装载 | [`src/cart/cartlog.md`](src/cart/cartlog.md) | 读 `.nds` 文件、解析 ROM 头（`src/cart/cart.h` / `src/cart/cart.c`） |
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
-| CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/exec.h/.c`） |
+| CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9/ARM7 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/arm9.h/.c`、`src/cpu/arm7.h/.c`、`src/cpu/exec.h/.c`） |
 | 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 读 VRAM framebuffer 转 SDL 纹理上屏、缩放（`src/ppu/ppu.h` / `src/ppu/ppu.c`） |
-| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF、定时器 0-3、KEYINPUT、DMA0（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma） |
-| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA） |
+| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA0、IPC FIFO（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo） |
+| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO） |
 
 ## 按时间索引
 
@@ -90,3 +90,11 @@
 | 2026-08-09 | 7.3 | IO 寄存器 | 立即模式：写 CNT_H 使能位同步拷贝（16/32 位块、源/目的可固定），搬完自动清使能 | [io](src/io/iolog.md) |
 | 2026-08-09 | 7.4 | 测试 | CPU 程序触发 DMA 填 VRAM 色块（128 像素红）；修 `ADD #0x1000` 立即数旋转编码 bug | [tests](tests/testlog.md) |
 | 2026-08-09 | 7 完成 | 收尾 | 阶段 7 完成：DMA0 立即模式搬运/填色；90 项检查 0 失败 | [io](src/io/iolog.md) · [tests](tests/testlog.md) |
+| 2026-08-09 | 8.1 | 预习 | 新增 `docs/09-dual-core.md`：双核分工、共享内存、IPC FIFO 概念 | [09](docs/09-dual-core.md) |
+| 2026-08-09 | 8.2 | CPU | 拆分 `arm9.h/.c`/`arm7.h/.c` 功能文件（`cpu.h/.c` 作接口），`arm_cpu_t` 加 `is_arm7` | [cpu](src/cpu/cpulog.md) |
+| 2026-08-09 | 8.3 | 内存总线 | ARM7 WRAM（`0x03800000` 64KB）映射 + 装载 ARM7 镜像 + cpu7 指入口 | [bus](src/bus/buslog.md) · [nds](src/nds/ndslog.md) · [main](src/mainlog.md) |
+| 2026-08-09 | 8.4 | CPU | 双核交错调度 ARM9:ARM7=2:1（主循环 + 测试驱动） | [main](src/mainlog.md) · [cpu](src/cpu/cpulog.md) |
+| 2026-08-09 | 8.5 | IO 寄存器 | 中断按 CPU 分流：IME/IE/IF 拆成 `irq[2]` 两套，同址按访问者身份选择 | [io](src/io/iolog.md) |
+| 2026-08-09 | 8.6 | IO 寄存器 | IPC FIFO 完整：双向 16 字队列 + CNT 状态位 + SEND/RECV + 边沿中断 IF17/18 | [io](src/io/iolog.md) |
+| 2026-08-09 | 8.7 | 测试 | 双核 FIFO 传值 + 底屏体现；117 项检查 0 失败 | [tests](tests/testlog.md) |
+| 2026-08-09 | 8 完成 | 收尾 | 阶段 8 完成：ARM7 + IPC（双核调度、共享内存、FIFO 传字） | [cpu](src/cpu/cpulog.md) · [io](src/io/iolog.md) · [tests](tests/testlog.md) |

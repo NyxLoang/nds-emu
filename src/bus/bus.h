@@ -10,21 +10,31 @@
 /* VRAM：显存，程序往这里写颜色字；本阶段先分配 656KB 区间。 */
 #define BUS_VRAM_SIZE (656 * 1024)
 
+/* ARM7 专属 WRAM：64KB（阶段 8，ARM7 镜像装载于此）。 */
+#define BUS_ARM7_WRAM_SIZE (64 * 1024)
+
 /* 地址区间基址（内存地图见 docs/03-memory-map.md） */
 #define BUS_MAIN_RAM_BASE 0x02000000u
 #define BUS_VRAM_BASE     0x06000000u
 #define BUS_IO_BASE       0x04000000u
 #define BUS_IO_SIZE       0x00010000u   /* IO 区间 64KB，具体寄存器由 io 模块实现 */
+#define BUS_ARM7_WRAM_BASE 0x03800000u  /* ARM7 WRAM 基址 */
+
+/* IPC FIFO RECV 的独占地址（不在 0x0400xxxx IO 区间内，单独映射） */
+#define BUS_IPC_FIFO_RECV 0x04100000u
 
 /* 前向声明：bus 只存指针，IO 寄存器语义在 src/io/ 模块实现（阶段 6） */
 typedef struct io io_t;
 
 /* 总线：持有各内存数组，按地址区间换算读写。
-   阶段 2：只建数组与区间范围；阶段 6 起 IO 区间转发给 io 模块。 */
+   阶段 2：只建数组与区间范围；阶段 6 起 IO 区间转发给 io 模块；
+   阶段 8 起加 ARM7 WRAM 与「当前访问者身份」（FIFO/中断按 CPU 分流）。 */
 typedef struct bus {
     uint8_t  main_ram[BUS_MAIN_RAM_SIZE]; /* Main RAM：4MB */
     uint8_t  vram[BUS_VRAM_SIZE];         /* VRAM：656KB */
+    uint8_t  arm7_wram[BUS_ARM7_WRAM_SIZE]; /* ARM7 WRAM：64KB */
     io_t    *io;                          /* IO 寄存器区实现（由 nds 挂入） */
+    int active_is_arm7;                   /* 当前访问者身份：0=ARM9, 1=ARM7 */
 } bus_t;
 
 bus_t *bus_create(void);

@@ -60,3 +60,17 @@
   - SDL 键映射：事件循环捕获 `SDL_KEYDOWN/UP`，`z/x/s/d/a/f/回车/退格/方向键` → NDS 键位，维护 pressed 掩码后 `io_set_keyinput`（组合根在 main.c，window/menu 不依赖机器）。
 - **怎么验证**：`cmake --build build` + `ctest` 70 项检查 0 失败；运行 `nds-emu.exe` 看控制台 VBlank/IRQ 打印，按方向键/ABXY 验证按键映射。
 - **结果**：✅ 编译与自动化测试通过（窗口按键行为待用户运行确认）。
+
+## 2026-08-09 · 阶段 8 装载 ARM7 镜像 + 双核交错调度
+
+- **做了什么**：
+  - 装载 ARM7 镜像：与 ARM9 装载对称，把 ROM 头 ARM7 镜像逐字节经 `bus_write8` 写入
+    ARM7 WRAM（`0x03800000`），`bus_read32` 读回验证，`cpu_reset(nds->cpu7, arm7.entry)` 指到入口。
+  - 交错调度：主循环每帧 `steps_per_frame` 步按 `i%3==2` 跑 ARM7、其余跑 ARM9（约 2:1），
+    每 60 周期打印一次双核 PC/cycles。
+- **配套**：`make_fake_rom.py` 的 ARM7 镜像由 `BX lr` 占位改为 `B self` 死循环，让 ARM7 停在自己
+  WRAM 里空转（与 ARM9 对称），避免跳到地址 0 空转。
+- **怎么验证**：`ctest` 117 项检查 0 失败；运行 `nds-emu.exe ..\homebrew\mini.nds` 看到
+  `image : loaded 128 bytes into ARM7 WRAM @ 03800000`、`cpu7 : reset PC=03800000`，主循环打印
+  `ARM9 PC=02000800 | ARM7 PC=03800000`（两核各自死循环）。
+- **结果**：✅ 编译与自动化测试通过。

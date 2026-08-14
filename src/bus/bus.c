@@ -40,6 +40,40 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - BUS_ARM7_WRAM_BASE);
         return 1;
     }
+    /* 调色板 RAM：2KB（阶段 9，BG/OBJ 颜色查表） */
+    if (addr >= BUS_PALETTE_BASE &&
+        addr - BUS_PALETTE_BASE < BUS_PALETTE_SIZE) {
+        *region = bus->palette;
+        *off = (size_t)(addr - BUS_PALETTE_BASE);
+        return 1;
+    }
+    /* OAM：2KB（阶段 9，OBJ 属性内存，主/副各 1KB） */
+    if (addr >= BUS_OAM_BASE &&
+        addr - BUS_OAM_BASE < BUS_OAM_SIZE) {
+        *region = bus->oam;
+        *off = (size_t)(addr - BUS_OAM_BASE);
+        return 1;
+    }
+    /* VRAM 固定窗口（阶段 9 最小实现）：副 BG / 主 OBJ / 副 OBJ 各映射到一段
+       固定物理 VRAM（对应 libnds vramDefault 的 bank C/B/D 分配）。 */
+    if (addr >= BUS_VRAM_SUB_BG_BASE &&
+        addr - BUS_VRAM_SUB_BG_BASE < BUS_VRAM_WINDOW_SIZE) {
+        *region = bus->vram + BUS_VRAM_SUB_BG_PHYS;
+        *off = (size_t)(addr - BUS_VRAM_SUB_BG_BASE);
+        return 1;
+    }
+    if (addr >= BUS_VRAM_MAIN_OBJ_BASE &&
+        addr - BUS_VRAM_MAIN_OBJ_BASE < BUS_VRAM_WINDOW_SIZE) {
+        *region = bus->vram + BUS_VRAM_MAIN_OBJ_PHYS;
+        *off = (size_t)(addr - BUS_VRAM_MAIN_OBJ_BASE);
+        return 1;
+    }
+    if (addr >= BUS_VRAM_SUB_OBJ_BASE &&
+        addr - BUS_VRAM_SUB_OBJ_BASE < BUS_VRAM_WINDOW_SIZE) {
+        *region = bus->vram + BUS_VRAM_SUB_OBJ_PHYS;
+        *off = (size_t)(addr - BUS_VRAM_SUB_OBJ_BASE);
+        return 1;
+    }
     /* IO 寄存器区不在这里命中（阶段 6 起由 io 模块处理），返回 0 表示非内存数组 */
     return 0;
 }

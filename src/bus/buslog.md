@@ -51,3 +51,13 @@
   `io_send32`——避免拆成 4 字节破坏队列/被忽略。
 - **怎么验证**：`test_arm7_wram`（写读回 + 越界读 0）、`test_irq_split`（两核 IME/IE 独立）、
   `test_fifo_basic`（跨核收发一字）。
+
+## 9.2 — 调色板 RAM / OAM / VRAM 固定窗口
+
+- 新增内存区间（配合真 2D PPU）：
+  - **调色板 RAM** `0x05000000`（2KB，`palette[0x800]`）：BG/OBJ 颜色查表，主 `0x05000000`+副 `0x05000400`。
+  - **OAM** `0x07000000`（2KB，`oam[0x800]`）：OBJ 属性内存，主 `0x07000000` 1KB + 副 `0x07000400` 1KB。
+  - **VRAM 固定窗口**（各 128KB，对应 libnds vramDefault bank 分配）：副 BG `0x06200000`→`vram[0x40000]`
+    （bank C）、主 OBJ `0x06400000`→`vram[0x20000]`（bank B）、副 OBJ `0x06600000`→`vram[0x60000]`（bank D）。
+  - `0x06000000` 仍保持 656KB 全量映射（向后兼容 + 主引擎全量访问）。
+- 验收：`test_disp_regs` 里验证副 BG 窗口写 `0x06200000` 与物理 `vram[0x40000]` 读回一致。

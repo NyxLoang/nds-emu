@@ -103,3 +103,13 @@
   更新两核 IF。
 - **怎么验证**：`test_fifo_basic`（跨核收发 + 空/非空状态位）、`test_fifo_irq`（IF17 送空、IF18 收非空）。
 - 踩坑：`fifo.h` 参数列表首次出现 `struct irq` 需顶部先前向声明（同 7.2 的 `struct bus`）。
+
+## 9.2 — 显示控制寄存器 disp 功能文件 + 调色板/OAM/VRAM 窗口
+
+- 新建 `src/io/disp.h/.c`：`disp_t` 持主/副各一套 DISPCNT（32 位）、4 个 BGxCNT（16 位）、
+  4 组滚动 HOFS/VOFS（16 位）；`disp_is_addr` 判断是否落在显示寄存器区间，`disp_read8/write8`
+  按小端字节访问（`write_byte16` 对 16 位寄存器按字节写入）。
+- io 层路由：`io_read8/io_write8` 在 `disp_is_addr` 命中时转 `disp_read8/disp_write8`。
+- bus 侧配合新增区间（见 buslog 9.2）：调色板 RAM `0x05000000`、OAM `0x07000000`、
+  VRAM 固定窗口（副 BG / 主 OBJ / 副 OBJ）。
+- 验收：`test_disp_regs` 11 项全过（主副 DISPCNT/BGxCNT/滚动读写、调色板、VRAM 窗口映射）。

@@ -198,15 +198,21 @@
 
 ## 阶段 9 — 真 2D PPU
 
+> 阶段 9（9.1–9.7）沿用**统一确认模式**：阶段末统一汇报，不逐项停下。
+> 9.1–9.7 已全部完成 ✅（2026-08-14 统一确认，`ctest` 148 项检查 0 失败）。
+> 成果：弃旧「VRAM 偏移=屏幕 framebuffer」，改为 DISPCNT/BGxCNT 寄存器驱动的真 2D 引擎——
+> 直色位图 + Mode 0 tile（tilemap/调色板/透明/翻转/优先级）+ OBJ sprite + 副引擎（Engine B）对称；
+> `src/ppu/render.h/.c` 纯渲染（SDL 无关）+ `src/io/disp.h/.c` 显示寄存器 + bus 调色板/OAM/VRAM 窗口。
+
 | 微步 | 做什么 | 验收 |
 |------|--------|------|
-| 9.1 | 短文：BG/tile/palette 是什么 | 能复述 |
-| 9.2 | 读显示控制寄存器（DISPCNT 等最小集） | 读写正确 |
-| 9.3 | Engine A：Mode 3 或线性 FB 模式对齐真机 | 真模式出图 |
-| 9.4 | Engine A：Mode 0 一层 BG + 调色板 | tilemap 出图 |
-| 9.5 | Engine B 对称最小集 | 底屏用引擎 B |
-| 9.6 | OBJ（精灵）最小：一个 sprite | 屏上有活动块 |
-| 9.7 | 用非裸 FB 的 2D homebrew/自造数据验收 | 不靠假 FB 约定 |
+| 9.1 | 短文：BG/tile/palette 是什么 | 能复述 ✅ |
+| 9.2 | 读显示控制寄存器（DISPCNT 等最小集） | 读写正确 ✅ |
+| 9.3 | Engine A：Mode 3 或线性 FB 模式对齐真机 | 真模式出图 ✅ |
+| 9.4 | Engine A：Mode 0 一层 BG + 调色板 | tilemap 出图 ✅ |
+| 9.5 | Engine B 对称最小集 | 底屏用引擎 B ✅ |
+| 9.6 | OBJ（精灵）最小：一个 sprite | 屏上有活动块 ✅ |
+| 9.7 | 用非裸 FB 的 2D homebrew/自造数据验收 | 不靠假 FB 约定 ✅ |
 
 ---
 
@@ -229,7 +235,7 @@ CP15、异常精确性、3D、触摸 SPI、音频、卡带协议、BIOS HLE — 
 - 阶段 6：IME/IE/IF → VBlank → IRQ 检测 → Timer → KEYINPUT → 等 VBlank/读键用例 ✅
 - 阶段 7：单通道立即 DMA → 填 VRAM ✅
 - 阶段 8：ARM7 实例 → 交错 → 中断分流 → FIFO 完整 ✅
-- 阶段 9：DISPCNT → Mode3/0 → Engine B → OBJ
+- 阶段 9：真 2D PPU（DISPCNT → Mode3 直色位图 → Mode0 tile → Engine B → OBJ）全部完成 ✅
 
 ---
 

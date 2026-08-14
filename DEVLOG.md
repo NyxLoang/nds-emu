@@ -14,9 +14,9 @@
 | 卡带装载 | [`src/cart/cartlog.md`](src/cart/cartlog.md) | 读 `.nds` 文件、解析 ROM 头（`src/cart/cart.h` / `src/cart/cart.c`） |
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 | CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9/ARM7 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/arm9.h/.c`、`src/cpu/arm7.h/.c`、`src/cpu/exec.h/.c`） |
-| 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 读 VRAM framebuffer 转 SDL 纹理上屏、缩放（`src/ppu/ppu.h` / `src/ppu/ppu.c`） |
-| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA0、IPC FIFO（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo） |
-| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO） |
+| 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 真 2D PPU：读寄存器出图（`src/ppu/ppu.h/.c` SDL 侧 + 纯渲染 `src/ppu/render.h/.c`） |
+| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA0、IPC FIFO、显示控制 DISPCNT/BGxCNT（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo/disp） |
+| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO/2D PPU） |
 
 ## 按时间索引
 
@@ -98,3 +98,11 @@
 | 2026-08-09 | 8.6 | IO 寄存器 | IPC FIFO 完整：双向 16 字队列 + CNT 状态位 + SEND/RECV + 边沿中断 IF17/18 | [io](src/io/iolog.md) |
 | 2026-08-09 | 8.7 | 测试 | 双核 FIFO 传值 + 底屏体现；117 项检查 0 失败 | [tests](tests/testlog.md) |
 | 2026-08-09 | 8 完成 | 收尾 | 阶段 8 完成：ARM7 + IPC（双核调度、共享内存、FIFO 传字） | [cpu](src/cpu/cpulog.md) · [io](src/io/iolog.md) · [tests](tests/testlog.md) |
+| 2026-08-14 | 9.1 | 显示 | 新增 `docs/10-bg-tile-palette.md`：BG/tile/tilemap/调色板、位图 vs tile 模式 | [10](docs/10-bg-tile-palette.md) |
+| 2026-08-14 | 9.2 | 显示/IO | 新建 `src/io/disp.h/.c` 显示寄存器（DISPCNT/BGxCNT/滚动，主副引擎）+ bus 调色板 RAM/OAM/VRAM 固定窗口 | [disp](src/io/iolog.md) · [bus](src/bus/buslog.md) |
+| 2026-08-14 | 9.3 | 显示 | 新建 `src/ppu/render.h/.c` 纯渲染器：直色位图模式（Mode 3-5，BG2/BG3 直色 16bpp） | [ppu](src/ppu/ppulog.md) |
+| 2026-08-14 | 9.4 | 显示 | Mode 0 tile 图层渲染（4bpp/8bpp 位面、tilemap、调色板、透明、翻转、优先级） | [ppu](src/ppu/ppulog.md) |
+| 2026-08-14 | 9.5 | 显示 | Engine B 对称渲染（副 DISPCNT/BGxCNT/调色板/VRAM 窗口 `0x06200000`） | [ppu](src/ppu/ppulog.md) |
+| 2026-08-14 | 9.6 | 显示 | OBJ 最小：OAM 读取 + 1D tile 映射 + OBJ 调色板，一个 8×8 sprite（16/256 色） | [ppu](src/ppu/ppulog.md) |
+| 2026-08-14 | 9.7 | 显示/测试 | 自造数据 2D 场景验收 + main 演示迁移（弃假 FB，改 DISPCNT/BGxCNT/OAM 驱动）；148 项检查 0 失败 | [ppu](src/ppu/ppulog.md) · [tests](tests/testlog.md) · [main](src/mainlog.md) |
+| 2026-08-14 | 9 完成 | 收尾 | 阶段 9 完成：真 2D PPU（DISPCNT + BG tile + OBJ，主副引擎对称） | [ppu](src/ppu/ppulog.md) |

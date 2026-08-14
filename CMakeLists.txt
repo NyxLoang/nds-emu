@@ -48,6 +48,8 @@ add_library(ndscore STATIC
     src/io/key.c
     src/io/dma.c
     src/io/fifo.c
+    src/io/disp.c
+    src/ppu/render.c
     src/cart/cart.c
     src/cart/arm9.c
     src/cart/arm7.c

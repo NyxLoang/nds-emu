@@ -53,6 +53,8 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return key_read8(&io->keypad, addr);
     if (dma_is_addr(addr))
         return dma_read8(&io->dma, addr);
+    if (disp_is_addr(addr))
+        return disp_read8(&io->disp, addr);
     return 0;
 }
 
@@ -82,6 +84,10 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     if (dma_is_addr(addr)) {
         /* 写 CNT_H 且使能=1 时在 dma_write8 内同步触发搬运 */
         dma_write8(&io->dma, addr, val, io->bus);
+        return;
+    }
+    if (disp_is_addr(addr)) {
+        disp_write8(&io->disp, addr, val);
         return;
     }
     /* 其余 IO 地址：写忽略（沿用阶段 2 的桩语义） */

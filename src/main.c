@@ -14,114 +14,101 @@
 #include "ppu/ppu.h"
 #include "cart/cart.h"
 
-/* 阶段 4.4：主机直接往 VRAM 的 framebuffer 写测试图，验证「VRAM→纹理→窗口」管线。
-   顶屏画 6 色横带 + 白边框（可辨识的测试图），底屏填纯蓝。 */
-static void fill_test_pattern(nds_t *nds)
+/* 阶段 9.7：真 2D 演示——不再把 VRAM 当线性 framebuffer，而是用
+   DISPCNT / BGxCNT / tile / tilemap / 调色板 寄存器驱动 2D 引擎出图。
+   顶屏（Engine A）：8bpp tile 棋盘格 + 一个 OBJ 白色方块；
+   底屏（Engine B）：8bpp tile 竖条纹（副引擎自己的寄存器/调色板/VRAM 窗口）。 */
+
+/* 写 n 个 RGB555 颜色到调色板基址（每项 2 字节） */
+static void write_palette(nds_t *nds, uint32_t base, int n, const uint16_t *colors)
 {
-    const uint16_t colors[6] = {
-        0x7C00, /* 红 */
-        0x7FE0, /* 黄 */
-        0x03E0, /* 绿 */
-        0x03FF, /* 青 */
-        0x001F, /* 蓝 */
-        0x7C1F, /* 品红 */
-    };
-    /* 顶屏：每 32 行一条色带（192 行 / 6 色） */
-    for (int y = 0; y < PPU_SCREEN_H; y++) {
-        for (int x = 0; x < PPU_SCREEN_W; x++) {
-            uint16_t c = colors[y / 32];
-            /* 最外一圈画白框，便于肉眼确认屏的边界 */
-            if (x == 0 || y == 0 || x == PPU_SCREEN_W - 1 || y == PPU_SCREEN_H - 1)
-                c = 0x7FFF;
-            /* 地址 = VRAM 基址 + 顶屏偏移 + (y*宽 + x)*2 字节（RGB555 每像素 2 字节） */
-            uint32_t addr = BUS_VRAM_BASE + PPU_VRAM_TOP_OFFSET
-                          + (uint32_t)(y * PPU_SCREEN_W + x) * 2u;
-            bus_write16(nds->bus, addr, c);
-        }
-    }
-    /* 底屏：纯蓝 */
-    for (int y = 0; y < PPU_SCREEN_H; y++) {
-        for (int x = 0; x < PPU_SCREEN_W; x++) {
-            uint32_t addr = BUS_VRAM_BASE + PPU_VRAM_BOTTOM_OFFSET
-                          + (uint32_t)(y * PPU_SCREEN_W + x) * 2u;
-            bus_write16(nds->bus, addr, 0x001F);
-        }
-    }
-    printf("4 display: host-filled test pattern into VRAM\n");
-    fflush(stdout);
+    for (int i = 0; i < n; i++)
+        bus_write16(nds->bus, base + (uint32_t)i * 2u, colors[i]);
 }
 
-/* 阶段 4.5：不再靠主机 memset，而是把一段 ARM 程序装入 Main RAM，
-   让模拟 CPU 自己往 VRAM 写图，再交给 ppu 刷新上屏。
-   程序画：顶屏黄色十字（水平线 y=96 + 竖线 x=128），底屏整屏绿色。
-   地址构造用的是 3b 阶段练过的 imm8 旋转立即数与 STR 偏移。 */
-static void selftest_4_cpu_draw(nds_t *nds)
+/* 把一个 8×8 的 8bpp tile 填成单一调色板索引（64 字节全 = idx） */
+static void fill_tile_8bpp(nds_t *nds, uint32_t tile_base, int idx)
 {
-    const uint32_t base = BUS_MAIN_RAM_BASE;
+    for (int i = 0; i < 64; i++)
+        bus_write8(nds->bus, tile_base + (uint32_t)i, (uint8_t)idx);
+}
 
-    /* 手工汇编（指令字编码注释见 docs/04-cpu-loop.md 与 cpulog.md）：
-       程序布局：0x00-0x74，B self 停机在 0x74。
-       十字要对称，两臂都必须 2px：
-       - 横线画 y=95、y=96 两行（STR 一次写 2 像素 → 行内成对推进）；
-       - 竖线画 x=128、129 两列，从 y=0 一直画到 y=191（终点 = 起点 + 0x18000，
-         越过顶屏最后一行，保证下半段完整）。
-       STR 是 32 位写 = 2 个 RGB555 像素，颜色值放进两个字半
-       （0xFF00FF00 / 0x03E003E0）保证 2 像素同色、线条实心。 */
-    const uint32_t drawprog[] = {
-        /* 0x00 */ 0xE3A00406, /* MOV r0, #0x06000000       r0 = 顶屏基址 */
-        /* 0x04 */ 0xE2800CBE, /* ADD r0, r0, #0xBE00       r0 = 0x0600BE00（y=95 行起点） */
-        /* 0x08 */ 0xE3A014FF, /* MOV r1, #0xFF000000       黄色高半字（0xFF ROR 8） */
-        /* 0x0C */ 0xE3811CFF, /* ORR r1, r1, #0xFF00       → r1=0xFF00FF00（2 像素同色） */
-        /* 0x10 */ 0xE3A02002, /* MOV r2, #2                r2 = 2 行（横线 2px 粗） */
-        /* 0x14 */ 0xE3A03080, /* MOV r3, #0x80             r3 = 每行 128 字（256 像素） */
-        /* 0x18 */ 0xE5801000, /* STR r1, [r0]              写 2 像素黄 */
-        /* 0x1C */ 0xE2800004, /* ADD r0, r0, #4            行内前进 */
-        /* 0x20 */ 0xE2533001, /* SUBS r3, r3, #1           行内字数-1 */
-        /* 0x24 */ 0x1AFFFFFB, /* BNE 0x18                  行内循环（r0 自动到下一行行首） */
-        /* 0x28 */ 0xE3A03080, /* MOV r3, #0x80             重置行内计数 */
-        /* 0x2C */ 0xE2522001, /* SUBS r2, r2, #1           行数-1 */
-        /* 0x30 */ 0x1AFFFFF8, /* BNE 0x18                  行循环（画第 2 行 y=96） */
-        /* 0x34 */ 0xE3A00406, /* MOV r0, #0x06000000       r0 = 顶屏基址 */
-        /* 0x38 */ 0xE2800C01, /* ADD r0, r0, #0x100        r0 = 0x06000100（x=128, y=0） */
-        /* 0x3C */ 0xE2804A18, /* ADD r4, r0, #0x18000      r4 = 0x06018100（越过末行 y=191） */
-        /* 0x40 */ 0xE5801000, /* STR r1, [r0]              写 2 像素黄（x=128,129） */
-        /* 0x44 */ 0xE2800C02, /* ADD r0, r0, #0x200        下一行同一列 */
-        /* 0x48 */ 0xE1500004, /* CMP r0, r4                列画完了吗 */
-        /* 0x4C */ 0x1AFFFFFB, /* BNE 0x40                  未到终点继续 */
-        /* 0x50 */ 0xE3A00406, /* MOV r0, #0x06000000       r0 = 顶屏基址 */
-        /* 0x54 */ 0xE2801A18, /* ADD r1, r0, #0x18000      r1 = 底屏基址 0x06018000 */
-        /* 0x58 */ 0xE2815A18, /* ADD r5, r1, #0x18000      r5 = 底屏终点 0x06030000 */
-        /* 0x5C */ 0xE3A0263E, /* MOV r2, #0x03E00000       绿色高半字（0x3E ROR 12） */
-        /* 0x60 */ 0xE3822E3E, /* ORR r2, r2, #0x03E0       → r2=0x03E003E0（2 像素同色） */
-        /* 0x64 */ 0xE5812000, /* STR r2, [r1]              写 2 像素绿 */
-        /* 0x68 */ 0xE2811004, /* ADD r1, r1, #4            前进 2 像素 */
-        /* 0x6C */ 0xE1510005, /* CMP r1, r5                底屏画完了吗 */
-        /* 0x70 */ 0x1AFFFFFB, /* BNE 0x64                  未到终点继续 */
-        /* 0x74 */ 0xEAFFFFFE, /* B self（停机） */
+static void setup_2d_demo(nds_t *nds)
+{
+    static const uint16_t pal[8] = {
+        0x0000, /* 0 黑（背景/透明露出色） */
+        0x7C00, /* 1 红 */
+        0x03E0, /* 2 绿 */
+        0x001F, /* 3 蓝 */
+        0x7FE0, /* 4 黄 */
+        0x03FF, /* 5 青 */
+        0x7C1F, /* 6 品红 */
+        0x7FFF, /* 7 白 */
     };
-    for (size_t i = 0; i < sizeof drawprog / sizeof drawprog[0]; i++)
-        bus_write32(nds->bus, base + 4 * i, drawprog[i]);
 
-    /* 批量跑 LDR/STR 循环会有数万条指令，先关掉逐条日志避免刷屏 */
-    exec_set_trace(0);
-    cpu_reset(nds->cpu, base);
-    int steps = 0;
-    int max_steps = 1 << 20; /* 顶屏行/列 + 底屏整屏，安全上限 100 万步 */
-    while (steps++ < max_steps && nds->cpu->r[15] != base + 0x74)
-        cpu_step(nds->cpu);
-    exec_set_trace(1);
+    /* === 顶屏 Engine A：8bpp tile 棋盘格 + OBJ === */
+    /* 主 BG 调色板（0x05000000） */
+    write_palette(nds, BUS_PALETTE_BASE, 8, pal);
 
-    /* 回读 CPU 实际写过的像素验证真写进去了：
-       顶屏 (x=128,y=0) 竖线起点 = 0x06000100 → 黄 0xFF00；
-       顶屏 (x=128,y=191) 竖线末行 = 0x06017F00 → 黄（验证下半段完整）；
-       底屏 (0,0) = 0x06018000 → 绿 0x03E0。 */
-    uint32_t top_px = bus_read16(nds->bus, BUS_VRAM_BASE + PPU_VRAM_TOP_OFFSET + 0x100u);
-    uint32_t top_end_px = bus_read16(nds->bus, BUS_VRAM_BASE + PPU_VRAM_TOP_OFFSET + 0x17F00u);
-    uint32_t bot_px = bus_read16(nds->bus, BUS_VRAM_BASE + PPU_VRAM_BOTTOM_OFFSET);
-    printf("4 display: CPU drew to VRAM, top(x=128,y=0)=%04X top(x=128,y=191)=%04X bot(0,0)=%04X (steps=%d)\n",
-           top_px, top_end_px, bot_px, steps);
-    if (top_px != 0xFF00u || top_end_px != 0xFF00u || bot_px != 0x03E0u)
-        printf("4 display: WARNING unexpected VRAM readback\n");
+    /* 4 个 8bpp tile：tile0=红 tile1=绿 tile2=蓝 tile3=黄，字符块 0（0x06000000） */
+    fill_tile_8bpp(nds, BUS_VRAM_BASE + 0u * 64u, 1);
+    fill_tile_8bpp(nds, BUS_VRAM_BASE + 1u * 64u, 2);
+    fill_tile_8bpp(nds, BUS_VRAM_BASE + 2u * 64u, 3);
+    fill_tile_8bpp(nds, BUS_VRAM_BASE + 3u * 64u, 4);
+
+    /* tilemap（屏幕块 1 → 0x06000800）：32×32 棋盘格，用 (tx+ty)&3 选 tile */
+    for (int ty = 0; ty < 32; ty++)
+        for (int tx = 0; tx < 32; tx++)
+            bus_write16(nds->bus, BUS_VRAM_BASE + 0x800u + (uint32_t)(ty * 32 + tx) * 2u,
+                        (uint16_t)((tx + ty) & 3));
+
+    /* BG0CNT：256 色(bit7) + 屏幕块 1(bit8-12 单位 2KB) */
+    bus_write16(nds->bus, IO_BGCNT_BASE,
+                BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT));
+
+    /* OBJ：一个白色 8×8 方块（16 色），放在 (120,80) */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0x200u + 2u, 0x7FFFu); /* OBJ 调色板[1]=白 */
+    for (int r = 0; r < 8; r++) {   /* OBJ tile0（4bpp）：全部像素 = 索引1 */
+        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 0u, 0xFFu);
+        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 1u, 0x00u);
+        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 2u, 0x00u);
+        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 3u, 0x00u);
+    }
+    for (int n = 0; n < 128; n++)   /* 全 0 的 OAM = 原点可见 sprite，先统一禁用 */
+        bus_write16(nds->bus, BUS_OAM_BASE + 8u * n, 0x0200u);
+    bus_write16(nds->bus, BUS_OAM_BASE + 0u, 80u);   /* 属性0：Y=80 方形 16 色 */
+    bus_write16(nds->bus, BUS_OAM_BASE + 2u, 120u);  /* 属性1：X=120 尺寸 8×8 */
+    bus_write16(nds->bus, BUS_OAM_BASE + 4u, 0u);    /* 属性2：tile0 调色板0 */
+
+    /* DISPCNT（主）：mode 0 + BG0 + OBJ + 显示模式 1（正常） */
+    bus_write32(nds->bus, IO_DISPCNT,
+                DISPCNT_BG0 | DISPCNT_OBJ | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+
+    /* === 底屏 Engine B：8bpp tile 竖条纹（青/品红），副引擎独立资源 === */
+    static const uint16_t pal_sub[8] = {
+        0x0000, 0x03FF, 0x7C1F, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    };
+    write_palette(nds, BUS_PALETTE_BASE + 0x400u, 8, pal_sub); /* 副 BG 调色板 */
+
+    /* 副 BG 图形窗口 0x06200000（物理 vram[0x40000]）：tile0=青 tile1=品红 */
+    fill_tile_8bpp(nds, BUS_VRAM_SUB_BG_BASE + 0u * 64u, 1);
+    fill_tile_8bpp(nds, BUS_VRAM_SUB_BG_BASE + 1u * 64u, 2);
+
+    /* 副 tilemap（屏幕块 1 → 0x06200800）：按列奇偶选 tile，形成竖条纹 */
+    for (int ty = 0; ty < 32; ty++)
+        for (int tx = 0; tx < 32; tx++)
+            bus_write16(nds->bus, BUS_VRAM_SUB_BG_BASE + 0x800u + (uint32_t)(ty * 32 + tx) * 2u,
+                        (uint16_t)(tx & 1));
+
+    /* 副 BG0CNT：256 色 + 屏幕块 1 */
+    bus_write16(nds->bus, IO_BGCNT_SUB_BASE,
+                BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT));
+
+    /* DISPCNT_SUB：mode 0 + BG0 + 显示模式 1 */
+    bus_write32(nds->bus, IO_DISPCNT_SUB,
+                DISPCNT_BG0 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+
+    printf("9 display: true 2D demo configured (top=tiled checkerboard+OBJ, bottom=stripes)\n");
     fflush(stdout);
 }
 
@@ -250,12 +237,10 @@ int main(int argc, char *argv[])
 #endif
     }
 
-    /* 显示 demo（阶段 5 起指令级断言已迁入 tests/test_nds.c，此处只保留出图效果）：
-       阶段 4.4：主机直接往 VRAM 写测试图（顶屏 6 色带 + 白框，底屏纯蓝）；
-       阶段 4.5：模拟 CPU 自己跑一段写 VRAM 的测试码（顶屏黄十字 + 底屏纯绿）。 */
+    /* 阶段 9.7：真 2D 演示——通过 DISPCNT/BGxCNT/tile/tilemap/调色板/OBJ 出图，
+       不再依赖旧的「VRAM 偏移 = 屏幕 framebuffer」约定。 */
     if (nds->cpu != NULL) {
-        fill_test_pattern(nds);
-        selftest_4_cpu_draw(nds);
+        setup_2d_demo(nds);
 
         /* demo 完毕后恢复 mini.nds 入口，让主循环继续死循环空转 */
         cpu_reset(nds->cpu, 0x02000800);

@@ -12,6 +12,8 @@
 #include "cpu/cpu.h"
 #include "cpu/exec.h"
 #include "io/io.h"
+#include "io/disp.h"
+#include "ppu/render.h"
 
 /* 与 ppu.h 的 framebuffer 约定保持一致（此处不 include SDL 头，故重复定义）：
    顶屏 = VRAM 起始 256×192；底屏 = VRAM + 0x18000（见 docs/05-framebuffer.md）。 */
@@ -860,6 +862,226 @@ static void test_fifo_program(nds_t *nds)
              0x7C00u);
 }
 
+/* 9.2：显示控制寄存器（DISPCNT 主/副、BGxCNT、滚动）与调色板 RAM 读写 */
+static void test_disp_regs(nds_t *nds)
+{
+    bus_write32(nds->bus, IO_DISPCNT, 0x00010405u);
+    CHECK_EQ("disp DISPCNT", bus_read32(nds->bus, IO_DISPCNT), 0x00010405u);
+    bus_write16(nds->bus, IO_BGCNT_BASE, 0x1F0Au);
+    CHECK_EQ("disp BG0CNT", bus_read16(nds->bus, IO_BGCNT_BASE), 0x1F0Au);
+    bus_write16(nds->bus, IO_BGCNT_BASE + 2, 0x0010u);
+    CHECK_EQ("disp BG1CNT", bus_read16(nds->bus, IO_BGCNT_BASE + 2), 0x0010u);
+    /* 滚动：BG0HOFS/VOFS */
+    bus_write16(nds->bus, IO_BG_SCROLL_BASE, 0x1234u);
+    bus_write16(nds->bus, IO_BG_SCROLL_BASE + 2, 0x5678u);
+    CHECK_EQ("disp BG0HOFS", bus_read16(nds->bus, IO_BG_SCROLL_BASE), 0x1234u);
+    CHECK_EQ("disp BG0VOFS", bus_read16(nds->bus, IO_BG_SCROLL_BASE + 2), 0x5678u);
+    /* 副引擎 */
+    bus_write32(nds->bus, IO_DISPCNT_SUB, 0x00000003u);
+    bus_write16(nds->bus, IO_BGCNT_SUB_BASE + 4, 0x0101u); /* 副 BG2CNT */
+    CHECK_EQ("disp DISPCNT_SUB", bus_read32(nds->bus, IO_DISPCNT_SUB), 0x00000003u);
+    CHECK_EQ("disp BG2CNT_SUB", bus_read16(nds->bus, IO_BGCNT_SUB_BASE + 4), 0x0101u);
+    /* 调色板 RAM：主 BG 0x05000000，副 BG 0x05000400 */
+    bus_write16(nds->bus, BUS_PALETTE_BASE, 0x7C00u);
+    CHECK_EQ("pal entry 0", bus_read16(nds->bus, BUS_PALETTE_BASE), 0x7C00u);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0x400, 0x03E0u);
+    CHECK_EQ("pal sub entry", bus_read16(nds->bus, BUS_PALETTE_BASE + 0x400), 0x03E0u);
+    /* VRAM 固定窗口：副 BG 0x06200000 应映射到物理 bank C（vram[0x40000]） */
+    bus_write16(nds->bus, BUS_VRAM_SUB_BG_BASE, 0x001Fu);
+    CHECK_EQ("vram sub bg win", bus_read16(nds->bus, BUS_VRAM_SUB_BG_BASE), 0x001Fu);
+    CHECK_EQ("vram sub bg phys", bus_read16(nds->bus, BUS_VRAM_BASE + BUS_VRAM_SUB_BG_PHYS), 0x001Fu);
+}
+
+/* 9.3：直色位图模式渲染（DISPCNT mode 5 + BG2 直色位图） */
+static void test_bitmap_render(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* mode 5 | BG2 开启 | 显示模式 1（正常） */
+    bus_write32(nds->bus, IO_DISPCNT, 5u | DISPCNT_BG2 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+    /* BG2CNT：位图(bit7) + 直色(bit2) + 256×256(bit14)，位图基址块 0 */
+    bus_write16(nds->bus, IO_BGCNT_BASE + 2 * 2, BGCNT_COLORS_256 | BGCNT_DIRECT_COLOR | (1u << 14));
+    /* 位图在 0x06000000：写前两个像素 红/蓝 */
+    bus_write16(nds->bus, BUS_VRAM_BASE, 0x7C00u);
+    bus_write16(nds->bus, BUS_VRAM_BASE + 2, 0x001Fu);
+
+    render_frame(nds->bus, fb_top, fb_bot);
+
+    CHECK_EQ("bitmap px0 red",  fb_top[0], 0xFFF80000u);
+    CHECK_EQ("bitmap px1 blue", fb_top[1], 0xFF0000F8u);
+    CHECK_EQ("bitmap px256 next row", fb_top[256], 0xFF000000u); /* 未写区域=0 → 黑色 */
+}
+
+/* 9.4：Mode 0 tile 图层（4bpp/8bpp + tilemap + 调色板 + 透明背景） */
+static void test_tile_render(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* 调色板：0=绿(背景) 1=红 5=红 */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0, 0x03E0u);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 2, 0x7C00u);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 10, 0x7C00u);
+
+    /* mode 0 + BG0 开 + 显示模式 1 */
+    bus_write32(nds->bus, IO_DISPCNT, DISPCNT_BG0 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+    /* BG0CNT：屏幕基址块 1(=0x800)，字符基址块 0，16 色 */
+    bus_write16(nds->bus, IO_BGCNT_BASE, 0x0100u);
+    /* tile0（4bpp）：只让像素(0,0)=索引1，其余索引0（透明） */
+    bus_write8(nds->bus, BUS_VRAM_BASE, 0x80u);
+
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("tile4 px00 red",      fb_top[0],   0xFFF80000u);
+    CHECK_EQ("tile4 px10 backdrop", fb_top[1],   0xFF00F800u);
+    CHECK_EQ("tile4 row1 backdrop", fb_top[256], 0xFF00F800u);
+
+    /* 切 256 色（bit7=1），tile0(8bpp) 只让像素(0,0)=索引5 */
+    bus_write16(nds->bus, IO_BGCNT_BASE, 0x0180u);
+    bus_write8(nds->bus, BUS_VRAM_BASE, 5u);
+
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("tile8 px00 red",      fb_top[0],   0xFFF80000u);
+    CHECK_EQ("tile8 px10 backdrop", fb_top[1],   0xFF00F800u);
+}
+
+/* 9.5：副引擎（Engine B）对称渲染——DISPCNT_SUB + 副 BGxCNT + 副调色板 + 副 VRAM */
+static void test_engine_b(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* 副引擎直色位图：mode 5 + BG2 + 显示模式 1，位图在 0x06200000（物理 vram[0x40000]） */
+    bus_write32(nds->bus, IO_DISPCNT_SUB, 5u | DISPCNT_BG2 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+    bus_write16(nds->bus, IO_BGCNT_SUB_BASE + 4, BGCNT_COLORS_256 | BGCNT_DIRECT_COLOR | (1u << 14));
+    bus_write16(nds->bus, BUS_VRAM_SUB_BG_BASE, 0x7C00u);
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("engB bmp red", fb_bot[0], 0xFFF80000u);
+
+    /* 副引擎 tile：副调色板 0x05000400（0=红背景, 1=绿） */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0x400, 0x7C00u);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0x402, 0x03E0u);
+    bus_write32(nds->bus, IO_DISPCNT_SUB, DISPCNT_BG0 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+    bus_write16(nds->bus, IO_BGCNT_SUB_BASE, 0x0100u);
+    /* tile0（4bpp）：清空位面1-3，仅位面0 让像素(0,0)=索引1 */
+    bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 0, 0x80u);
+    bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 1, 0x00u);
+    bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 2, 0x00u);
+    bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 3, 0x00u);
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("engB tile green",    fb_bot[0], 0xFF00F800u); /* 索引1 → 绿 */
+    CHECK_EQ("engB tile backdrop", fb_bot[1], 0xFFF80000u); /* 透明 → 红背景 */
+}
+
+/* 9.6：OBJ 最小（一个 sprite：OAM 读取 + 1D tile 映射 + OBJ 调色板） */
+static void test_obj_render(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* 主 BG 调色板[0]=黑（作为背景/透明露出色） */
+    bus_write16(nds->bus, BUS_PALETTE_BASE, 0x0000u);
+    /* 主 OBJ 调色板（0x05000200）：16 色 pal_slot0，索引1=红 */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0x200 + 2, 0x7C00u);
+
+    /* DISPCNT：mode 0（无 BG）+ OBJ 开启 + 显示模式 1 */
+    bus_write32(nds->bus, IO_DISPCNT, DISPCNT_OBJ | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+
+    /* OBJ 图形（0x06400000 主 OBJ 窗口）tile0（4bpp）：像素(0,0)=索引1，其余 0（透明） */
+    bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 0, 0x80u);
+    bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 1, 0x00u);
+    bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 2, 0x00u);
+    bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 3, 0x00u);
+
+    /* OAM 默认全 0 = 一个「8×8 方块在 (0,0)」的可见 sprite（真机行为），
+       先统一把所有条目 bit9 置 1（禁用），再单独配置 entry 0。 */
+    for (int n = 0; n < 128; n++)
+        bus_write16(nds->bus, BUS_OAM_BASE + 8u * n, 0x0200u);
+
+    /* OAM[0]：属性0 Y=10/方形/16色；属性1 X=20/尺寸8×8；属性2 tile0/调色板0 */
+    bus_write16(nds->bus, BUS_OAM_BASE + 0, 0x000Au);
+    bus_write16(nds->bus, BUS_OAM_BASE + 2, 0x0014u);
+    bus_write16(nds->bus, BUS_OAM_BASE + 4, 0x0000u);
+
+    render_frame(nds->bus, fb_top, fb_bot);
+
+    CHECK_EQ("obj px at (20,10) red", fb_top[10 * RENDER_SCREEN_W + 20], 0xFFF80000u);
+    CHECK_EQ("obj px transparent",     fb_top[10 * RENDER_SCREEN_W + 21], 0xFF000000u);
+    CHECK_EQ("obj px outside",         fb_top[0], 0xFF000000u);
+
+    /* 切 256 色 OBJ：a0 bit13=1，OBJ 图形 8bpp 像素(0,0)=索引5，OBJ 调色板[5]=绿 */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0x200 + 10, 0x03E0u);
+    bus_write16(nds->bus, BUS_OAM_BASE + 0, 0x200Au); /* bit13=256色 */
+    bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 0, 5u);
+    bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 1, 0x00u);
+
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("obj 256c px green", fb_top[10 * RENDER_SCREEN_W + 20], 0xFF00F800u);
+}
+
+/* 9.7：自造数据 2D 场景验收（不依赖旧「VRAM=屏幕 framebuffer」约定）。
+   顶屏：8bpp tile + tilemap + 调色板 拼出「红 tile0 + 绿 tile1 + 透明底」，
+   再叠一个 OBJ 蓝色方块；底屏：副引擎 8bpp tile 填纯青。
+   整条链路只经 DISPCNT/BGxCNT/OAM 寄存器，无任何线性 FB 写入。 */
+static void test_2d_scene(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* 调色板：主 0=黑 1=红 2=绿；副 0=黑 1=青；OBJ 1=蓝 */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 2,      0x7C00u);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 4,      0x03E0u);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0x402,  0x03FFu);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0x202,  0x001Fu);
+
+    /* 主 BG 字符块0：tile0(8bpp)=全红(索引1), tile1=全绿(索引2)；tile2 保持全 0=透明 */
+    for (int i = 0; i < 64; i++) bus_write8(nds->bus, BUS_VRAM_BASE + 0u + i, 1u);
+    for (int i = 0; i < 64; i++) bus_write8(nds->bus, BUS_VRAM_BASE + 64u + i, 2u);
+
+    /* 主 tilemap（屏幕块1）：默认全 tile2（透明），再指定 map[0]=tile0、map[1]=tile1 */
+    for (int ty = 0; ty < 32; ty++)
+        for (int tx = 0; tx < 32; tx++)
+            bus_write16(nds->bus, BUS_VRAM_BASE + 0x800u + (uint32_t)(ty * 32 + tx) * 2u, 2u);
+    bus_write16(nds->bus, BUS_VRAM_BASE + 0x800u, 0u);
+    bus_write16(nds->bus, BUS_VRAM_BASE + 0x802u, 1u);
+    bus_write16(nds->bus, IO_BGCNT_BASE,
+                BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT));
+
+    /* OBJ：蓝色 8×8 方块 @ (16,16)，16 色，tile0 全索引1 */
+    for (int r = 0; r < 8; r++) {
+        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 0u, 0xFFu);
+        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 1u, 0x00u);
+        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 2u, 0x00u);
+        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 3u, 0x00u);
+    }
+    for (int n = 0; n < 128; n++)
+        bus_write16(nds->bus, BUS_OAM_BASE + 8u * n, 0x0200u);
+    bus_write16(nds->bus, BUS_OAM_BASE + 0u, 16u);
+    bus_write16(nds->bus, BUS_OAM_BASE + 2u, 16u);
+    bus_write16(nds->bus, BUS_OAM_BASE + 4u, 0u);
+    bus_write32(nds->bus, IO_DISPCNT,
+                DISPCNT_BG0 | DISPCNT_OBJ | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+
+    /* 副引擎：tile0(8bpp)=全青(索引1)，tilemap 全 0 → 纯青底屏 */
+    for (int i = 0; i < 64; i++)
+        bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + i, 1u);
+    for (int ty = 0; ty < 32; ty++)
+        for (int tx = 0; tx < 32; tx++)
+            bus_write16(nds->bus, BUS_VRAM_SUB_BG_BASE + 0x800u + (uint32_t)(ty * 32 + tx) * 2u, 0u);
+    bus_write16(nds->bus, IO_BGCNT_SUB_BASE,
+                BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT));
+    bus_write32(nds->bus, IO_DISPCNT_SUB,
+                DISPCNT_BG0 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+
+    render_frame(nds->bus, fb_top, fb_bot);
+
+    CHECK_EQ("scene top tile0 red",    fb_top[0],              0xFFF80000u);
+    CHECK_EQ("scene top tile1 green",  fb_top[8],              0xFF00F800u);
+    CHECK_EQ("scene top transparent",  fb_top[16],             0xFF000000u); /* map[2]=透明→黑背景 */
+    CHECK_EQ("scene obj blue",         fb_top[16 * 256 + 16],  0xFF0000F8u);
+    CHECK_EQ("scene bot cyan",         fb_bot[0],              0xFF00F8F8u);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -1017,6 +1239,48 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_fifo_program(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 9.2] 显示控制寄存器 + 调色板 RAM\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_disp_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 9.3] 直色位图模式渲染\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bitmap_render(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 9.4] Mode 0 tile 图层渲染\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_tile_render(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 9.5] 副引擎（Engine B）对称渲染\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_engine_b(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 9.6] OBJ 最小（一个 sprite）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_obj_render(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 9.7] 自造数据 2D 场景验收\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_2d_scene(nds);
         nds_destroy(nds);
     }
 

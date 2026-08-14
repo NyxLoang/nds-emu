@@ -76,3 +76,64 @@
   `bot(0,0)=03E0`；程序 100117 步到 `B self`。
 - `tests/test_nds.c` 同步更新并新增断言：竖线末行 `(128,191)`、横线两行 `(0,95)/(0,96)`、
   竖线两列 `(128,96)/(128,97)`、横线右端 `(255,95)`、十字外 `(10,10)/(10,190)` 全过。
+
+## 阶段 9 — 真 2D PPU（弃假 FB，改寄存器驱动）
+
+> 阶段 9 起，PPU 不再把 VRAM 当线性 framebuffer，而是读 DISPCNT/BGxCNT 寄存器，
+> 走 tile+tilemap+调色板 / 直色位图 两条真实 2D 路径。为可测试性拆成两块：
+> `render.h/.c`（纯逻辑，只依赖 bus，无 SDL）+ `ppu.h/.c`（SDL 纹理上传，复用 render）。
+
+### 9.1 — 概念短文
+
+- 新增 `docs/10-bg-tile-palette.md`：图层合成（BG/OBJ）、8×8 tile、tilemap（屏幕位置→tile 号）、
+  调色板查表（索引→RGB555）、位图模式 vs tile 模式、关键寄存器地址（DISPCNT/BGxCNT/调色板 RAM）。
+
+### 9.2 — 显示寄存器 + 调色板/OAM/VRAM 窗口
+
+- 新建 `src/io/disp.h/.c`（io 功能文件）：`disp_t` 持主/副各一套 DISPCNT、4 个 BGxCNT、4 组滚动
+  （HOFS/VOFS）；按字节读写 32 位 DISPCNT 与 16 位 BGxCNT/滚动（小端）。
+- bus 侧新增内存区间：调色板 RAM `0x05000000`（2KB）、OAM `0x07000000`（2KB，主/副各 1KB）、
+  三个 VRAM 固定窗口（副 BG `0x06200000`/主 OBJ `0x06400000`/副 OBJ `0x06600000`，各 128KB，
+  对应 libnds vramDefault 的 bank C/B/D）。
+- 验收：`test_disp_regs`——主副 DISPCNT/BGxCNT/滚动读写、调色板 RAM、VRAM 窗口映射，11 项全过。
+
+### 9.3 — 直色位图模式
+
+- `render_bitmap()`：BG mode 3-5 下，BG2/BG3 若为「扩展位图+直色」（BGxCNT bit7=1 且 bit2=1），
+  把 VRAM 里 256×256 的 16bpp 位图左上 256×192 画到屏；位图基址复用 BGxCNT 屏幕基址字段 bit8-12
+  （单位 16KB，真机 bitmap 语义）。
+- 验收：`test_bitmap_render`——mode 5 写红/蓝两像素，渲染后 RGB888 正确、未写区黑。
+
+### 9.4 — Mode 0 tile 图层
+
+- `tile_pixel()`：取 tile 某像素调色板索引——4bpp 用 4 位面（8 行×4 字节，bit 位序 0=最左像素），
+  8bpp 直接 1 字节 1 索引。
+- `draw_bg()`：逐屏像素经 tilemap 找 tile → 取索引 → 查调色板（16 色按 tilemap 条目 pal_slot、
+  256 色单一调色板）；索引 0=透明（露出已画更低层/背景色）；支持 hflip/vflip。
+- `render_tiled()`：按优先级从低到高画各 BG（同优先级 BG0 最高）；最小实现 screen size=0、暂不支持滚动。
+- 验收：`test_tile_render`——4bpp 像素(0,0)=索引1 显示红、其余透明露出绿背景；切 256 色同理。
+
+### 9.5 — Engine B 对称
+
+- `render_engine(bus, fb, is_sub)` 统一主/副：副引擎用 `IO_DISPCNT_SUB`/`IO_BGCNT_SUB_BASE`、
+  副调色板 `0x05000400`、副 BG 图形窗口 `0x06200000`；字符/屏幕基址仅主引擎有效（副引擎为 0）。
+- 验收：`test_engine_b`——副引擎直色位图 + tile 渲染各验一次。
+
+### 9.6 — OBJ 最小（一个 sprite）
+
+- `render_obj()`：遍历 128 条 OAM（每 8 字节一档，属性 0/1/2 = Y/X/尺寸/tile/调色板），
+  按尺寸表（size×shape）算宽高，1D tile 映射（从左到右、从上到下线性），取 tile 像素查 OBJ
+  调色板（`0x05000200` 主 / `0x05000600` 副）；透明索引 0 不画。最小实现：无旋转/缩放/翻转/半透明，
+  OBJ 一律画在 BG 之上。
+- **踩坑（测试）**：OAM 默认全 0 = 「8×8 方块在 (0,0)」的可见 sprite（真机行为），测试需先对
+  128 条 OAM 统一置 bit9 禁用，再单独配置 entry 0。
+- 验收：`test_obj_render`——16 色 OBJ 在 (20,10) 显示红、透明/屏外像素露背景；切 256 色显示绿。
+
+### 9.7 — 自造数据 2D 场景 + main 演示迁移
+
+- `tests/test_nds.c` 新增 `test_2d_scene`：顶屏 8bpp tile+tilemap+调色板 拼「红 tile0+绿 tile1+
+  透明底」+ 叠一个 OBJ 蓝方块；底屏副引擎 8bpp tile 填纯青。整条链路只经寄存器，无线性 FB 写入。
+- `main.c` 删除旧 `fill_test_pattern`/`selftest_4_cpu_draw`，改 `setup_2d_demo`：顶屏 8bpp 棋盘格
+  （4 色）+ OBJ 白方块，底屏副引擎 8bpp 竖条纹（青/品红）。
+- `ppu.h` 删除旧 framebuffer 常量（`PPU_SCREEN_W/H`、`PPU_VRAM_TOP/BOTTOM_OFFSET`）。
+- 验收：148 项检查 0 失败（ctest 通过）。

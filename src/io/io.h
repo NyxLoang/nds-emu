@@ -7,13 +7,14 @@
 #include "key.h"
 #include "dma.h"
 #include "fifo.h"
+#include "disp.h"
 
 struct bus; /* 前向声明：io 需要 bus 反指，供 DMA 搬运访存 */
 
-/* 寄存器区（0x04000000 起）的完整状态：中断 + 定时器 + 按键 + DMA + IPC FIFO。
+/* 寄存器区（0x04000000 起）的完整状态：中断 + 定时器 + 按键 + DMA + IPC FIFO + 显示。
    按模块结构规则拆功能文件：irq（中断）、timer（定时器）、key（按键）、
-   dma（DMA）、fifo（IPC FIFO）；本文件是对外接口，bus 在 IO 区间调用
-   io_read8/io_write8，FIFO 的 32 位收发经 io_recv32/io_send32。
+   dma（DMA）、fifo（IPC FIFO）、disp（2D 显示控制）；本文件是对外接口，bus 在
+   IO 区间调用 io_read8/io_write8，FIFO 的 32 位收发经 io_recv32/io_send32。
    中断寄存器按 CPU 分流：irq[0]=ARM9、irq[1]=ARM7（同址、按访问者身份选择）。
    对外信号：io_set_vblank、io_set_keyinput、io_advance_timers、io_irq_pending。 */
 typedef struct io {
@@ -22,6 +23,7 @@ typedef struct io {
     keypad_t keypad;                  /* KEYINPUT */
     dma_channel_t dma;                /* DMA（阶段 7：只实现 DMA0 一条通道） */
     ipc_fifo_t fifo;                  /* IPC FIFO（阶段 8：双核通信） */
+    disp_t disp;                      /* 2D 显示控制（阶段 9：DISPCNT/BGxCNT/滚动） */
     struct bus *bus;                  /* bus 反指：DMA 搬运需经 bus 访存 */
 } io_t;
 

@@ -40,6 +40,7 @@ add_library(ndscore STATIC
     src/bus/bus.c
     src/cpu/cpu.c
     src/cpu/exec.c
+    src/cpu/thumb.c
     src/cpu/arm9.c
     src/cpu/arm7.c
     src/bios/bios.c

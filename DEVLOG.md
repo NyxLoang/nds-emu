@@ -132,3 +132,11 @@
 | 2026-08-15 | 12.4 | CPU | CP15 c1 的 V 位联动 `vector_base`（cache/MMU 使能位先存不生效） | [cpu](src/cpu/cpulog.md) |
 | 2026-08-15 | 12.5 | CPU | IRQ 真实响应：取指前查 pending 进 handler、`SUBS pc,lr,#4` 返回 | [cpu](src/cpu/cpulog.md) |
 | 2026-08-15 | 12 完成 | 收尾 | 阶段 12 完成：CP15 + 异常向量 + 中断真实化；282 项检查 0 失败 | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 13.1 | 预习/CPU | 新增 `docs/14-thumb.md`：Thumb 16 位编码 / T 位 / BX-BLX 切换 / PC 约定 | [14](docs/14-thumb.md) · [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 13.2 | CPU | Thumb 译码框架：`thumb.c` + `thumb_step` + `cpu_fetch16` + T 位分发 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 13.3 | CPU | Thumb 数据处理：移位/立即数/16 种 ALU（全更新标志） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 13.4 | CPU | Thumb 访存：字/字节/半字/SP 相对/寄存器偏移/字面量池 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 13.5 | CPU | Thumb 分支 B/BL/BX/BLX/条件分支 + PUSH/POP + STMIA/LDMIA | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 13.6 | CPU | Thumb 杂项：高寄存器 ADD/CMP/MOV、取地址、SWI 进 HLE | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 13.7 | CPU/测试 | Thumb 真码写 VRAM + 调 SWI；336 项检查 0 失败 | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 13 完成 | 收尾 | 阶段 13 完成：Thumb 指令集（16 位译码 + 全指令语义 + T 位切换） | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |

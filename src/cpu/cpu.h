@@ -30,6 +30,9 @@ void cpu_reset(arm_cpu_t *cpu, uint32_t reset_pc);
 /* 从 bus 按 PC 取 32 位指令字（3a.3）。 */
 uint32_t cpu_fetch(const arm_cpu_t *cpu);
 
+/* 从 bus 按 PC 取 16 位 Thumb 指令半字（13.2）。 */
+uint16_t cpu_fetch16(const arm_cpu_t *cpu);
+
 /* 执行一条指令并推进 PC（3a.4 起）。返回 0 表示执行到停机点。 */
 int cpu_step(arm_cpu_t *cpu);
 

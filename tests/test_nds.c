@@ -11,6 +11,7 @@
 #include "bus/bus.h"
 #include "cpu/cpu.h"
 #include "cpu/exec.h"
+#include "cpu/thumb.h"
 #include "io/io.h"
 #include "io/disp.h"
 #include "ppu/render.h"
@@ -70,6 +71,28 @@ static int run_cpu7(nds_t *nds, uint32_t base, const uint32_t *prog,
         cpu_step(nds->cpu7);
     exec_set_trace(1);
     return steps;
+}
+
+/* ---- 阶段 13 Thumb 辅助：把 16 位指令写进内存，置 T 位后跑固定步数 ---- */
+static void thumb_write(nds_t *nds, uint32_t base, const uint16_t *prog, size_t count)
+{
+    for (size_t i = 0; i < count; i++)
+        bus_write16(nds->bus, base + 2 * i, prog[i]);
+}
+
+static void thumb_start(nds_t *nds, uint32_t pc)
+{
+    exec_set_trace(0);
+    thumb_set_trace(0);
+    nds->cpu->cpsr |= CPSR_T;          /* 进入 Thumb 状态 */
+    cpu_reset(nds->cpu, pc);
+}
+
+static void thumb_stop(nds_t *nds)
+{
+    nds->cpu->cpsr &= ~CPSR_T;         /* 复位回 ARM 状态，避免污染后续用例 */
+    thumb_set_trace(1);
+    exec_set_trace(1);
 }
 
 /* 顶屏像素(x,y) 的颜色字（RGB555）。地址 = VRAM 基址 + (y*宽 + x)*2 字节。 */
@@ -1838,6 +1861,273 @@ static void test_irq_response(nds_t *nds)
     CHECK_EQ("irq return I", (cpu->cpsr & CPSR_I) ? 1u : 0u, 0u);
 }
 
+/* ---- 阶段 13.3 数据处理（移位/立即数/ALU/高寄存器） ---- */
+static void test_thumb_dataproc(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    static const uint16_t prog[] = {
+        0x200F, /* MOV r0, #15       → r0=15 */
+        0x210C, /* MOV r1, #12       → r1=12 */
+        0x2206, /* MOV r2, #6        → r2=6 */
+        0x230F, /* MOV r3, #15 */
+        0x400B, /* AND r3, r1        → r3 = 15 & 12 = 12 */
+        0x240F, /* MOV r4, #15 */
+        0x404C, /* EOR r4, r1        → r4 = 15 ^ 12 = 3 */
+        0x2500, /* MOV r5, #0 */
+        0x4305, /* ORR r5, r0        → r5 = 0 | 15 = 15 */
+        0x260F, /* MOV r6, #15 */
+        0x434E, /* MUL r6, r1        → r6 = 15 * 12 = 180 */
+        0x270F, /* MOV r7, #15 */
+        0x4247, /* NEG r7, r0        → r7 = -15 */
+        0x4688, /* MOV r8, r1        → r8 = 12（高寄存器 MOV） */
+        0x4480, /* ADD r8, r0        → r8 = 12 + 15 = 27（高寄存器 ADD） */
+    };
+    thumb_write(nds, base, prog, sizeof prog / sizeof prog[0]);
+    thumb_start(nds, base);
+    for (size_t i = 0; i < sizeof prog / sizeof prog[0]; i++)
+        cpu_step(nds->cpu);
+    thumb_stop(nds);
+
+    CHECK_EQ("thumb mov r0", nds->cpu->r[0], 15);
+    CHECK_EQ("thumb mov r1", nds->cpu->r[1], 12);
+    CHECK_EQ("thumb mov r2", nds->cpu->r[2], 6);
+    CHECK_EQ("thumb AND", nds->cpu->r[3], 12);
+    CHECK_EQ("thumb EOR", nds->cpu->r[4], 3);
+    CHECK_EQ("thumb ORR", nds->cpu->r[5], 15);
+    CHECK_EQ("thumb MUL", nds->cpu->r[6], 180);
+    CHECK_EQ("thumb NEG", nds->cpu->r[7], 0xFFFFFFF1u);
+    CHECK_EQ("thumb hi-ADD", nds->cpu->r[8], 27);
+    CHECK_EQ("thumb PC", nds->cpu->r[15], base + 2 * 15);
+}
+
+/* ---- 阶段 13.4 访存（字/字节/半字/SP 相对/寄存器偏移/字面量池） ---- */
+static void test_thumb_memory(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t data = base + 0x100;
+    arm_cpu_t *cpu = nds->cpu;
+
+    /* STR 字 */
+    bus_write32(nds->bus, data, 0);
+    cpu->r[0] = data; cpu->r[1] = 0x12345678u;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x6001); cpu_step(cpu);
+    CHECK_EQ("thumb STR word", bus_read32(nds->bus, data), 0x12345678u);
+    thumb_stop(nds);
+
+    /* LDR 字（#imm5*4 = 4） */
+    bus_write32(nds->bus, data + 4, 0xDEADBEEFu);
+    cpu->r[0] = data; cpu->r[2] = 0;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x6842); cpu_step(cpu);
+    CHECK_EQ("thumb LDR word", cpu->r[2], 0xDEADBEEFu);
+    thumb_stop(nds);
+
+    /* STRB 字节（#imm5 = 1） */
+    bus_write8(nds->bus, data + 1, 0);
+    cpu->r[0] = data; cpu->r[1] = 0xAB;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x7041); cpu_step(cpu);
+    CHECK_EQ("thumb STRB", bus_read8(nds->bus, data + 1), 0xAB);
+    thumb_stop(nds);
+
+    /* LDRB 字节（无符号） */
+    bus_write8(nds->bus, data + 1, 0xCD);
+    cpu->r[0] = data; cpu->r[2] = 0;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x7842); cpu_step(cpu);
+    CHECK_EQ("thumb LDRB", cpu->r[2], 0xCD);
+    thumb_stop(nds);
+
+    /* STRH 半字（#imm5*2 = 2） */
+    bus_write16(nds->bus, data + 2, 0);
+    cpu->r[0] = data; cpu->r[1] = 0xBEEF;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x8041); cpu_step(cpu);
+    CHECK_EQ("thumb STRH", bus_read16(nds->bus, data + 2), 0xBEEF);
+    thumb_stop(nds);
+
+    /* LDRH 半字 */
+    bus_write16(nds->bus, data + 2, 0xCAFE);
+    cpu->r[0] = data; cpu->r[2] = 0;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x8842); cpu_step(cpu);
+    CHECK_EQ("thumb LDRH", cpu->r[2], 0xCAFE);
+    thumb_stop(nds);
+
+    /* STR 字（SP 相对，#imm8*4 = 4） */
+    bus_write32(nds->bus, data + 4, 0);
+    cpu->r[13] = data; cpu->r[1] = 0x13579BDFu;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x9101); cpu_step(cpu);
+    CHECK_EQ("thumb STR SP-rel", bus_read32(nds->bus, data + 4), 0x13579BDFu);
+    thumb_stop(nds);
+
+    /* LDR 字（SP 相对） */
+    bus_write32(nds->bus, data + 4, 0x02468ACEu);
+    cpu->r[13] = data; cpu->r[2] = 0;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x9A01); cpu_step(cpu);
+    CHECK_EQ("thumb LDR SP-rel", cpu->r[2], 0x02468ACEu);
+    thumb_stop(nds);
+
+    /* STR 字（寄存器偏移 r0+r2） */
+    bus_write32(nds->bus, data + 8, 0);
+    cpu->r[0] = data; cpu->r[1] = 0x11223344u; cpu->r[2] = 8;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x5081); cpu_step(cpu);
+    CHECK_EQ("thumb STR reg-off", bus_read32(nds->bus, data + 8), 0x11223344u);
+    thumb_stop(nds);
+
+    /* LDR 字（寄存器偏移） */
+    bus_write32(nds->bus, data + 8, 0x55667788u);
+    cpu->r[0] = data; cpu->r[2] = 8; cpu->r[3] = 0;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x5883); cpu_step(cpu);
+    CHECK_EQ("thumb LDR reg-off", cpu->r[3], 0x55667788u);
+    thumb_stop(nds);
+
+    /* LDR 字面量池：[PC,#0] 读 (pc&~3)+0 = base+4 */
+    bus_write32(nds->bus, base + 4, 0x01020304u);
+    cpu->r[4] = 0;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x4C00); cpu_step(cpu);
+    CHECK_EQ("thumb LDR literal", cpu->r[4], 0x01020304u);
+    thumb_stop(nds);
+}
+
+/* ---- 阶段 13.5 分支/切换/软中断 + PUSH/POP + STMIA/LDMIA ---- */
+static void test_thumb_branch(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    arm_cpu_t *cpu = nds->cpu;
+
+    /* BX r0（偶地址）→ 切 ARM（T=0） */
+    cpu->r[0] = base + 0x20;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x4700); cpu_step(cpu);
+    CHECK_EQ("thumb BX even T=0", (cpu->cpsr & CPSR_T) ? 1u : 0u, 0u);
+    CHECK_EQ("thumb BX even PC", cpu->r[15], base + 0x20);
+    thumb_stop(nds);
+
+    /* BX r1（奇地址）→ 保持 Thumb（T=1），PC = 目标 & ~1 */
+    cpu->r[1] = (base + 0x20) | 1u;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x4701); cpu_step(cpu);
+    CHECK_EQ("thumb BX odd T=1", (cpu->cpsr & CPSR_T) ? 1u : 0u, 1u);
+    CHECK_EQ("thumb BX odd PC", cpu->r[15], base + 0x20);
+    thumb_stop(nds);
+
+    /* 条件分支 BEQ 命中：Z=1 → PC=base+8 */
+    thumb_start(nds, base);
+    cpu->cpsr |= CPSR_Z;
+    bus_write16(nds->bus, base, 0xD002); cpu_step(cpu);
+    CHECK_EQ("thumb BEQ taken", cpu->r[15], base + 8);
+    thumb_stop(nds);
+
+    /* 条件分支 BEQ 未命中：Z=0 → PC=base+2 */
+    thumb_start(nds, base);
+    cpu->cpsr &= ~CPSR_Z;
+    bus_write16(nds->bus, base, 0xD002); cpu_step(cpu);
+    CHECK_EQ("thumb BEQ not-taken", cpu->r[15], base + 2);
+    thumb_stop(nds);
+
+    /* 无条件分支 B +8：0xE004 → PC = base+4+8 = base+0x0C */
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0xE004); cpu_step(cpu);
+    CHECK_EQ("thumb B", cpu->r[15], base + 0x0C);
+    thumb_stop(nds);
+
+    /* BL：第一半字 0xF000（off=0 → LR=base+4），第二半字 0xF80E（off=14 → PC=base+0x20） */
+    static const uint16_t bl[] = { 0xF000, 0xF80E };
+    thumb_write(nds, base, bl, 2);
+    thumb_start(nds, base);
+    cpu_step(cpu); cpu_step(cpu);
+    CHECK_EQ("thumb BL PC", cpu->r[15], base + 0x20);
+    CHECK_EQ("thumb BL LR", cpu->r[14], (base + 6) | 1u);
+    CHECK_EQ("thumb BL T", (cpu->cpsr & CPSR_T) ? 1u : 0u, 1u);
+    thumb_stop(nds);
+
+    /* BLX：第一半字 0xF000，第二半字 0xE80E → PC=(LR+28)&~1=base+0x20，切 ARM */
+    static const uint16_t blx[] = { 0xF000, 0xE80E };
+    thumb_write(nds, base, blx, 2);
+    thumb_start(nds, base);
+    cpu_step(cpu); cpu_step(cpu);
+    CHECK_EQ("thumb BLX PC", cpu->r[15], base + 0x20);
+    CHECK_EQ("thumb BLX LR", cpu->r[14], (base + 6) | 1u);
+    CHECK_EQ("thumb BLX T", (cpu->cpsr & CPSR_T) ? 1u : 0u, 0u);
+    thumb_stop(nds);
+
+    /* SWI #0x09 Div：r0=20, r1=6 → r0=3, r1=2, r3=3 */
+    cpu->r[0] = 20; cpu->r[1] = 6;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0xDF09); cpu_step(cpu);
+    CHECK_EQ("thumb SWI div quot", cpu->r[0], 3);
+    CHECK_EQ("thumb SWI div rem", cpu->r[1], 2);
+    CHECK_EQ("thumb SWI div abs", cpu->r[3], 3);
+    thumb_stop(nds);
+}
+
+/* ---- 阶段 13.5 PUSH/POP 与 STMIA/LDMIA ---- */
+static void test_thumb_stack(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    arm_cpu_t *cpu = nds->cpu;
+
+    /* PUSH {r0-r3, lr}：STMDB sp!（先减后存） */
+    cpu->r[13] = base + 0x200;
+    cpu->r[0] = 1; cpu->r[1] = 2; cpu->r[2] = 3; cpu->r[3] = 4; cpu->r[14] = 5;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0xB50F); cpu_step(cpu);
+    CHECK_EQ("thumb PUSH sp", cpu->r[13], base + 0x200 - 20);
+    CHECK_EQ("thumb PUSH r0", bus_read32(nds->bus, base + 0x200 - 20), 1);
+    CHECK_EQ("thumb PUSH r3", bus_read32(nds->bus, base + 0x200 - 8), 4);
+    CHECK_EQ("thumb PUSH lr", bus_read32(nds->bus, base + 0x200 - 4), 5);
+    thumb_stop(nds);
+
+    /* POP {r0-r3}：LDMIA sp!（先读后加） */
+    bus_write32(nds->bus, base + 0x200 + 0, 0xAAu);
+    bus_write32(nds->bus, base + 0x200 + 4, 0xBBu);
+    bus_write32(nds->bus, base + 0x200 + 8, 0xCCu);
+    bus_write32(nds->bus, base + 0x200 + 12, 0xDDu);
+    cpu->r[13] = base + 0x200;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0xBC0F); cpu_step(cpu);
+    CHECK_EQ("thumb POP r0", cpu->r[0], 0xAAu);
+    CHECK_EQ("thumb POP r3", cpu->r[3], 0xDDu);
+    CHECK_EQ("thumb POP sp", cpu->r[13], base + 0x200 + 16);
+    thumb_stop(nds);
+
+    /* STMIA r0!, {r1,r2} */
+    cpu->r[0] = base + 0x300; cpu->r[1] = 0x1111; cpu->r[2] = 0x2222;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0xC006); cpu_step(cpu);
+    CHECK_EQ("thumb STMIA [0]", bus_read32(nds->bus, base + 0x300), 0x1111);
+    CHECK_EQ("thumb STMIA [1]", bus_read32(nds->bus, base + 0x304), 0x2222);
+    CHECK_EQ("thumb STMIA wb", cpu->r[0], base + 0x308);
+    thumb_stop(nds);
+
+    /* LDMIA r0!, {r1,r2} */
+    bus_write32(nds->bus, base + 0x300, 0x3333);
+    bus_write32(nds->bus, base + 0x304, 0x4444);
+    cpu->r[0] = base + 0x300;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0xC806); cpu_step(cpu);
+    CHECK_EQ("thumb LDMIA r1", cpu->r[1], 0x3333);
+    CHECK_EQ("thumb LDMIA r2", cpu->r[2], 0x4444);
+    CHECK_EQ("thumb LDMIA wb", cpu->r[0], base + 0x308);
+    thumb_stop(nds);
+}
+
+/* ---- 阶段 13.7 综合：Thumb 真码写 VRAM + 调 SWI ---- */
+static void test_thumb_vram(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    static const uint16_t prog[] = {
+        0x4804, /* LDR r0, [PC, #16] → r0 = VRAM 基址（字面量在 base+0x14） */
+        0x211F, /* MOV r1, #0x1F（红） */
+        0x8001, /* STRH r1, [r0, #0] → VRAM[0] = 0x001F */
+        0x2214, /* MOV r2, #20 */
+        0x2306, /* MOV r3, #6 */
+        0x4610, /* MOV r0, r2 → r0=20 */
+        0x4619, /* MOV r1, r3 → r1=6 */
+        0xDF09, /* SWI #0x09 Div → r0=3, r1=2, r3=3 */
+        0xE7FE, /* B .（保活，测试只跑到它之前） */
+    };
+    bus_write32(nds->bus, base + 0x14, 0x06000000u); /* 字面量：VRAM 基址 */
+    thumb_write(nds, base, prog, sizeof prog / sizeof prog[0]);
+    thumb_start(nds, base);
+    for (int i = 0; i < 8; i++)   /* 执行前 8 条，B . 之前停下 */
+        cpu_step(nds->cpu);
+    thumb_stop(nds);
+
+    CHECK_EQ("thumb vram px", bus_read16(nds->bus, BUS_VRAM_BASE), 0x001Fu);
+    CHECK_EQ("thumb swi quot", nds->cpu->r[0], 3);
+    CHECK_EQ("thumb swi rem", nds->cpu->r[1], 2);
+    CHECK_EQ("thumb swi abs", nds->cpu->r[3], 3);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -2171,6 +2461,41 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_irq_response(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 13.3] Thumb 数据处理（移位/立即数/ALU/高寄存器）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_thumb_dataproc(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 13.4] Thumb 访存（字/字节/半字/SP 相对/寄存器偏移/字面量池）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_thumb_memory(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 13.5] Thumb 分支/切换/SWI\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_thumb_branch(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 13.5] Thumb PUSH/POP + STMIA/LDMIA\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_thumb_stack(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 13.7] Thumb 真码写 VRAM + 调 SWI\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_thumb_vram(nds);
         nds_destroy(nds);
     }
 

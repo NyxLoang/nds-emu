@@ -208,3 +208,50 @@
   被打断指令地址经 LR 留给 handler；handler `SUBS pc, lr, #4` 返回并恢复 CPSR。
 - 阶段 12 完成：282 项检查 0 失败。
 
+## 13.1 — 短文：Thumb 16 位编码 / T 位 / BX-BLX
+
+- 新增 `docs/14-thumb.md`：为什么游戏主体是 Thumb（省 ROM）、CPSR.T 位、取指差异（16 位 vs 32 位）、
+  Thumb 的 PC 约定（读 PC = 当前指令地址 + 4，PC 相对寻址需字对齐 `(pc&~3)`）、
+  按高 5 位分的 18 组指令、BX/BLX 与 T 位联动。
+- 新增 `thumb.h`：声明 `thumb_step`（16 位指令执行入口）与 `thumb_set_trace`。
+
+## 13.2 — Thumb 译码框架
+
+- 新增 `thumb.c`：`thumb_step(cpu, insn16)` 按高 5/6 位分派 18 组指令。
+- `cpu_step` 按 `cpsr & CPSR_T` 分发：T=1 走 `cpu_fetch16`（`bus_read16`）+ `thumb_step`，T=0 走原 ARM 路径。
+- `cond_ok` 从 exec.c 的 static 提升为导出（`exec.h` 声明），供 Thumb 条件分支复用。
+- PC 约定：`thumb_step` 内令 `pc = r[15] + 4`、`pc_word = pc & ~3`，所有 PC 相对寻址/分支基于此。
+
+## 13.3 — Thumb 数据处理
+
+- 格式 1/2（移位立即数、ADD/SUB 寄存器或 #imm3）、格式 3（MOV/CMP/ADD/SUB #imm8）、
+  格式 4（16 种 ALU：AND/EOR/LSL/LSR/ASR/ADC/SBC/ROR/TST/NEG/CMP/CMN/ORR/MUL/BIC/MVN，全更新标志）。
+- 移位带进位（LSL#0 保持 C、LSR#0=#32、ASR#0=#32、ROR#0 无操作）。
+
+## 13.4 — Thumb 访存
+
+- 格式 6（LDR 字面量池 [PC,#imm8*4]）、格式 7（寄存器偏移 STR/LDR/STRB/LDRB/STRH/LDRH/LDSB/LDSH）、
+  格式 8（立即偏移字/字节 #imm5*4/#imm5）、格式 9（半字 #imm5*2）、格式 10（SP 相对 #imm8*4）。
+
+## 13.5 — Thumb 分支 + 块操作
+
+- 格式 5 的 BX/BLX（T=Rm[0]，PC=Rm&~1，BLX 先 lr=pc|1）；格式 15 条件分支（11011111=SWI）；
+  格式 17 无条件 B（imm11）；格式 18 BL/BLX（两半字拼 22 位，第一半字 LR=pc+SE(off11)<<12，
+  第二半字 PC=LR+(off11<<1)，LR=pc|1，BLX 再清 T）。
+- 格式 13 PUSH/POP（STMDB sp!/LDMIA sp!，含 LR/PC 位）、格式 14 STMIA/LDMIA（写回）。
+
+## 13.6 — Thumb 杂项 + SWI 进 HLE
+
+- 格式 5 高寄存器 ADD/CMP/MOV（Rd=bit7:bits2-0，Rm=bit6:bits5-3，可含 r8-r15）。
+- 格式 11 ADD Rd, PC/SP（取地址）、格式 12 ADD/SUB SP, #imm7*4。
+- SWI：`fn = imm8` 直接 `bios_dispatch(fn)`（与 ARM 的 `swi_num>>16` 不同），已知号处理、未知号落 SWI 异常。
+- **踩坑**：① BL 第一半字偏移应 `SE(off11)<<12`，即 `((int32_t)(x<<21))>>9`（初写 >>20 变成 <<1）；
+  ② BX 的 Rm 是 `bit6:bits2-0`（bits5-3 恒 0），初版误用 `bits5-3` 作低位，与 ADD/CMP/MOV 的 Rs 布局混了。
+
+## 13.7 — 综合：Thumb 真码写 VRAM + 调 SWI
+
+- 真码序列：LDR 字面量取 VRAM 基址 → MOV #0x1F → STRH 写 VRAM[0] → MOV 准备被除数/除数 →
+  SWI #0x09 Div → B . 保活；验证 VRAM 像素 0x001F + Div 商/余数/|商|。
+- 阶段 13 完成：336 项检查 0 失败。
+
+

@@ -52,4 +52,7 @@ int exec_spsr_index(unsigned mode);
    临时关闭，避免每条指令 printf 刷屏并拖慢模拟。 */
 void exec_set_trace(int on);
 
+/* 条件码判断：按 CPSR 标志判断 cond(bit3-0) 是否成立（Thumb 条件分支共用）。 */
+int cond_ok(const arm_cpu_t *cpu, unsigned cond);
+
 #endif /* NDS_EMU_CPU_EXEC_H */

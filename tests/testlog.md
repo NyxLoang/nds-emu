@@ -253,3 +253,27 @@
   的跳转目标被 +4 覆盖；修复后异常返回正确。
 - 阶段 12 收尾全量 **282 项检查 0 失败**。
 
+## 13.3 — 用例：Thumb 数据处理
+
+- `test_thumb_dataproc`：15 条 16 位指令（MOV #imm8、AND/EOR/ORR/MUL/NEG、高寄存器 MOV/ADD）一条条手编，
+  断言各寄存器结果与 PC 推进 2×N。新增 `thumb_write/thumb_start/thumb_stop` 辅助（写 16 位程序、置 T 位、复位）。
+
+## 13.4 — 用例：Thumb 访存
+
+- `test_thumb_memory`：直接预置 `r0=基址` 单步验证 STR/LDR 字、STRB/LDRB 字节、STRH/LDRH 半字、
+  SP 相对、寄存器偏移、LDR 字面量池（[PC,#0] 读 base+4 处 32 位常量）。
+
+## 13.5 — 用例：Thumb 分支/切换/SWI + 块操作
+
+- `test_thumb_branch`：BX 偶/奇地址切换 T 位；BEQ 命中/未命中；B 无条件；BL（PC/LR/T）；BLX（切 ARM）；
+  SWI #0x09 Div。
+- `test_thumb_stack`：PUSH {r0-r3,lr}（STMDB sp!）、POP {r0-r3}（LDMIA sp!）、STMIA/LDMIA 写回。
+
+## 13.7 — 用例：Thumb 真码写 VRAM + 调 SWI
+
+- `test_thumb_vram`：LDR 字面量取 VRAM 基址 → MOV #0x1F → STRH 写 VRAM[0] → MOV 准备被除数/除数 →
+  SWI Div → B . 保活；断言 VRAM 像素 0x001F 与 Div 结果。
+- **踩坑（测试）**：① `BX r1` 误编 `0x4708`（Rm 落在 bits5-3 被忽略，实为 BX r0），改 `0x4701`；
+  ② `MOV r1,r3` 误编 `0x4631`（Rs=6 而非 3），除数为 0 触发 bios_div 的除零防御分支，改 `0x4619`。
+- 阶段 13 收尾全量 **336 项检查 0 失败**。
+

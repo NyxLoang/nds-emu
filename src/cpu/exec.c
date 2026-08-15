@@ -17,7 +17,7 @@ void exec_set_trace(int on)
 
 /* 3b.1 条件码判断：按 CPSR 标志判断条件 cond(bit31-28) 是否成立。
    15 种条件全支持，供条件执行使用。 */
-static int cond_ok(const arm_cpu_t *cpu, unsigned cond)
+int cond_ok(const arm_cpu_t *cpu, unsigned cond)
 {
     const uint32_t c = cpu->cpsr;
     const unsigned n = (c >> 31) & 1u, z = (c >> 30) & 1u,

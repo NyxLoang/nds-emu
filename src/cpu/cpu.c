@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include "cpu.h"
 #include "exec.h"
+#include "thumb.h"
 #include "bus/bus.h"
 #include "io/io.h"
 
@@ -37,6 +38,12 @@ uint32_t cpu_fetch(const arm_cpu_t *cpu)
     return bus_read32(cpu->nds->bus, cpu->r[15]);
 }
 
+/* 13.2 Thumb 取指：按 PC 从总线读 16 位半字指令。 */
+uint16_t cpu_fetch16(const arm_cpu_t *cpu)
+{
+    return bus_read16(cpu->nds->bus, cpu->r[15]);
+}
+
 /* 单步执行一条指令：
    框架只负责「取指 + 指令计数」，指令语义全部委托给 exec_step（见 exec.c）。
    返回 0 表示停机（本阶段总是返回 1，停机由死循环达成）。 */
@@ -53,6 +60,12 @@ int cpu_step(arm_cpu_t *cpu)
         cpu->cycles++;
         arm_exception(cpu, EXC_IRQ_OFF, ARM_MODE_IRQ, 4);
         return 1;
+    }
+    /* 13.2：按 CPSR.T 位分发——Thumb 取 16 位半字，ARM 取 32 位字。 */
+    if (cpu->cpsr & CPSR_T) {
+        uint16_t insn16 = cpu_fetch16(cpu);
+        cpu->cycles++;
+        return thumb_step(cpu, insn16);
     }
     uint32_t insn = cpu_fetch(cpu);
     cpu->cycles++;

@@ -106,3 +106,15 @@
 | 2026-08-14 | 9.6 | 显示 | OBJ 最小：OAM 读取 + 1D tile 映射 + OBJ 调色板，一个 8×8 sprite（16/256 色） | [ppu](src/ppu/ppulog.md) |
 | 2026-08-14 | 9.7 | 显示/测试 | 自造数据 2D 场景验收 + main 演示迁移（弃假 FB，改 DISPCNT/BGxCNT/OAM 驱动）；148 项检查 0 失败 | [ppu](src/ppu/ppulog.md) · [tests](tests/testlog.md) · [main](src/mainlog.md) |
 | 2026-08-14 | 9 完成 | 收尾 | 阶段 9 完成：真 2D PPU（DISPCNT + BG tile + OBJ，主副引擎对称） | [ppu](src/ppu/ppulog.md) |
+| 2026-08-15 | 10.1 | 预习/CPU | 新增 `docs/11-arm-instructions-full.md`：真码为何需要移位/MRS/MSR/LDM/STM/乘法/半字访存/SWI | [11](docs/11-arm-instructions-full.md) |
+| 2026-08-15 | 10.2 | CPU | 移位操作数 LSL/LSR/ASR/ROR（立即 + 寄存器移位）+ 进位输出 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 10.3 | CPU | 更多数据处理 MVN/BIC/ADC/SBC/RSB/RSC/TST/TEQ/CMN | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 10.4 | CPU | MRS/MSR 读写 CPSR/SPSR（字段掩码 + 模式位保护）；cpu.h 增 spsr/swi_num/cp15[16] | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 10.5 | CPU | LDM/STM（PUSH/POP 别名，IA/IB/DA/DB + 写回） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 10.6 | CPU | 乘法 MUL/MLA + 长乘 UMULL/UMLAL/SMULL/SMLAL | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 10.7 | CPU | 字节/半字访存 LDRB/STRB/LDRH/STRH/LDRSB/LDRSH + 前后变址/寄存器偏移 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 10.8 | CPU | SWI 记录软件中断号（暂不跳异常，阶段 11 BIOS HLE 拦截） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 10.9 | CPU | SWP/SWPB 寄存器与内存交换 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 10.10 | CPU | MRC/MCR 协处理器访问（CP15 桩，按 CRn 索引） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 10.11 | CPU/测试 | 综合真码（PUSH/POP + SWI + MUL + STRH 循环搬 VRAM）；204 项检查 0 失败 | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 10 完成 | 收尾 | 阶段 10 完成：ARM 指令集补全 + SWI（移位/MRS/MSR/LDM/STM/乘法/半字访存/SWI/SWP/MRC/MCR） | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |

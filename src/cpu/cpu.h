@@ -10,7 +10,10 @@ typedef struct arm_cpu {
     nds_t *nds;      /* 所属机器：取指/访存都通过它的 bus */
     int is_arm7;     /* 0=ARM9, 1=ARM7（中断/FIFO 等按访问者身份分流） */
     uint32_t r[16];  /* 通用寄存器 r0-r15；r15 即 PC（程序计数器） */
-    uint32_t cpsr;   /* 当前程序状态寄存器（阶段 3b 条件码再用） */
+    uint32_t cpsr;   /* 当前程序状态寄存器（条件码 + 中断/模式位） */
+    uint32_t spsr;   /* 备份程序状态寄存器（阶段 10.4 MRS/MSR 用；阶段 12 扩为 spsr[5]） */
+    uint32_t swi_num;/* 最近一次 SWI 的 24 位编号（阶段 10.8 记录，阶段 11 BIOS HLE 用） */
+    uint32_t cp15[16]; /* CP15 协处理器寄存器桩（阶段 10.10 MRC/MCR，按 CRn 索引） */
     uint64_t cycles; /* 已执行指令数（供主循环计数/验证） */
     int deadloop_reported; /* 死循环识别已打印过（避免每步刷屏） */
 } arm_cpu_t;

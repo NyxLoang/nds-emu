@@ -48,24 +48,9 @@ static void set_nz(uint32_t result, arm_cpu_t *cpu)
     if (result == 0)          cpu->cpsr |= CPSR_Z; else cpu->cpsr &= ~CPSR_Z;
 }
 
-/* 加法进位/溢出：
-   C = 无符号最高位进位，等价于 result < a（a+b 溢出回绕）。
-   V = 有符号溢出：a、b 同号而 result 异号（同号相加越界）。 */
-static void set_carry_add(uint32_t a, uint32_t b, uint32_t result, arm_cpu_t *cpu)
+static void set_c(uint32_t v, arm_cpu_t *cpu)
 {
-    if (result < a) cpu->cpsr |= CPSR_C; else cpu->cpsr &= ~CPSR_C;
-    if (((a ^ result) & (b ^ result) & 0x80000000u) != 0)
-        cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V;
-}
-
-/* 减法进位/溢出：
-   C = 无借位，即 a >= b。
-   V = 有符号溢出：a、b 异号 且 a、result 异号（小减大越过符号界）。 */
-static void set_carry_sub(uint32_t a, uint32_t b, uint32_t result, arm_cpu_t *cpu)
-{
-    if (a >= b) cpu->cpsr |= CPSR_C; else cpu->cpsr &= ~CPSR_C;
-    if (((a ^ b) & (a ^ result) & 0x80000000u) != 0)
-        cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V;
+    if (v) cpu->cpsr |= CPSR_C; else cpu->cpsr &= ~CPSR_C;
 }
 
 /* 3b.2 立即数旋转：ARM 立即数 = imm8 循环右移 (rot4*2) 位。
@@ -79,123 +64,349 @@ static uint32_t arm_rotate(uint32_t imm8, unsigned rot4)
     return (imm8 >> rot) | (imm8 << (32 - rot));
 }
 
-/* 数据运算 operand2 解码：
-   I=1（bit25）→ 立即数（imm8 旋转）；I=0 → 寄存器 Rm（本阶段忽略寄存器移位）。 */
-static uint32_t decode_op2(const arm_cpu_t *cpu, uint32_t insn)
+/* ---- 10.2 移位运算：type 00=LSL 01=LSR 10=ASR 11=ROR ----
+   处理 amount > 0 的通用情形（amount==0 的 LSR#32/ASR#32/RRX 由调用方特判）。
+   carry_in 是旧 C 标志（ROR by 32 时保持进位）。*carry_out 输出 shifter 进位。 */
+static uint32_t shift_apply(uint32_t val, unsigned type, uint32_t amount,
+                            uint32_t carry_in, uint32_t *carry_out)
 {
-    if (insn & (1u << 25)) {
-        uint32_t imm8 = insn & 0xFFu;
-        unsigned rot4 = (insn >> 8) & 0xFu;
-        return arm_rotate(imm8, rot4);
+    switch (type) {
+    case 0: /* LSL */
+        if (amount >= 32) { *carry_out = (amount == 32) ? (val & 1u) : 0u; return 0; }
+        *carry_out = (val >> (32 - amount)) & 1u;
+        return val << amount;
+    case 1: /* LSR */
+        if (amount >= 32) { *carry_out = (amount == 32) ? ((val >> 31) & 1u) : 0u; return 0; }
+        *carry_out = (val >> (amount - 1)) & 1u;
+        return val >> amount;
+    case 2: /* ASR（算术右移，高位填符号位） */
+        if (amount >= 32) {
+            *carry_out = (val >> 31) & 1u;
+            return (val & 0x80000000u) ? 0xFFFFFFFFu : 0u;
+        }
+        *carry_out = (val >> (amount - 1)) & 1u;
+        return (uint32_t)((int32_t)val >> amount);
+    case 3: /* ROR */
+    default: {
+        uint32_t a = amount & 31u;
+        if (a == 0) { *carry_out = carry_in; return val; } /* ROR by 32 = 无移位 */
+        *carry_out = (val >> (a - 1)) & 1u;
+        return (val >> a) | (val << (32 - a));
     }
-    return cpu->r[insn & 0xFu];
+    }
 }
 
-/* 3b.2/3b.3/3b.4 数据运算指令（MOV/ADD/SUB/CMP）。
+/* operand2 解码：I=1 立即数（imm8 ROR rot4*2）；I=0 寄存器 + 可选移位。
+   返回操作数值，*carry_out 输出 shifter 进位（供 S=1 时更新 C）。 */
+static uint32_t decode_op2(const arm_cpu_t *cpu, uint32_t insn, uint32_t *carry_out)
+{
+    uint32_t c = (cpu->cpsr & CPSR_C) ? 1u : 0u;
+    if (insn & (1u << 25)) { /* 立即数 */
+        uint32_t imm8 = insn & 0xFFu;
+        unsigned rot4 = (insn >> 8) & 0xFu;
+        if (rot4 == 0) { *carry_out = c; return imm8; }
+        unsigned rot = rot4 * 2;
+        *carry_out = (imm8 >> (rot - 1)) & 1u;
+        return arm_rotate(imm8, rot4);
+    }
+    uint32_t rm = cpu->r[insn & 0xFu];
+    unsigned type = (insn >> 5) & 3u;
+    if (insn & (1u << 4)) { /* bit4=1：寄存器移位（Rs 低字节为移位量） */
+        unsigned rs = (insn >> 8) & 0xFu;
+        uint32_t amount = cpu->r[rs] & 0xFFu;
+        if (amount == 0) { *carry_out = c; return rm; }
+        return shift_apply(rm, type, amount, c, carry_out);
+    }
+    /* bit4=0：立即数移位（移位量在 bit11-7） */
+    unsigned amount = (insn >> 7) & 0x1Fu;
+    if (amount == 0) {
+        switch (type) {
+        case 0: *carry_out = c; return rm;                             /* LSL #0 */
+        case 1: *carry_out = (rm >> 31) & 1u; return 0;                /* LSR #0=#32 */
+        case 2: *carry_out = (rm >> 31) & 1u;
+                return (rm & 0x80000000u) ? 0xFFFFFFFFu : 0u;          /* ASR #0=#32 */
+        case 3: *carry_out = rm & 1u; return (c << 31) | (rm >> 1);    /* ROR #0=RRX */
+        }
+    }
+    return shift_apply(rm, type, amount, c, carry_out);
+}
+
+/* ---- 10.3 数据运算指令（16 种 opcode 全实现） ----
    opcode 取自 bit24-21；S 位(bit20)决定是否更新标志。
-   CMP 与 SUB 算法相同但只写标志不写寄存器。 */
-static void exec_dataop(arm_cpu_t *cpu, uint32_t insn, uint32_t op2)
+   逻辑运算（AND/EOR/ORR/BIC/MOV/MVN/TST/TEQ）S=1 时 C 来自 shifter 进位；
+   算术运算（ADD/ADC/SUB/SBC/RSB/RSC/CMP/CMN）C/V 来自加减进位/溢出。 */
+static void exec_dataop(arm_cpu_t *cpu, uint32_t insn, uint32_t op2, uint32_t carry)
 {
     unsigned opcode = (insn >> 21) & 0xFu;
     unsigned s = (insn >> 20) & 1u;
     unsigned rn = (insn >> 16) & 0xFu;
     unsigned rd = (insn >> 12) & 0xFu;
-    uint32_t rn_val = cpu->r[rn];
+    uint32_t a = cpu->r[rn];
+    uint32_t result;
+    uint32_t c_in = (cpu->cpsr & CPSR_C) ? 1u : 0u;
 
     switch (opcode) {
-    case 0x0: /* AND：按位与 */
-    {
-        uint32_t result = rn_val & op2;
-        if (s) set_nz(result, cpu);
-        cpu->r[rd] = result;
-        break;
-    }
-    case 0x1: /* EOR：按位异或 */
-    {
-        uint32_t result = rn_val ^ op2;
-        if (s) set_nz(result, cpu);
-        cpu->r[rd] = result;
-        break;
-    }
-    case 0x2: /* SUB */
-    {
-        uint32_t result = rn_val - op2;
-        if (s) { set_nz(result, cpu); set_carry_sub(rn_val, op2, result, cpu); }
-        cpu->r[rd] = result;
-        break;
-    }
-    case 0x4: /* ADD */
-    {
-        uint32_t result = rn_val + op2;
-        if (s) { set_nz(result, cpu); set_carry_add(rn_val, op2, result, cpu); }
-        cpu->r[rd] = result;
-        break;
-    }
-    case 0xC: /* ORR：按位或 */
-    {
-        uint32_t result = rn_val | op2;
-        if (s) set_nz(result, cpu);
-        cpu->r[rd] = result;
-        break;
-    }
-    case 0xD: /* MOV：直接写入操作数 */
-        if (s) set_nz(op2, cpu);
-        cpu->r[rd] = op2;
-        break;
-    case 0xA: /* CMP：Rn - op2，只更新标志 */
-    {
-        uint32_t result = rn_val - op2;
-        set_nz(result, cpu);
-        set_carry_sub(rn_val, op2, result, cpu);
-        break;
-    }
-    default:
-        if (g_trace)
-            printf("cpu: PC=%08X insn=%08X dataop 0x%X unimplemented\n",
-                   cpu->r[15], insn, opcode);
-        break;
+    case 0x0: /* AND */ result = a & op2; if (s) { set_nz(result, cpu); set_c(carry, cpu); } cpu->r[rd] = result; break;
+    case 0x1: /* EOR */ result = a ^ op2; if (s) { set_nz(result, cpu); set_c(carry, cpu); } cpu->r[rd] = result; break;
+    case 0x2: /* SUB */ result = a - op2;
+        if (s) { set_nz(result, cpu); set_c(a >= op2, cpu);
+                 if (((a ^ op2) & (a ^ result) & 0x80000000u)) cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V; }
+        cpu->r[rd] = result; break;
+    case 0x3: /* RSB（op2 - a 反向减） */ result = op2 - a;
+        if (s) { set_nz(result, cpu); set_c(op2 >= a, cpu);
+                 if (((op2 ^ a) & (op2 ^ result) & 0x80000000u)) cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V; }
+        cpu->r[rd] = result; break;
+    case 0x4: /* ADD */ result = a + op2;
+        if (s) { set_nz(result, cpu); set_c(result < a, cpu);
+                 if (((a ^ result) & (op2 ^ result) & 0x80000000u)) cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V; }
+        cpu->r[rd] = result; break;
+    case 0x5: { /* ADC（a + op2 + 进位） */
+        uint64_t r64 = (uint64_t)a + op2 + c_in; result = (uint32_t)r64;
+        if (s) { set_nz(result, cpu); set_c((r64 >> 32) & 1u, cpu);
+                 if ((~(a ^ op2) & (a ^ result) & 0x80000000u)) cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V; }
+        cpu->r[rd] = result; break; }
+    case 0x6: /* SBC（a - op2 - !进位） */ result = a - op2 - (c_in ? 0u : 1u);
+        if (s) { set_nz(result, cpu); set_c(c_in ? a >= op2 : a > op2, cpu);
+                 if (((a ^ op2) & (a ^ result) & 0x80000000u)) cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V; }
+        cpu->r[rd] = result; break;
+    case 0x7: /* RSC（op2 - a - !进位） */ result = op2 - a - (c_in ? 0u : 1u);
+        if (s) { set_nz(result, cpu); set_c(c_in ? op2 >= a : op2 > a, cpu);
+                 if (((op2 ^ a) & (op2 ^ result) & 0x80000000u)) cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V; }
+        cpu->r[rd] = result; break;
+    case 0x8: /* TST（AND，只置标志） */ result = a & op2; set_nz(result, cpu); set_c(carry, cpu); break;
+    case 0x9: /* TEQ（EOR，只置标志） */ result = a ^ op2; set_nz(result, cpu); set_c(carry, cpu); break;
+    case 0xA: /* CMP（SUB，只置标志） */ result = a - op2; set_nz(result, cpu); set_c(a >= op2, cpu);
+        if (((a ^ op2) & (a ^ result) & 0x80000000u)) cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V; break;
+    case 0xB: /* CMN（ADD，只置标志） */ result = a + op2; set_nz(result, cpu); set_c(result < a, cpu);
+        if (((a ^ result) & (op2 ^ result) & 0x80000000u)) cpu->cpsr |= CPSR_V; else cpu->cpsr &= ~CPSR_V; break;
+    case 0xC: /* ORR */ result = a | op2; if (s) { set_nz(result, cpu); set_c(carry, cpu); } cpu->r[rd] = result; break;
+    case 0xD: /* MOV */ if (s) { set_nz(op2, cpu); set_c(carry, cpu); } cpu->r[rd] = op2; break;
+    case 0xE: /* BIC（a & ~op2） */ result = a & ~op2; if (s) { set_nz(result, cpu); set_c(carry, cpu); } cpu->r[rd] = result; break;
+    case 0xF: /* MVN（~op2） */ result = ~op2; if (s) { set_nz(result, cpu); set_c(carry, cpu); } cpu->r[rd] = result; break;
     }
 }
 
-/* 3b.7 分支 B/BL 目标计算：PC+8 + 符号扩展(offset24<<2)。
-   这是 ARM 流水线的 PC+8 语义，单独成函数便于分支与 BL 复用。 */
+/* ---- 10.4 MRS/MSR：读/写 CPSR/SPSR ----
+   只写被 field_mask 选中的字节（bit0=c 控制/bit1=x 扩展/bit2=s 状态/bit3=f 标志），
+   且始终保护模式位（bit4-0），模式切换留待阶段 12。 */
+static void msr_write(arm_cpu_t *cpu, uint32_t value, unsigned field_mask)
+{
+    uint32_t mask = 0;
+    if (field_mask & 0x1) mask |= 0x000000FFu;
+    if (field_mask & 0x2) mask |= 0x0000FF00u;
+    if (field_mask & 0x4) mask |= 0x00FF0000u;
+    if (field_mask & 0x8) mask |= 0xFF000000u;
+    mask &= ~0x1Fu; /* 保护模式位 bit4-0 */
+    cpu->cpsr = (cpu->cpsr & ~mask) | (value & mask);
+}
+
+/* ---- 10.5 LDM/STM（含 PUSH/POP）：块搬移，IA/IB/DA/DB 四模式 ----
+   P/U 决定寻址方向，W 写回基址；寄存器按升序访问（r0 在最低地址）。 */
+static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
+{
+    unsigned p = (insn >> 24) & 1u, u = (insn >> 23) & 1u,
+             w = (insn >> 21) & 1u, l = (insn >> 20) & 1u;
+    unsigned rn = (insn >> 16) & 0xFu;
+    uint32_t list = insn & 0xFFFFu;
+    uint32_t rn_val = cpu->r[rn];
+
+    int n = 0;
+    for (int i = 0; i < 16; i++) if (list & (1u << i)) n++;
+
+    uint32_t addr;
+    if (u)      addr = p ? rn_val + 4 : rn_val;            /* IB / IA */
+    else        addr = p ? rn_val - 4u * n : rn_val - 4u * (n - 1); /* DB / DA */
+
+    for (int i = 0; i < 16; i++) {
+        if (!(list & (1u << i))) continue;
+        if (l) cpu->r[i] = bus_read32(cpu->nds->bus, addr);
+        else   bus_write32(cpu->nds->bus, addr, cpu->r[i]);
+        addr += 4;
+    }
+    /* 写回：无论增/减方向，最终基址 = 起始 + n*4 或 - n*4 */
+    if (w) cpu->r[rn] = u ? rn_val + 4u * n : rn_val - 4u * n;
+    if (g_trace)
+        printf("cpu: PC=%08X insn=%08X %s r%u%s, list=%04X n=%d cycles=%llu\n",
+               cpu->r[15], insn, l ? "LDM" : "STM", rn, w ? "!" : "", list, n,
+               (unsigned long long)cpu->cycles);
+}
+
+/* ---- 10.6 乘法 MUL/MLA + 长乘 UMULL/UMLAL/SMULL/SMLAL ---- */
+static void exec_mul(arm_cpu_t *cpu, uint32_t insn)
+{
+    unsigned s = (insn >> 20) & 1u, a_bit = (insn >> 21) & 1u;
+    unsigned rd = (insn >> 16) & 0xFu, rn = (insn >> 12) & 0xFu,
+             rs = (insn >> 8) & 0xFu, rm = insn & 0xFu;
+    uint32_t result = cpu->r[rm] * cpu->r[rs] + (a_bit ? cpu->r[rn] : 0u);
+    cpu->r[rd] = result;
+    if (s) set_nz(result, cpu); /* C/V 乘法下无定义，不更新 */
+    if (g_trace)
+        printf("cpu: PC=%08X insn=%08X %s r%u, r%u, r%u%s = %08X\n",
+               cpu->r[15], insn, a_bit ? "MLA" : "MUL", rd, rm, rs,
+               a_bit ? "" : "", result);
+}
+
+static void exec_mul_long(arm_cpu_t *cpu, uint32_t insn)
+{
+    unsigned s = (insn >> 20) & 1u, u_bit = (insn >> 22) & 1u, a_bit = (insn >> 21) & 1u;
+    unsigned rdhi = (insn >> 16) & 0xFu, rdlo = (insn >> 12) & 0xFu,
+             rs = (insn >> 8) & 0xFu, rm = insn & 0xFu;
+    uint64_t result;
+    if (u_bit) result = (uint64_t)(int64_t)(int32_t)cpu->r[rm] * (int64_t)(int32_t)cpu->r[rs]; /* SMULL/SMLAL：有符号 */
+    else       result = (uint64_t)cpu->r[rm] * cpu->r[rs];                                      /* UMULL/UMLAL：无符号 */
+    if (a_bit) result += ((uint64_t)cpu->r[rdhi] << 32) | cpu->r[rdlo];
+    cpu->r[rdlo] = (uint32_t)result;
+    cpu->r[rdhi] = (uint32_t)(result >> 32);
+    if (s) {
+        if (cpu->r[rdhi] & 0x80000000u) cpu->cpsr |= CPSR_N; else cpu->cpsr &= ~CPSR_N;
+        if (cpu->r[rdhi] == 0 && cpu->r[rdlo] == 0) cpu->cpsr |= CPSR_Z; else cpu->cpsr &= ~CPSR_Z;
+    }
+}
+
+/* ---- 10.7 单数据传输 LDR/STR/LDRB/STRB（bit27-26=01） ----
+   支持立即偏移/寄存器偏移（可移位）、前/后变址、W 回写、字节/字宽。 */
+static void exec_single_transfer(arm_cpu_t *cpu, uint32_t insn)
+{
+    unsigned p = (insn >> 24) & 1u, u = (insn >> 23) & 1u,
+             b = (insn >> 22) & 1u, w = (insn >> 21) & 1u, l = (insn >> 20) & 1u;
+    unsigned rn = (insn >> 16) & 0xFu, rd = (insn >> 12) & 0xFu;
+    uint32_t rn_val = cpu->r[rn];
+    uint32_t offset;
+
+    if (insn & (1u << 25)) { /* 寄存器偏移（可移位） */
+        uint32_t rm = cpu->r[insn & 0xFu];
+        unsigned type = (insn >> 5) & 3u;
+        uint32_t amount = (insn >> 7) & 0x1Fu;
+        uint32_t co;
+        offset = shift_apply(rm, type, amount, 0, &co);
+    } else {
+        offset = insn & 0xFFFu;
+    }
+
+    uint32_t addr = u ? rn_val + offset : rn_val - offset;
+    if (p == 0) addr = rn_val;      /* 后变址：先按 Rn 访存，再更新 */
+    if (w || p == 0) cpu->r[rn] = u ? rn_val + offset : rn_val - offset; /* 回写 */
+    if (l) {
+        cpu->r[rd] = b ? bus_read8(cpu->nds->bus, addr) : bus_read32(cpu->nds->bus, addr);
+        if (g_trace)
+            printf("cpu: PC=%08X insn=%08X LDR%s r%u, [r%u] = %08X\n",
+                   cpu->r[15], insn, b ? "B" : "", rd, rn, cpu->r[rd]);
+    } else {
+        if (b) bus_write8(cpu->nds->bus, addr, (uint8_t)cpu->r[rd]);
+        else   bus_write32(cpu->nds->bus, addr, cpu->r[rd]);
+        if (g_trace)
+            printf("cpu: PC=%08X insn=%08X STR%s r%u, [r%u]\n",
+                   cpu->r[15], insn, b ? "B" : "", rd, rn);
+    }
+}
+
+/* ---- 10.7 额外传输 LDRH/STRH/LDRSB/LDRSH（bit27-25=000, bit7=1, bit4=1） ----
+   S/H 选符号/半字，支持立即/寄存器偏移、前/后变址、W 回写。 */
+static void exec_extra_transfer(arm_cpu_t *cpu, uint32_t insn)
+{
+    unsigned p = (insn >> 24) & 1u, u = (insn >> 23) & 1u,
+             i_bit = (insn >> 22) & 1u, w = (insn >> 21) & 1u, l = (insn >> 20) & 1u;
+    unsigned rn = (insn >> 16) & 0xFu, rd = (insn >> 12) & 0xFu;
+    unsigned s_bit = (insn >> 6) & 1u, h_bit = (insn >> 5) & 1u;
+    uint32_t rn_val = cpu->r[rn];
+    uint32_t offset;
+
+    if (i_bit) offset = ((insn >> 4) & 0xF0u) | (insn & 0xFu); /* 8 位立即数拼装 */
+    else       offset = cpu->r[insn & 0xFu];
+
+    uint32_t addr = u ? rn_val + offset : rn_val - offset;
+    if (p == 0) addr = rn_val;
+    if (w || p == 0) cpu->r[rn] = u ? rn_val + offset : rn_val - offset;
+
+    if (l) {
+        uint32_t v;
+        if (h_bit)      v = bus_read16(cpu->nds->bus, addr);
+        else            v = bus_read8(cpu->nds->bus, addr);
+        if (s_bit) { /* 符号扩展 */
+            if (h_bit) v = (uint32_t)(int32_t)(int16_t)(uint16_t)v;
+            else       v = (uint32_t)(int32_t)(int8_t)(uint8_t)v;
+        }
+        cpu->r[rd] = v;
+    } else {
+        if (h_bit) bus_write16(cpu->nds->bus, addr, (uint16_t)cpu->r[rd]);
+        else       bus_write8(cpu->nds->bus, addr, (uint8_t)cpu->r[rd]);
+    }
+    if (g_trace)
+        printf("cpu: PC=%08X insn=%08X %s r%u, [r%u] = %08X\n",
+               cpu->r[15], insn, l ? "LDR(x)" : "STR(x)", rd, rn, cpu->r[rd]);
+}
+
+/* ---- 10.9 SWP/SWPB：寄存器与内存交换 ---- */
+static void exec_swp(arm_cpu_t *cpu, uint32_t insn)
+{
+    unsigned b = (insn >> 22) & 1u;
+    unsigned rn = (insn >> 16) & 0xFu, rd = (insn >> 12) & 0xFu, rm = insn & 0xFu;
+    uint32_t addr = cpu->r[rn];
+    uint32_t old = b ? bus_read8(cpu->nds->bus, addr) : bus_read32(cpu->nds->bus, addr);
+    if (b) bus_write8(cpu->nds->bus, addr, (uint8_t)cpu->r[rm]);
+    else   bus_write32(cpu->nds->bus, addr, cpu->r[rm]);
+    cpu->r[rd] = old;
+    if (g_trace)
+        printf("cpu: PC=%08X insn=%08X SWP%s r%u, r%u, [r%u] = %08X\n",
+               cpu->r[15], insn, b ? "B" : "", rd, rm, rn, old);
+}
+
+/* ---- 10.10 MRC/MCR 协处理器访问（CP15 桩，按 CRn 索引存取） ---- */
+static void exec_coprocessor(arm_cpu_t *cpu, uint32_t insn)
+{
+    unsigned l = (insn >> 20) & 1u;
+    unsigned crn = (insn >> 16) & 0xFu;
+    unsigned rd = (insn >> 12) & 0xFu;
+    if (crn < 16) {
+        if (l) cpu->r[rd] = cpu->cp15[crn];
+        else   cpu->cp15[crn] = cpu->r[rd];
+    }
+    if (g_trace)
+        printf("cpu: PC=%08X insn=%08X %s p15, c%u, r%u\n",
+               cpu->r[15], insn, l ? "MRC" : "MCR", crn, rd);
+}
+
+/* 分支 B/BL 目标计算：PC+8 + 符号扩展(offset24<<2)。 */
 static uint32_t branch_target(uint32_t pc, uint32_t insn)
 {
     uint32_t imm24 = insn & 0x00FFFFFFu;
-    /* 24 位立即数符号扩展成字节位移：
-       imm24<<8 先左移（uint32），转 int32 后算术右移 8 位得符号扩展值，
-       再左移 2 位（立即数单位是「字」，1 字 = 4 字节）。
-       注意 cast 必须在右移之前，否则无符号右移会丢掉符号位。 */
     int32_t disp = ((int32_t)(imm24 << 8) >> 8) << 2;
     return pc + 8u + (uint32_t)disp;
 }
 
-/* 执行一条指令的全部语义。cpu_step 只负责取指与计数，此处处理：
-   条件判断 → 分支/BL/BX → 数据运算 → LDR/STR → 未实现打印。
-   所有分支路径都会正确推进或改写 PC。 */
+/* 执行一条指令的全部语义。cpu_step 只负责取指与计数。 */
 int exec_step(arm_cpu_t *cpu, uint32_t insn)
 {
     unsigned cond = (insn >> 28) & 0xFu;
 
-    /* 3b.1 条件执行：条件不成立则跳过本指令（不产生任何副作用，仅 PC+4） */
     if (!cond_ok(cpu, cond)) {
         cpu->r[15] += 4;
         return 1;
     }
 
-    /* 分支 B/BL：bit27-25 = 101。BL 额外把返回地址 PC+4 存进 lr(r14)。 */
+    /* SWI：bit27-24=1111。24 位立即数 = BIOS 函数号（阶段 10.8 只记录，
+       阶段 11 BIOS HLE 拦截，阶段 12 才真正进异常向量）。 */
+    if ((insn & 0x0F000000u) == 0x0F000000u) {
+        cpu->swi_num = insn & 0x00FFFFFFu;
+        if (g_trace)
+            printf("cpu: PC=%08X insn=%08X SWI %u cycles=%llu\n",
+                   cpu->r[15], insn, cpu->swi_num,
+                   (unsigned long long)cpu->cycles);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* 分支 B/BL：bit27-25 = 101 */
     if (((insn >> 25) & 0x7u) == ARM_OP_BRANCH) {
         uint32_t imm24 = insn & 0x00FFFFFFu;
         uint32_t target = branch_target(cpu->r[15], insn);
         if (insn & (1u << 24)) { /* BL */
-            cpu->r[14] = cpu->r[15] + 4; /* lr = 下一条指令地址 */
+            cpu->r[14] = cpu->r[15] + 4;
             if (g_trace)
                 printf("cpu: PC=%08X insn=%08X BL %08X (lr=%08X) cycles=%llu\n",
                        cpu->r[15], insn, target, cpu->r[14],
                        (unsigned long long)cpu->cycles);
         } else if (imm24 == BRANCH_OFFSET_MINUS1) {
-            /* B 自己（死循环）：目标 = PC+8-8 = PC，原地打转。
-               只在第一次命中时打印，避免主循环每帧刷屏。 */
             if (!cpu->deadloop_reported) {
                 printf("cpu: PC=%08X insn=%08X dead-loop branch to self (cycles=%llu)\n",
                        cpu->r[15], insn, (unsigned long long)cpu->cycles);
@@ -209,8 +420,14 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         return 1;
     }
 
-    /* BX Rm：模式 0x012FFF1x。跳转到 Rm 的值（本阶段只用于 BX lr 返回）。
-       必须放在数据运算判定之前：BX 的 bit27-26 也是 00。 */
+    /* LDM/STM：bit27-25 = 100 */
+    if (((insn >> 25) & 0x7u) == 0x4u) {
+        exec_block_transfer(cpu, insn);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* BX Rm：模式 0x012FFF1x */
     if ((insn & 0x0FFFFFF0u) == 0x012FFF10u) {
         unsigned rm = insn & 0xFu;
         if (g_trace)
@@ -221,57 +438,93 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         return 1;
     }
 
-    /* 数据运算（MOV/ADD/SUB/CMP 等）：bit27-26 = 00 */
-    if (((insn >> 26) & 0x3u) == 0) {
-        uint32_t op2 = decode_op2(cpu, insn);
-        exec_dataop(cpu, insn, op2);
-        cpu->r[15] += 4;
-        return 1;
-    }
-
-    /* 单数据传输 LDR/STR：bit27-26 = 01。
-       P=1 前变址（先算地址再访存），U 决定 +/- 偏移，L=1 读、L=0 写。
-       本阶段支持字宽（B=0）与立即偏移（I=0）；字节/寄存器偏移留待后续。 */
-    if (((insn >> 26) & 0x3u) == 1) {
-        unsigned p = (insn >> 24) & 1u;
-        unsigned u = (insn >> 23) & 1u;
-        unsigned b = (insn >> 22) & 1u;
-        unsigned w = (insn >> 21) & 1u;
-        unsigned l = (insn >> 20) & 1u;
-        unsigned rn = (insn >> 16) & 0xFu;
+    /* MRS（读 CPSR/SPSR）：bit27-24=0001, bit23-21=00x, bit19-16=1111, bit11-0=0，
+       Rd 在 bit15-12（不可固定，需掩掉）。 */
+    if ((insn & 0x0FFF0FFFu) == 0x010F0000u) {
         unsigned rd = (insn >> 12) & 0xFu;
-        if (insn & (1u << 25)) { /* 寄存器偏移：本阶段未实现 */
-            if (g_trace)
-                printf("cpu: PC=%08X insn=%08X ldr/str reg-offset unimplemented\n",
-                       cpu->r[15], insn);
-            cpu->r[15] += 4;
-            return 1;
-        }
-        uint32_t offset = insn & 0xFFFu;
-        /* 前变址地址 = Rn +/- 立即偏移 */
-        uint32_t addr = u ? cpu->r[rn] + offset : cpu->r[rn] - offset;
-        if (p == 0) addr = cpu->r[rn]; /* 后变址：地址 = Rn（先访存后更新，W 语义忽略） */
-        if (w) cpu->r[rn] = addr;      /* W 回写：地址写回 Rn */
-        if (l) {
-            if (b) cpu->r[rd] = bus_read8(cpu->nds->bus, addr);
-            else   cpu->r[rd] = bus_read32(cpu->nds->bus, addr);
-            if (g_trace)
-                printf("cpu: PC=%08X insn=%08X LDR r%u, [r%u%s%X] = %08X cycles=%llu\n",
-                       cpu->r[15], insn, rd, rn, u ? "+" : "-", offset, cpu->r[rd],
-                       (unsigned long long)cpu->cycles);
-        } else {
-            if (b) bus_write8(cpu->nds->bus, addr, (uint8_t)cpu->r[rd]);
-            else   bus_write32(cpu->nds->bus, addr, cpu->r[rd]);
-            if (g_trace)
-                printf("cpu: PC=%08X insn=%08X STR r%u, [r%u%s%X] cycles=%llu\n",
-                       cpu->r[15], insn, rd, rn, u ? "+" : "-", offset,
-                       (unsigned long long)cpu->cycles);
-        }
+        cpu->r[rd] = cpu->cpsr;
+        cpu->r[15] += 4;
+        return 1;
+    }
+    if ((insn & 0x0FFF0FFFu) == 0x014F0000u) {
+        unsigned rd = (insn >> 12) & 0xFu;
+        cpu->r[rd] = cpu->spsr;
         cpu->r[15] += 4;
         return 1;
     }
 
-    /* 其余未实现指令：打印机器码并继续（后续阶段逐类补充）。 */
+    /* MSR（写 CPSR/SPSR，寄存器形式）：bit22=R（0=CPSR,1=SPSR）需保留，勿固定为 0。 */
+    if ((insn & 0x0FB0FFF0u) == 0x0120F000u) {
+        unsigned rm = insn & 0xFu;
+        unsigned field = (insn >> 16) & 0xFu;
+        if (insn & (1u << 22)) cpu->spsr = cpu->r[rm];
+        else                   msr_write(cpu, cpu->r[rm], field);
+        cpu->r[15] += 4;
+        return 1;
+    }
+    /* MSR（写 CPSR/SPSR，立即数形式）：bit22=R（0=CPSR,1=SPSR）需保留，勿固定为 0。 */
+    if ((insn & 0x0FB0F000u) == 0x0320F000u) {
+        uint32_t imm8 = insn & 0xFFu;
+        unsigned rot4 = (insn >> 8) & 0xFu;
+        uint32_t value = arm_rotate(imm8, rot4);
+        unsigned field = (insn >> 16) & 0xFu;
+        if (insn & (1u << 22)) cpu->spsr = value;
+        else                   msr_write(cpu, value, field);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* 乘法 MUL/MLA */
+    if ((insn & 0x0FC000F0u) == 0x00000090u) {
+        exec_mul(cpu, insn);
+        cpu->r[15] += 4;
+        return 1;
+    }
+    /* 长乘 UMULL/UMLAL/SMULL/SMLAL */
+    if ((insn & 0x0F8000F0u) == 0x00800090u) {
+        exec_mul_long(cpu, insn);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* SWP/SWPB */
+    if ((insn & 0x0FB00FF0u) == 0x01000090u) {
+        exec_swp(cpu, insn);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* 额外传输 LDRH/STRH/LDRSB/LDRSH */
+    if ((insn & 0x0E000090u) == 0x00000090u) {
+        exec_extra_transfer(cpu, insn);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* 单数据传输 LDR/STR/LDRB/STRB：bit27-26 = 01 */
+    if (((insn >> 26) & 0x3u) == 1) {
+        exec_single_transfer(cpu, insn);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* 协处理器 MRC/MCR：bit27-24 = 1110, bit4 = 1 */
+    if ((insn & 0x0F000010u) == 0x0E000010u) {
+        exec_coprocessor(cpu, insn);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* 数据运算：bit27-26 = 00（MRS/MSR/乘法/额外传输/SWP 已在上方拦截） */
+    if (((insn >> 26) & 0x3u) == 0) {
+        uint32_t carry = 0;
+        uint32_t op2 = decode_op2(cpu, insn, &carry);
+        exec_dataop(cpu, insn, op2, carry);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* 其余未实现指令：打印机器码并继续。 */
     if (g_trace)
         printf("cpu: PC=%08X insn=%08X unimplemented (cycles=%llu)\n",
                cpu->r[15], insn, (unsigned long long)cpu->cycles);

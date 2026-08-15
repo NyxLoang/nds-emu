@@ -1082,6 +1082,316 @@ static void test_2d_scene(nds_t *nds)
     CHECK_EQ("scene bot cyan",         fb_bot[0],              0xFF00F8F8u);
 }
 
+/* ---- 10.2 用例：移位操作数 LSL/LSR/ASR/ROR（立即数移位 + 寄存器移位） ---- */
+static void test_shifts(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A01010, /* MOV r1, #0x10        r1 = 16 */
+        /* 0x04 */ 0xE3A02003, /* MOV r2, #3           r2 = 3 */
+        /* 0x08 */ 0xE0810182, /* ADD r0, r1, r2, LSL #3  r0 = 16 + (3<<3) = 40 */
+        /* 0x0C */ 0xE3A03080, /* MOV r3, #0x80        r3 = 0x80 */
+        /* 0x10 */ 0xE1A04223, /* MOV r4, r3, LSR #4   r4 = 0x08 */
+        /* 0x14 */ 0xE3A05480, /* MOV r5, #0x80000000  r5 = 0x80000000 */
+        /* 0x18 */ 0xE1A06245, /* MOV r6, r5, ASR #4   r6 = 0xF8000000 */
+        /* 0x1C */ 0xE3A07001, /* MOV r7, #1           r7 = 1 */
+        /* 0x20 */ 0xE1A080E7, /* MOV r8, r7, ROR #1   r8 = 0x80000000 */
+        /* 0x24 */ 0xE3A09004, /* MOV r9, #4           r9 = 4 */
+        /* 0x28 */ 0xE081A912, /* ADD r10, r1, r2, LSL r9  r10 = 16 + (3<<4) = 64 */
+        /* 0x2C */ 0xEAFFFFFE, /* B self */
+    };
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x2C, 32);
+
+    CHECK_EQ("shift ADD LSL#3",   nds->cpu->r[0],  40u);
+    CHECK_EQ("shift MOV LSR#4",   nds->cpu->r[4],  0x08u);
+    CHECK_EQ("shift MOV ASR#4",   nds->cpu->r[6],  0xF8000000u);
+    CHECK_EQ("shift MOV ROR#1",   nds->cpu->r[8],  0x80000000u);
+    CHECK_EQ("shift ADD LSL reg", nds->cpu->r[10], 64u);
+}
+
+/* ---- 10.3 用例：更多数据处理 MVN/BIC/ADC/SBC/RSB/RSC/TST/TEQ/CMN ---- */
+static void test_more_dataop(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A0000F, /* MOV r0, #0x0F         r0 = 0x0F */
+        /* 0x04 */ 0xE1E01000, /* MVN r1, r0            r1 = 0xFFFFFFF0 */
+        /* 0x08 */ 0xE3A020FF, /* MOV r2, #0xFF         r2 = 0xFF */
+        /* 0x0C */ 0xE3C2300F, /* BIC r3, r2, #0x0F     r3 = 0xF0 */
+        /* 0x10 */ 0xE3E04000, /* MVN r4, #0            r4 = 0xFFFFFFFF */
+        /* 0x14 */ 0xE3A05001, /* MOV r5, #1            r5 = 1 */
+        /* 0x18 */ 0xE0946005, /* ADDS r6, r4, r5       r6 = 0, C=1 */
+        /* 0x1C */ 0xE0A47005, /* ADC r7, r4, r5        r7 = 1 (r4+r5+C) */
+        /* 0x20 */ 0xE0C48005, /* SBC r8, r4, r5        r8 = 0xFFFFFFFE (C=1) */
+        /* 0x24 */ 0xE3A00002, /* MOV r0, #2            r0 = 2 */
+        /* 0x28 */ 0xE260900A, /* RSB r9, r0, #10       r9 = 8 */
+        /* 0x2C */ 0xE1500000, /* CMP r0, r0            C=1, Z=1 */
+        /* 0x30 */ 0xE2E0A00A, /* RSC r10, r0, #10      r10 = 10-2-0 = 8 (C=1) */
+        /* 0x34 */ 0xE3A0000F, /* MOV r0, #0x0F         r0 = 0x0F */
+        /* 0x38 */ 0xE31000F0, /* TST r0, #0xF0         Z=1 */
+        /* 0x3C */ 0xE330000F, /* TEQ r0, #0x0F         Z=1 */
+        /* 0x40 */ 0xE3E00004, /* MVN r0, #4            r0 = 0xFFFFFFFB (-5) */
+        /* 0x44 */ 0xE3700005, /* CMN r0, #5            Z=1 */
+        /* 0x48 */ 0xEAFFFFFE, /* B self */
+    };
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x48, 64);
+
+    CHECK_EQ("dop MVN",  nds->cpu->r[1],  0xFFFFFFF0u);
+    CHECK_EQ("dop BIC",  nds->cpu->r[3],  0x000000F0u);
+    CHECK_EQ("dop ADDS", nds->cpu->r[6],  0x00000000u);
+    CHECK_EQ("dop ADC",  nds->cpu->r[7],  0x00000001u);
+    CHECK_EQ("dop SBC",  nds->cpu->r[8],  0xFFFFFFFEu);
+    CHECK_EQ("dop RSB",  nds->cpu->r[9],  0x00000008u);
+    CHECK_EQ("dop RSC",  nds->cpu->r[10], 0x00000008u);
+
+    /* TST/TEQ/CMN 都置 Z，最终 CMN r0,#5 结果 0 → Z=1 */
+    CHECK_EQ("dop Z flag set", (nds->cpu->cpsr & CPSR_Z) ? 1u : 0u, 1u);
+}
+
+/* ---- 10.4 用例：MRS/MSR 读/写 CPSR/SPSR（含字段掩码与模式位保护） ---- */
+static void test_mrs_msr(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    arm_cpu_t *cpu = nds->cpu;
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE10F0000, /* MRS r0, CPSR         r0 = cpsr */
+        /* 0x04 */ 0xE3A010DF, /* MOV r1, #0xDF        r1 = 0xDF */
+        /* 0x08 */ 0xE121F001, /* MSR CPSR_c, r1       cpsr 控制字节(bit7-5)写入 */
+        /* 0x0C */ 0xE10F2000, /* MRS r2, CPSR         r2 = 新 cpsr */
+        /* 0x10 */ 0xE14F3000, /* MRS r3, SPSR         r3 = spsr */
+        /* 0x14 */ 0xE3A04055, /* MOV r4, #0x55        r4 = 0x55 */
+        /* 0x18 */ 0xE16FF004, /* MSR SPSR, r4         spsr = 0x55 */
+        /* 0x1C */ 0xEAFFFFFE, /* B self */
+    };
+
+    /* 预置：N=0 Z=0 C=1 V=0 + 模式 0x13(SVC) */
+    cpu->cpsr = 0x20000013u;
+    cpu->spsr = 0x12345678u;
+
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x1C, 32);
+
+    CHECK_EQ("mrs r0 = cpsr", cpu->r[0], 0x20000013u);
+    /* MSR CPSR_c：bit7-5 写入 0xDF→0xC0，模式位(bit4-0)保留 0x13 → 控制字节 0xD3 */
+    CHECK_EQ("mrs r2 control byte", cpu->r[2] & 0xFFu, 0xD3u);
+    CHECK_EQ("mrs r2 flags preserved", cpu->r[2] & 0xF0000000u, 0x20000000u);
+    CHECK_EQ("mrs r2 mode preserved", cpu->r[2] & 0x1Fu, 0x13u);
+    CHECK_EQ("mrs r3 = spsr", cpu->r[3], 0x12345678u);
+    CHECK_EQ("msr spsr written", cpu->spsr, 0x55u);
+}
+
+/* ---- 10.5 用例：LDM/STM（含 PUSH/POP 别名，DB/IA 模式 + 写回） ---- */
+static void test_block_transfer(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t stack = 0x02001000u;
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A04011, /* MOV r4, #0x11 */
+        /* 0x04 */ 0xE3A05022, /* MOV r5, #0x22 */
+        /* 0x08 */ 0xE3A06033, /* MOV r6, #0x33 */
+        /* 0x0C */ 0xE3A07044, /* MOV r7, #0x44 */
+        /* 0x10 */ 0xE3A00402, /* MOV r0, #0x02000000 */
+        /* 0x14 */ 0xE2800A01, /* ADD r0, r0, #0x1000   r0 = 0x02001000 */
+        /* 0x18 */ 0xE92000F0, /* STMDB r0!, {r4-r7}    push */
+        /* 0x1C */ 0xE3A04000, /* MOV r4, #0 (clobber) */
+        /* 0x20 */ 0xE3A05000, /* MOV r5, #0 */
+        /* 0x24 */ 0xE3A06000, /* MOV r6, #0 */
+        /* 0x28 */ 0xE3A07000, /* MOV r7, #0 */
+        /* 0x2C */ 0xE8B000F0, /* LDMIA r0!, {r4-r7}    pop */
+        /* 0x30 */ 0xEAFFFFFE, /* B self */
+    };
+
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x30, 64);
+
+    CHECK_EQ("ldm/stm r4 restored", nds->cpu->r[4], 0x11u);
+    CHECK_EQ("ldm/stm r5 restored", nds->cpu->r[5], 0x22u);
+    CHECK_EQ("ldm/stm r6 restored", nds->cpu->r[6], 0x33u);
+    CHECK_EQ("ldm/stm r7 restored", nds->cpu->r[7], 0x44u);
+    CHECK_EQ("ldm/stm sp restored", nds->cpu->r[0], stack);
+
+    /* STMDB 从高地址往低写：r4 在最低地址 */
+    CHECK_EQ("stmdb mem r4", bus_read32(nds->bus, stack - 16), 0x11u);
+    CHECK_EQ("stmdb mem r5", bus_read32(nds->bus, stack - 12), 0x22u);
+    CHECK_EQ("stmdb mem r6", bus_read32(nds->bus, stack - 8), 0x33u);
+    CHECK_EQ("stmdb mem r7", bus_read32(nds->bus, stack - 4), 0x44u);
+}
+
+/* ---- 10.6 用例：乘法 MUL/MLA + 长乘 UMULL/UMLAL/SMULL ---- */
+static void test_mul(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00006, /* MOV r0, #6            r0 = 6 */
+        /* 0x04 */ 0xE3A01007, /* MOV r1, #7            r1 = 7 */
+        /* 0x08 */ 0xE0020091, /* MUL r2, r1, r0        r2 = 42 */
+        /* 0x0C */ 0xE3A03005, /* MOV r3, #5            r3 = 5 */
+        /* 0x10 */ 0xE0241390, /* MLA r4, r0, r3, r1    r4 = 6*5+7 = 37 */
+        /* 0x14 */ 0xE0865190, /* UMULL r5, r6, r0, r1  r6:r5 = 42 */
+        /* 0x18 */ 0xE3A0702A, /* MOV r7, #42           预置累加基数 */
+        /* 0x1C */ 0xE3A08000, /* MOV r8, #0 */
+        /* 0x20 */ 0xE0A87190, /* UMLAL r7, r8, r0, r1  r8:r7 = 42 + 42 = 84 */
+        /* 0x24 */ 0xE3E00000, /* MVN r0, #0            r0 = -1 */
+        /* 0x28 */ 0xE3A01001, /* MOV r1, #1            r1 = 1 */
+        /* 0x2C */ 0xE0CA9190, /* SMULL r9, r10, r0, r1 r10:r9 = -1 */
+        /* 0x30 */ 0xEAFFFFFE, /* B self */
+    };
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x30, 32);
+
+    CHECK_EQ("mul MUL",      nds->cpu->r[2],  42u);
+    CHECK_EQ("mul MLA",      nds->cpu->r[4],  37u);
+    CHECK_EQ("mul UMULL lo", nds->cpu->r[5],  42u);
+    CHECK_EQ("mul UMULL hi", nds->cpu->r[6],  0u);
+    CHECK_EQ("mul UMLAL lo", nds->cpu->r[7],  84u);
+    CHECK_EQ("mul UMLAL hi", nds->cpu->r[8],  0u);
+    CHECK_EQ("mul SMULL lo", nds->cpu->r[9],  0xFFFFFFFFu);
+    CHECK_EQ("mul SMULL hi", nds->cpu->r[10], 0xFFFFFFFFu);
+}
+
+/* ---- 10.7 用例：字节/半字访存 + 前/后变址 + 寄存器偏移 + 符号扩展 ---- */
+static void test_byte_halfword(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t data = 0x02001000u;
+
+    bus_write8(nds->bus, data + 0, 0xAB);
+    bus_write8(nds->bus, data + 1, 0x80);
+    bus_write16(nds->bus, data + 2, 0x1234);
+    bus_write16(nds->bus, data + 4, 0x8000);
+    bus_write32(nds->bus, data + 8, 0xDEADBEEF);
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00402, /* MOV r0, #0x02000000 */
+        /* 0x04 */ 0xE2800A01, /* ADD r0, r0, #0x1000   r0 = data */
+        /* 0x08 */ 0xE5D01000, /* LDRB r1, [r0]         r1 = 0xAB */
+        /* 0x0C */ 0xE1D020D1, /* LDRSB r2, [r0, #1]    r2 = 0xFFFFFF80 */
+        /* 0x10 */ 0xE1D030B2, /* LDRH r3, [r0, #2]     r3 = 0x1234 */
+        /* 0x14 */ 0xE1D040F4, /* LDRSH r4, [r0, #4]    r4 = 0xFFFF8000 */
+        /* 0x18 */ 0xE3A0505A, /* MOV r5, #0x5A         r5 = 0x5A */
+        /* 0x1C */ 0xE5C05008, /* STRB r5, [r0, #8]     mem[8]=0x5A → 0xDEADBE5A */
+        /* 0x20 */ 0xE3A08008, /* MOV r8, #8            r8 = 8 */
+        /* 0x24 */ 0xE7907008, /* LDR r7, [r0, r8]      r7 = 0xDEADBE5A */
+        /* 0x28 */ 0xE4909004, /* LDR r9, [r0], #4      r9 = 0x123480AB, r0+=4 */
+        /* 0x2C */ 0xEAFFFFFE, /* B self */
+    };
+
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x2C, 64);
+
+    CHECK_EQ("bhw LDRB",          nds->cpu->r[1], 0xABu);
+    CHECK_EQ("bhw LDRSB",         nds->cpu->r[2], 0xFFFFFF80u);
+    CHECK_EQ("bhw LDRH",          nds->cpu->r[3], 0x1234u);
+    CHECK_EQ("bhw LDRSH",         nds->cpu->r[4], 0xFFFF8000u);
+    CHECK_EQ("bhw STRB mem",      bus_read8(nds->bus, data + 8), 0x5Au);
+    CHECK_EQ("bhw LDR regoff",    nds->cpu->r[7], 0xDEADBE5Au);
+    CHECK_EQ("bhw LDR post r9",   nds->cpu->r[9], 0x123480ABu);
+    CHECK_EQ("bhw LDR post r0",   nds->cpu->r[0], data + 4);
+}
+
+/* ---- 10.8 用例：SWI 记录软件中断号、继续执行 ---- */
+static void test_swi(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xEF000123, /* SWI 0x123 */
+        /* 0x04 */ 0xE3A00005, /* MOV r0, #5（应继续执行） */
+        /* 0x08 */ 0xEAFFFFFE, /* B self */
+    };
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x08, 16);
+
+    CHECK_EQ("swi num recorded", nds->cpu->swi_num, 0x123u);
+    CHECK_EQ("swi continues", nds->cpu->r[0], 5u);
+    CHECK_EQ("swi PC at halt", nds->cpu->r[15], base + 0x08);
+}
+
+/* ---- 10.9 用例：SWP 寄存器与内存交换 ---- */
+static void test_swp(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t data = 0x02001000u;
+    bus_write32(nds->bus, data, 0xDEADBEEF);
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00402, /* MOV r0, #0x02000000 */
+        /* 0x04 */ 0xE2800A01, /* ADD r0, r0, #0x1000   r0 = data */
+        /* 0x08 */ 0xE3A01011, /* MOV r1, #0x11         r1 = 0x11 */
+        /* 0x0C */ 0xE1002091, /* SWP r2, r1, [r0]      r2 = 旧值, mem = 0x11 */
+        /* 0x10 */ 0xEAFFFFFE, /* B self */
+    };
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x10, 16);
+
+    CHECK_EQ("swp r2 = old mem", nds->cpu->r[2], 0xDEADBEEFu);
+    CHECK_EQ("swp mem = new", bus_read32(nds->bus, data), 0x11u);
+}
+
+/* ---- 10.10 用例：MRC/MCR 协处理器访问（CP15 桩） ---- */
+static void test_coprocessor(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00055, /* MOV r0, #0x55 */
+        /* 0x04 */ 0xEE010F10, /* MCR p15, 0, r0, c1, c0, 0  → cp15[1] = 0x55 */
+        /* 0x08 */ 0xE3A01000, /* MOV r1, #0（clobber） */
+        /* 0x0C */ 0xEE111F10, /* MRC p15, 0, r1, c1, c0, 0  → r1 = cp15[1] */
+        /* 0x10 */ 0xEAFFFFFE, /* B self */
+    };
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x10, 16);
+
+    CHECK_EQ("mcr cp15 written", nds->cpu->cp15[1], 0x55u);
+    CHECK_EQ("mrc cp15 read", nds->cpu->r[1], 0x55u);
+}
+
+/* ---- 10.11 用例：综合（栈保存 + SWI + MUL + 半字循环搬 VRAM） ---- */
+static void test_stage10_integration(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t vram = BUS_VRAM_BASE;
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00402, /* MOV r0, #0x02000000 */
+        /* 0x04 */ 0xE2800A02, /* ADD r0, r0, #0x2000   r0 = 0x02002000（栈） */
+        /* 0x08 */ 0xE1A0D000, /* MOV sp, r0            sp = r0 */
+        /* 0x0C */ 0xE3A04011, /* MOV r4, #0x11 */
+        /* 0x10 */ 0xE3A05022, /* MOV r5, #0x22 */
+        /* 0x14 */ 0xE3A06033, /* MOV r6, #0x33 */
+        /* 0x18 */ 0xE92D00F0, /* PUSH {r4-r7}          STMDB sp!, {r4-r7} */
+        /* 0x1C */ 0xE3A0000A, /* MOV r0, #10 */
+        /* 0x20 */ 0xE3A01014, /* MOV r1, #20 */
+        /* 0x24 */ 0xE0020091, /* MUL r2, r1, r0        r2 = 200 */
+        /* 0x28 */ 0xEF00001A, /* SWI 0x1A */
+        /* 0x2C */ 0xE3A03406, /* MOV r3, #0x06000000   r3 = VRAM */
+        /* 0x30 */ 0xE3A04C7C, /* MOV r4, #0x7C00       r4 = 红 */
+        /* 0x34 */ 0xE3A05010, /* MOV r5, #16           r5 = 16 半字 */
+        /* 0x38 */ 0xE1C340B0, /* STRH r4, [r3]         写半字 */
+        /* 0x3C */ 0xE2833002, /* ADD r3, r3, #2        前进 2 字节 */
+        /* 0x40 */ 0xE2555001, /* SUBS r5, r5, #1       计数-1 */
+        /* 0x44 */ 0x1AFFFFFB, /* BNE 0x38             循环 */
+        /* 0x48 */ 0xE8BD00F0, /* POP {r4-r7}           LDMIA sp!, {r4-r7} */
+        /* 0x4C */ 0xEAFFFFFE, /* B self */
+    };
+
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x4C, 256);
+
+    CHECK_EQ("itg r2 (MUL)", nds->cpu->r[2], 200u);
+    CHECK_EQ("itg swi_num", nds->cpu->swi_num, 0x1Au);
+    CHECK_EQ("itg r4 restored", nds->cpu->r[4], 0x11u);
+    CHECK_EQ("itg r5 restored", nds->cpu->r[5], 0x22u);
+
+    int ok = 1;
+    for (int i = 0; i < 16; i++)
+        if (bus_read16(nds->bus, vram + 2u * i) != 0x7C00u) { ok = 0; break; }
+    CHECK_EQ("itg vram fill 16px", ok, 1);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -1281,6 +1591,76 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_2d_scene(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.2] 移位操作数 LSL/LSR/ASR/ROR\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_shifts(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.3] 更多数据处理 MVN/BIC/ADC/SBC/RSB/RSC/TST/TEQ/CMN\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_more_dataop(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.4] MRS/MSR\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_mrs_msr(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.5] LDM/STM（PUSH/POP）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_block_transfer(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.6] 乘法 MUL/MLA + 长乘\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_mul(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.7] 字节/半字访存 + 变址\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_byte_halfword(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.8] SWI 指令\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_swi(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.9] SWP 交换\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_swp(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.10] MRC/MCR（CP15 桩）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_coprocessor(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 10.11] 综合（栈+SWI+半字搬 VRAM）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_stage10_integration(nds);
         nds_destroy(nds);
     }
 

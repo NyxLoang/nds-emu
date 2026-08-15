@@ -155,3 +155,50 @@
 
 - `test_2d_scene`：顶屏 8bpp tile+tilemap+调色板 拼「红 tile0 + 绿 tile1 + 透明底」+ OBJ 蓝方块；
   底屏副引擎 8bpp tile 纯青。整条链路只经 DISPCNT/BGxCNT/OAM 寄存器，无线性 FB 写入。
+
+## 10.2 — 用例：移位操作数
+
+- `test_shifts`：LSL/LSR/ASR/ROR 立即与寄存器移位、ROR#0=RRX、移位进位更新，逐类断言。
+- **踩坑（测试）**：`ADD r10,r1,r2,LSL r9` 编码 Rs（bit11-8）误写 0，改 `0xE081A912`。
+
+## 10.3 — 用例：更多数据处理
+
+- `test_more_dataop`：MVN/BIC/ADC/SBC/RSB/RSC 结果、TST/TEQ/CMN 只动标志不写 Rd。
+
+## 10.4 — 用例：MRS/MSR
+
+- `test_mrs_msr`：MRS 读 CPSR/SPSR、MSR 字段写（控制字节 + 标志字节）、模式位保护、SPSR 写读回。
+- **踩坑（测试）**：`MSR SPSR,r4` 编码 bit22（SPSR 选择）误写 0，实为 `MSR CPSR`；改 `0xE16FF004`。
+
+## 10.5 — 用例：LDM/STM
+
+- `test_block_transfer`：LDMIA/STMDB（PUSH/POP 别名）、写回、寄存器列表位图，逐寄存器断言。
+
+## 10.6 — 用例：乘法
+
+- `test_mul`：MUL/MLA、UMULL/UMLAL/SMULL/SMLAL 高低 64 位结果。
+- **踩坑（测试）**：UMULL 编码 U-bit 反了（`0xE0C65190`→`0xE0865190`）；UMLAL 需先给 RdHi/RdLo 初值。
+
+## 10.7 — 用例：字节/半字访存
+
+- `test_byte_halfword`：LDRB/STRB/LDRH/STRH 边界与字节序、LDRSB/LDRSH 符号/零扩展、前后变址。
+
+## 10.8 — 用例：SWI
+
+- `test_swi`：SWI 后 `cpu->swi_num` 记录编号、PC 前进。
+
+## 10.9 — 用例：SWP
+
+- `test_swp`：SWP 交换后 Rd=旧内存值、内存=新寄存器值。
+- **踩坑（测试）**：SWP 编码 Rd（bit15-12）与 Rm（bit3-0）位序写反，改 `0xE1002091`。
+
+## 10.10 — 用例：MRC/MCR
+
+- `test_coprocessor`：MCR 写 CP15 寄存器、MRC 读回一致（按 CRn 索引桩）。
+
+## 10.11 — 用例：综合真码
+
+- `test_stage10_integration`：PUSH/POP + SWI + MUL + STRH 循环搬 VRAM，断言 PC 停机与 VRAM 结果。
+- **踩坑（测试）**：`MOV r4,#0x7C00` 编码误用 `0xE3A0447C`（带旋转），改 `0xE3A04C7C`（无旋转）。
+- 阶段 10 收尾全量 **204 项检查 0 失败**。
+

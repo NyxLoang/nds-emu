@@ -117,3 +117,61 @@
   让中断/FIFO 等按访问者身份分流。
 - **怎么验证**：`test_dual_core_step`——两核各跑 NOP，step 后 PC 均 +4、`is_arm7` 正确；`test_interleave`
   交错 2:1 跑 6 步，ARM9 cycles=4、ARM7 cycles=2。
+
+## 10.1 — 短文：为什么还需要这些指令
+
+- 新增 `docs/11-arm-instructions-full.md`：真码会用到移位、MRS/MSR（读 CPSR 看模式/中断）、
+  LDM/STM（PUSH/POP 进出栈）、乘法、字节/半字访存、SWI（进 BIOS）、SWP（同步原语）、MRC/MCR（CP15）。
+- 这些是阶段 11 BIOS HLE、阶段 12 中断跳转、阶段 14 真 BIOS 跑起来的先决条件。
+
+## 10.2 — 移位操作数 LSL/LSR/ASR/ROR
+
+- 新增 `shift_apply()`：LSL/LSR/ASR/ROR/RRX，正确处理移位量（立即 0-31 / 寄存器低 8 位）、
+  立即移位量 0 的语义（LSL#0 无移、LSR#0=0、ASR#0=符号扩展、ROR#0=RRX）与进位输出。
+- `decode_op2()`：bit4=0 立即移位、bit4=1 寄存器移位（Rs 在 bit11-8）；I=1 走 `arm_rotate`。
+- **踩坑**：初版把 bit4 含义搞反，导致 `ADD reg`/`SUB reg`/`AND`/`ORR`/`EOR` 全崩；查证后修正。
+
+## 10.3 — 更多数据处理
+
+- `exec_dataop` 补全 16 种 opcode：MVN/BIC/ADC/SBC/RSB/RSC（结果写 Rd）+ TST/TEQ/CMN（只更新标志）。
+- ADC/SBC 把 C 计入；RSB/RSC 交换减数被减数；逻辑运算（AND/EOR/ORR/TST/TEQ/BIC/MVN）按 S 位只更新 N/Z。
+
+## 10.4 — MRS/MSR
+
+- `cpu.h` 增 `spsr`（阶段 12 扩为数组）、`swi_num`、`cp15[16]`。
+- `msr_write()`：按 field 掩码写 CPSR/SPSR，模式位（低 5 位）受保护不可写。
+- **踩坑**：MRS 掩码 `0x0FFFF0FF` 误把 Rd（bit15-12）掩掉，只匹配 Rd=0；改 `0x0FFF0FFF`。
+  MSR 掩码改 `0x0FB0FFF0` 正确含 bit22（CPSR/SPSR 选择）。
+
+## 10.5 — LDM/STM（PUSH/POP）
+
+- `exec_block_transfer()`：IA/IB/DA/DB 四种寻址 + 写回；寄存器列表位图；PC 在列表时取 SPSR 恢复。
+- PUSH/POP 是 STMDB/ LDMIA 别名，覆盖真码进出栈。
+
+## 10.6 — 乘法
+
+- `exec_mul`：MUL/MLA；`exec_mul_long`：UMULL/UMLAL/SMULL/SMLAL（64 位结果写 RdHi:RdLo）。
+- **踩坑**：长乘 U-bit 与无符号/有符号语义相反——U=0 无符号、U=1 有符号，初版写反。
+
+## 10.7 — 字节/半字访存
+
+- `exec_single_transfer` 扩展 LDRB/STRB；新增 `exec_extra_transfer` 处理 LDRH/STRH/LDRSB/LDRSH。
+- 支持前/后变址、立即/寄存器偏移；LDRSB/LDRSH 符号扩展，LDRB/LDRH 零扩展。
+
+## 10.8 — SWI
+
+- 记录 24 位编号到 `cpu->swi_num`，本阶段不跳异常向量（阶段 11 BIOS HLE 在 `cpu_step` 前拦截）。
+
+## 10.9 — SWP/SWPB
+
+- `exec_swp`：`temp=mem[Rn]; mem[Rn]=Rm; Rd=temp`，寄存器与内存原子交换。
+
+## 10.10 — MRC/MCR（CP15 桩）
+
+- `exec_coprocessor`：CRn 索引写入/读回 `cpu->cp15[]`，暂不含真实控制语义（阶段 14 真 BIOS 前补齐）。
+
+## 10.11 — 综合：新指令真码
+
+- 真码序列：PUSH 保存现场 → SWI 记录号 → MUL 乘法 → LDM/STM 搬数 → STRH 循环写 VRAM → POP 恢复。
+- 204 项检查 0 失败。
+

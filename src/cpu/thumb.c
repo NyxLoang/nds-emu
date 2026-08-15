@@ -354,7 +354,7 @@ int thumb_step(arm_cpu_t *cpu, uint16_t insn)
     }
 
     /* 未实现 Thumb 指令：触发未定义异常。 */
-    if (g_trace)
+    if (g_trace || cpu->nds->bus->diag)
         printf("cpu: PC=%08X thumb insn=%04X undefined (cycles=%llu)\n",
                cpu->r[15], insn, (unsigned long long)cpu->cycles);
     arm_exception(cpu, EXC_UNDEF_OFF, ARM_MODE_UND, 4);

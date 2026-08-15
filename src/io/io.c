@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include "io.h"
 #include "bus/bus.h"
@@ -55,6 +56,19 @@ static void io_card_dma_check(io_t *io)
         dma_fire(&io->dma, io->bus, DMA_START_CARD);
 }
 
+/* 诊断：记录「首次访问的未知 IO 地址」，避免游戏轮询同一寄存器（如 VCOUNT）刷屏。 */
+static uint32_t io_seen[256];
+static int io_seen_count = 0;
+static int io_addr_first_seen(uint32_t addr)
+{
+    for (int i = 0; i < io_seen_count; i++)
+        if (io_seen[i] == addr)
+            return 0;
+    if (io_seen_count < (int)(sizeof(io_seen) / sizeof(io_seen[0])))
+        io_seen[io_seen_count++] = addr;
+    return 1;
+}
+
 /* 按地址分发到对应功能文件。未实现的寄存器地址：读 0、写忽略。 */
 uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
 {
@@ -78,6 +92,8 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return gx_read8(&io->gx, addr);
     if (snd_is_addr(addr) && is_arm7)
         return snd_read8(&io->snd, addr);
+    if (io->bus != NULL && io->bus->diag && io_addr_first_seen(addr))
+        printf("io: read  unknown addr=%08X (arm7=%d)\n", addr, is_arm7);
     return 0;
 }
 
@@ -139,6 +155,8 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         return;
     }
     /* 其余 IO 地址：写忽略（沿用阶段 2 的桩语义） */
+    if (io->bus != NULL && io->bus->diag && io_addr_first_seen(addr))
+        printf("io: write unknown addr=%08X val=%02X (arm7=%d)\n", addr, val, is_arm7);
 }
 
 /* FIFO 32 位收发（bus 对 0x04000188 写 / 0x04100000 读整体转发） */

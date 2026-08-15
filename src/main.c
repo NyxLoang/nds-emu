@@ -13,6 +13,7 @@
 #include "bus/bus.h"
 #include "cpu/cpu.h"
 #include "cpu/exec.h"
+#include "cpu/thumb.h"
 #include "io/io.h"
 #include "snd/snd.h"
 #include "ppu/ppu.h"
@@ -232,6 +233,41 @@ static char *make_save_path(const char *rom_path)
 }
 #endif
 
+/* 阶段 21 bring-up：headless 跑 N 步，只打印诊断事件与周期性进度，最后打印两核状态。
+   用于在不开窗口/音频的情况下定位 ROM 的第一个卡点。 */
+static void run_headless(nds_t *nds, uint64_t steps, int trace)
+{
+    bus_set_diag(nds->bus, 1);      /* 只打异常事件：未知 SWI/未实现指令/未知 IO */
+    exec_set_trace(trace);          /* trace=1 时逐条打印指令，用于追前几十步 */
+    thumb_set_trace(trace);
+
+    printf("headless: running %llu steps (ARM9:ARM7 = 2:1)\n",
+           (unsigned long long)steps);
+    fflush(stdout);
+
+    for (uint64_t i = 0; i < steps; i++) {
+        if (i % 3 == 2)
+            cpu_step(nds->cpu7);
+        else
+            cpu_step(nds->cpu);
+
+        /* 近似一帧（约 100 万步）触发一次 VBlank，模拟显示硬件，让等 VBlank 的游戏能继续 */
+        if ((i & 0xFFFFFu) == 0xFFFFFu)
+            io_set_vblank(nds->io);
+        /* 每 100 万步打一次进度 */
+        if ((i & 0xFFFFFu) == 0xFFFFFu)
+            printf("headless: step=%llu ARM9 PC=%08X cyc=%llu | ARM7 PC=%08X cyc=%llu\n",
+                   (unsigned long long)(i + 1),
+                   nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
+                   nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles);
+    }
+
+    printf("headless: done. ARM9 PC=%08X cyc=%llu | ARM7 PC=%08X cyc=%llu\n",
+           nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
+           nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles);
+    fflush(stdout);
+}
+
 int main(int argc, char *argv[])
 {
     (void)argc;
@@ -245,36 +281,32 @@ int main(int argc, char *argv[])
     const char *rom_path = (argc > 1) ? argv[1] : NULL;
 #endif
 
-    char err[256];
-    if (window_init(err, sizeof err) != 0) {
-        fprintf(stderr, "%s\n", err);
-        return 1;
+    /* 阶段 21 bring-up：`--headless N` 跑 N 步后退出（不开窗口/音频），定位第一个卡点 */
+    long headless_steps = 0;
+    int headless_trace = 0;
+#ifdef _WIN32
+    for (int i = 1; i < wargc; i++) {
+        if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
+            headless_steps = wcstol(wargv[i + 1], NULL, 10);
+        else if (wcscmp(wargv[i], L"--trace") == 0)
+            headless_trace = 1;
     }
-    SDL_Renderer *renderer = window_get_renderer();
+#else
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--headless") == 0 && i + 1 < argc)
+            headless_steps = strtol(argv[i + 1], NULL, 10);
+        else if (strcmp(argv[i], "--trace") == 0)
+            headless_trace = 1;
+    }
+#endif
 
-    if (menu_init(renderer) != 0) {
-        fprintf(stderr, "menu_init failed, TTF error: %s\n", TTF_GetError());
-        window_shutdown();
-        return 1;
-    }
+    char err[256];
 
     /* 一台空机器：整机状态容器，bus 已挂入。
-       必须先建 nds，后续装载镜像时才有可写的 Main RAM。 */
+       必须先建 nds，后续装载镜像时才有可写的 Main RAM。headless 诊断也用它。 */
     nds_t *nds = nds_create();
     if (nds == NULL) {
         fprintf(stderr, "nds_create failed\n");
-        menu_shutdown();
-        window_shutdown();
-        return 1;
-    }
-
-    /* 阶段 4.3：ppu 把 VRAM framebuffer 转成 SDL 纹理（渲染器来自 window） */
-    ppu_t *ppu = ppu_create(nds, renderer);
-    if (ppu == NULL) {
-        fprintf(stderr, "ppu_create failed\n");
-        menu_shutdown();
-        window_shutdown();
-        nds_destroy(nds);
         return 1;
     }
 
@@ -294,8 +326,6 @@ int main(int argc, char *argv[])
 #endif
         if (cart == NULL) {
             fprintf(stderr, "%s\n", err);
-            menu_shutdown();
-            window_shutdown();
             nds_destroy(nds);
             return 1;
         }
@@ -342,25 +372,36 @@ int main(int argc, char *argv[])
                 printf("cpu   : reset PC=%08X\n", hdr.arm9.entry);
             }
 
-            /* 阶段 8.3：把 ARM7 镜像逐字节写进 ARM7 WRAM（0x03800000）。
-               与 ARM9 装载对称：逐字节走 bus_write8，再读回验证。 */
+            /* 阶段 8.3：把 ARM7 镜像逐字节写进头里 ram 字段指向的目标区。
+               该地址可能是 Main RAM（如 FFXII 的 0x02380000）或 ARM7 WRAM（0x03800000），
+               故按目标区范围校验，而不是固定 64KB WRAM。 */
             if (hdr.arm7.offset + hdr.arm7.size > cart->size) {
                 printf("image : arm7 out of file range\n");
-            } else if (hdr.arm7.size > BUS_ARM7_WRAM_SIZE) {
-                printf("image : arm7 too large for WRAM (%u bytes)\n",
-                       hdr.arm7.size);
             } else {
-                for (uint32_t i = 0; i < hdr.arm7.size; i++)
-                    bus_write8(nds->bus, hdr.arm7.ram + i,
-                               cart->data[hdr.arm7.offset + i]);
+                uint32_t a7_end = hdr.arm7.ram + hdr.arm7.size;
+                int a7_ok = 0;
+                if (hdr.arm7.ram >= BUS_MAIN_RAM_BASE &&
+                    a7_end <= BUS_MAIN_RAM_BASE + BUS_MAIN_RAM_SIZE)
+                    a7_ok = 1;
+                else if (hdr.arm7.ram >= BUS_ARM7_WRAM_BASE &&
+                         a7_end <= BUS_ARM7_WRAM_BASE + BUS_ARM7_WRAM_SIZE)
+                    a7_ok = 1;
+                if (!a7_ok) {
+                    printf("image : arm7 target 0x%08X out of range (%u bytes)\n",
+                           hdr.arm7.ram, hdr.arm7.size);
+                } else {
+                    for (uint32_t i = 0; i < hdr.arm7.size; i++)
+                        bus_write8(nds->bus, hdr.arm7.ram + i,
+                                   cart->data[hdr.arm7.offset + i]);
 
-                uint32_t readback7 = bus_read32(nds->bus, hdr.arm7.ram);
-                printf("image : loaded %u bytes into ARM7 WRAM @ %08X, first word readback %08X\n",
-                       hdr.arm7.size, hdr.arm7.ram, readback7);
+                    uint32_t readback7 = bus_read32(nds->bus, hdr.arm7.ram);
+                    printf("image : loaded %u bytes into ARM7 RAM @ %08X, first word readback %08X\n",
+                           hdr.arm7.size, hdr.arm7.ram, readback7);
 
-                /* 阶段 8.3：ARM7 镜像就位，让第二颗 CPU 从 ARM7 入口开始执行 */
-                cpu_reset(nds->cpu7, hdr.arm7.entry);
-                printf("cpu7  : reset PC=%08X\n", hdr.arm7.entry);
+                    /* 阶段 8.3：ARM7 镜像就位，让第二颗 CPU 从 ARM7 入口开始执行 */
+                    cpu_reset(nds->cpu7, hdr.arm7.entry);
+                    printf("cpu7  : reset PC=%08X\n", hdr.arm7.entry);
+                }
             }
         }
 
@@ -388,14 +429,49 @@ int main(int argc, char *argv[])
 #endif
 
         fflush(stdout);
+    }
 #ifdef _WIN32
-        LocalFree(wargv);
+    LocalFree(wargv);
 #endif
+
+    /* 阶段 21 bring-up：headless 模式下跑完 N 步即退出，不开窗口/音频 */
+    if (headless_steps > 0) {
+        run_headless(nds, (uint64_t)headless_steps, headless_trace);
+        if (save_path != NULL)
+            free(save_path);
+        cart_free(cart);
+        nds_destroy(nds);
+        return 0;
     }
 
-    /* 阶段 9.7：真 2D 演示——通过 DISPCNT/BGxCNT/tile/tilemap/调色板/OBJ 出图，
-       不再依赖旧的「VRAM 偏移 = 屏幕 framebuffer」约定。 */
-    if (nds->cpu != NULL) {
+    if (window_init(err, sizeof err) != 0) {
+        fprintf(stderr, "%s\n", err);
+        cart_free(cart);
+        nds_destroy(nds);
+        return 1;
+    }
+    SDL_Renderer *renderer = window_get_renderer();
+
+    if (menu_init(renderer) != 0) {
+        fprintf(stderr, "menu_init failed, TTF error: %s\n", TTF_GetError());
+        window_shutdown();
+        cart_free(cart);
+        nds_destroy(nds);
+        return 1;
+    }
+
+    /* 阶段 4.3：ppu 把 VRAM framebuffer 转成 SDL 纹理（渲染器来自 window） */
+    ppu_t *ppu = ppu_create(nds, renderer);
+    if (ppu == NULL) {
+        fprintf(stderr, "ppu_create failed\n");
+        menu_shutdown();
+        window_shutdown();
+        nds_destroy(nds);
+        return 1;
+    }
+
+    /* 阶段 9.7：真 2D 演示——只在未装载 ROM 时跑；有 ROM 时让 ROM 自己驱动画面。 */
+    if (rom_path == NULL && nds->cpu != NULL) {
         setup_2d_demo(nds);
         setup_audio_demo(nds);
 

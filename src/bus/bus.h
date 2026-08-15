@@ -63,10 +63,14 @@ typedef struct bus {
     uint8_t  oam[BUS_OAM_SIZE];           /* OAM：2KB（OBJ 属性） */
     io_t    *io;                          /* IO 寄存器区实现（由 nds 挂入） */
     int active_is_arm7;                   /* 当前访问者身份：0=ARM9, 1=ARM7 */
+    int diag;                             /* 诊断开关：只打印异常事件（未知 SWI/未实现指令/未知 IO），供 bring-up 定位卡点 */
 } bus_t;
 
 bus_t *bus_create(void);
 void bus_destroy(bus_t *bus);
+
+/* 诊断开关：on=1 时，未实现指令 / 未知 SWI / 未知 IO 访问打印一次日志（阶段 21 bring-up）。 */
+void bus_set_diag(bus_t *bus, int on);
 
 /* 按 8 位读写一个字节。
    地址换算规则：把总线地址减去区间基址，得到该数组的下标

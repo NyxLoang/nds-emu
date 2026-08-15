@@ -13,6 +13,12 @@ void bus_destroy(bus_t *bus)
     free(bus);
 }
 
+void bus_set_diag(bus_t *bus, int on)
+{
+    if (bus != NULL)
+        bus->diag = on;
+}
+
 /* 地址换算核心：判断 addr 落在哪个内存区间，填出「区间数组指针 + 偏移」。
    命中返回 1；未映射（含 IO 桩区间）返回 0，调用方按「读 0 / 写忽略」处理。
    换算规则：区间内下标 = addr - 区间基址（如 0x02000100 - 0x02000000 = 0x100）。

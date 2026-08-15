@@ -54,6 +54,14 @@ static void set_c(uint32_t v, arm_cpu_t *cpu)
     if (v) cpu->cpsr |= CPSR_C; else cpu->cpsr &= ~CPSR_C;
 }
 
+/* 读通用寄存器：r15 在 ARM 架构上 = 当前指令地址 + 8（三级流水线），并按 4 字节对齐。
+   所有「把 r15 当普通寄存器读」的地方（字面量装载/数据运算源/基址）都必须走这里，
+   否则 PC 相对寻址会少算 8 字节，读错字面量池。 */
+static uint32_t read_reg(const arm_cpu_t *cpu, unsigned r)
+{
+    return (r == 15) ? ((cpu->r[15] & ~3u) + 8u) : cpu->r[r];
+}
+
 /* 3b.2 立即数旋转：ARM 立即数 = imm8 循环右移 (rot4*2) 位。
    这是 ARM 立即数的经典编码，能把 0x00-0xFF 旋转成其它位型。 */
 static uint32_t arm_rotate(uint32_t imm8, unsigned rot4)
@@ -110,11 +118,11 @@ static uint32_t decode_op2(const arm_cpu_t *cpu, uint32_t insn, uint32_t *carry_
         *carry_out = (imm8 >> (rot - 1)) & 1u;
         return arm_rotate(imm8, rot4);
     }
-    uint32_t rm = cpu->r[insn & 0xFu];
+    uint32_t rm = read_reg(cpu, insn & 0xFu);
     unsigned type = (insn >> 5) & 3u;
     if (insn & (1u << 4)) { /* bit4=1：寄存器移位（Rs 低字节为移位量） */
         unsigned rs = (insn >> 8) & 0xFu;
-        uint32_t amount = cpu->r[rs] & 0xFFu;
+        uint32_t amount = read_reg(cpu, rs) & 0xFFu;
         if (amount == 0) { *carry_out = c; return rm; }
         return shift_apply(rm, type, amount, c, carry_out);
     }
@@ -142,7 +150,7 @@ static void exec_dataop(arm_cpu_t *cpu, uint32_t insn, uint32_t op2, uint32_t ca
     unsigned s = (insn >> 20) & 1u;
     unsigned rn = (insn >> 16) & 0xFu;
     unsigned rd = (insn >> 12) & 0xFu;
-    uint32_t a = cpu->r[rn];
+    uint32_t a = read_reg(cpu, rn);
     uint32_t result;
     uint32_t c_in = (cpu->cpsr & CPSR_C) ? 1u : 0u;
 
@@ -249,7 +257,7 @@ static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
              w = (insn >> 21) & 1u, l = (insn >> 20) & 1u;
     unsigned rn = (insn >> 16) & 0xFu;
     uint32_t list = insn & 0xFFFFu;
-    uint32_t rn_val = cpu->r[rn];
+    uint32_t rn_val = read_reg(cpu, rn);
 
     int n = 0;
     for (int i = 0; i < 16; i++) if (list & (1u << i)) n++;
@@ -316,11 +324,11 @@ static void exec_single_transfer(arm_cpu_t *cpu, uint32_t insn)
     unsigned p = (insn >> 24) & 1u, u = (insn >> 23) & 1u,
              b = (insn >> 22) & 1u, w = (insn >> 21) & 1u, l = (insn >> 20) & 1u;
     unsigned rn = (insn >> 16) & 0xFu, rd = (insn >> 12) & 0xFu;
-    uint32_t rn_val = cpu->r[rn];
+    uint32_t rn_val = read_reg(cpu, rn);
     uint32_t offset;
 
     if (insn & (1u << 25)) { /* 寄存器偏移（可移位） */
-        uint32_t rm = cpu->r[insn & 0xFu];
+        uint32_t rm = read_reg(cpu, insn & 0xFu);
         unsigned type = (insn >> 5) & 3u;
         uint32_t amount = (insn >> 7) & 0x1Fu;
         uint32_t co;
@@ -354,11 +362,11 @@ static void exec_extra_transfer(arm_cpu_t *cpu, uint32_t insn)
              i_bit = (insn >> 22) & 1u, w = (insn >> 21) & 1u, l = (insn >> 20) & 1u;
     unsigned rn = (insn >> 16) & 0xFu, rd = (insn >> 12) & 0xFu;
     unsigned s_bit = (insn >> 6) & 1u, h_bit = (insn >> 5) & 1u;
-    uint32_t rn_val = cpu->r[rn];
+    uint32_t rn_val = read_reg(cpu, rn);
     uint32_t offset;
 
     if (i_bit) offset = ((insn >> 4) & 0xF0u) | (insn & 0xFu); /* 8 位立即数拼装 */
-    else       offset = cpu->r[insn & 0xFu];
+    else       offset = read_reg(cpu, insn & 0xFu);
 
     uint32_t addr = u ? rn_val + offset : rn_val - offset;
     if (p == 0) addr = rn_val;
@@ -387,7 +395,7 @@ static void exec_swp(arm_cpu_t *cpu, uint32_t insn)
 {
     unsigned b = (insn >> 22) & 1u;
     unsigned rn = (insn >> 16) & 0xFu, rd = (insn >> 12) & 0xFu, rm = insn & 0xFu;
-    uint32_t addr = cpu->r[rn];
+    uint32_t addr = read_reg(cpu, rn);
     uint32_t old = b ? bus_read8(cpu->nds->bus, addr) : bus_read32(cpu->nds->bus, addr);
     if (b) bus_write8(cpu->nds->bus, addr, (uint8_t)cpu->r[rm]);
     else   bus_write32(cpu->nds->bus, addr, cpu->r[rm]);
@@ -604,7 +612,7 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
     }
 
     /* 其余未实现指令：触发未定义指令异常（12.2），跳到向量 0x04（不再打印后继续）。 */
-    if (g_trace)
+    if (g_trace || cpu->nds->bus->diag)
         printf("cpu: PC=%08X insn=%08X undefined (cycles=%llu)\n",
                cpu->r[15], insn, (unsigned long long)cpu->cycles);
     arm_exception(cpu, EXC_UNDEF_OFF, ARM_MODE_UND, 4);

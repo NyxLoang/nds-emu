@@ -25,9 +25,17 @@ int bios_dispatch(uint32_t n, arm_cpu_t *cpu)
     case BIOS_SWI_INTR_WAIT:        return bios_intr_wait(cpu);
     case BIOS_SWI_VBLANK_INTR_WAIT: return bios_vblank_intr_wait(cpu);
     case BIOS_SWI_WAIT_BY_LOOP:     return bios_wait_by_loop(cpu);
-    /* SoftReset / RegisterRamReset / GetCRC16 等本阶段未实现，仅记录 */
+    /* SoftReset / RegisterRamReset / GetCRC16 等本阶段未实现，仅记录。
+       用位图保证每个未知号只打印一次，避免游戏循环调用时刷屏。 */
     default:
-        printf("bios: unknown SWI 0x%02X at PC=%08X\n", n, cpu->r[15]);
+    {
+        static uint32_t unknown_swi_seen[8]; /* 256 个函数号 → 8×32 位位图 */
+        unsigned idx = (unsigned)n >> 5, bit = (unsigned)n & 31u;
+        if (!(unknown_swi_seen[idx] & (1u << bit))) {
+            unknown_swi_seen[idx] |= (1u << bit);
+            printf("bios: unknown SWI 0x%02X at PC=%08X\n", (unsigned)n, cpu->r[15]);
+        }
         return BIOS_RET_UNKNOWN;
+    }
     }
 }

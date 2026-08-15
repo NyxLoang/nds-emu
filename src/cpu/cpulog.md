@@ -175,3 +175,36 @@
 - 真码序列：PUSH 保存现场 → SWI 记录号 → MUL 乘法 → LDM/STM 搬数 → STRH 循环写 VRAM → POP 恢复。
 - 204 项检查 0 失败。
 
+## 12.1 — 短文：特权模式 / CPSR 模式位 / 异常向量表
+
+- 新增 `docs/13-exceptions-modes.md`：7 种特权模式（M[4:0]）、CPSR 的 I/F/T 控制位、异常向量偏移表
+  （复位 0x00 / 未定义 0x04 / SWI 0x08 / 取指中止 0x0C / 数据中止 0x10 / IRQ 0x18 / FIQ 0x1C）。
+
+## 12.2 — 异常向量
+
+- `exec.h` 增 CPSR I/F/T/模式位常量、`ARM_MODE_*`、`EXC_*_OFF` 向量偏移。
+- `cpu.h` 的 `spsr` 扩为 `spsr[5]`（FIQ/IRQ/SVC/ABT/UND 各一份，User/System 无），增 `vector_base`。
+- 新增 `arm_exception()`：SPSR_<模式>=CPSR → 切模式 → IRQ 关 I / FIQ 关 I+F → LR=PC+lr_adjust → PC=向量。
+- `exec_step`：未实现指令不再「打印后继续」，改触发未定义异常（0x04）；未知 SWI 落入 SWI 异常（0x08）。
+- `cpu_create`：`vector_base` = ARM9 高向量 `0xFFFF0000`、ARM7 低向量 `0x00000000`。
+
+## 12.3 — CPSR 模式切换 + SPSR 保存/恢复
+
+- `msr_write` 放开模式位保护，`MSR CPSR_c` 可切特权模式。
+- `exec_spsr_index(mode)`：特权模式 → `spsr[5]` 下标；MRS/MSR SPSR 改为读写当前模式的 SPSR。
+- `exec_dataop`：S=1 且 Rd=PC（`SUBS pc`/`MOVS pc`）时用当前模式 SPSR 恢复 CPSR（异常返回）。
+- `exec_block_transfer`：`LDM ... ^`（S 且列表含 PC）加载 PC 后用 SPSR 恢复 CPSR。
+- **修复**：`exec_step` 在 LDM/数据运算/LDR/LDRH 等写 PC 后仍 `r[15]+=4`，覆盖跳转地址；改为
+  「写 PC（Rd=15 / 列表含 PC）则不再 +4」，异常返回与 `LDR pc,[sp],#4` 才正确。
+
+## 12.4 — CP15 控制寄存器
+
+- `exec_coprocessor`：MCR 写 c1 后按 bit13(V) 联动 `vector_base`（0=低向量 / 1=高向量）；
+  cache/MMU 使能位只存储不生效（后续阶段用）。其余 CRn 仍按索引读写。
+
+## 12.5 — IRQ 真实响应
+
+- `cpu_step`：取指前检查本核 `irq_pending && !(cpsr & CPSR_I)`，满足则进 IRQ 异常（0x18），
+  被打断指令地址经 LR 留给 handler；handler `SUBS pc, lr, #4` 返回并恢复 CPSR。
+- 阶段 12 完成：282 项检查 0 失败。
+

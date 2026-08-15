@@ -126,3 +126,9 @@
 | 2026-08-15 | 11.6 | BIOS | 等待 Halt(0x06)/IntrWait(0x04)/VBlankIntrWait(0x05)（PC 不动等价等待） | [bios](src/bios/bioslog.md) |
 | 2026-08-15 | 11.7 | BIOS/测试 | 综合真码（LZ77 解压到 VRAM + Div + Sqrt 串行）；256 项检查 0 失败 | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) |
 | 2026-08-15 | 11 完成 | 收尾 | 阶段 11 完成：BIOS HLE + SWI 分发（`src/bios/` 模块 + 除法/开方/搬移/解压/等待） | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 12.1 | 预习/CPU | 新增 `docs/13-exceptions-modes.md`：特权模式/CPSR 模式位/异常向量表 | [13](docs/13-exceptions-modes.md) · [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 12.2 | CPU | 异常向量：`arm_exception` + `vector_base`（ARM9 高/ARM7 低）；未定义→0x04、未知 SWI→0x08 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 12.3 | CPU | CPSR 模式切换 + SPSR 分槽 `spsr[5]` 保存/恢复（MSR 切模式、`SUBS pc`/`LDM ^` 恢复）；修「写 PC 后又 +4」跳转 bug | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 12.4 | CPU | CP15 c1 的 V 位联动 `vector_base`（cache/MMU 使能位先存不生效） | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 12.5 | CPU | IRQ 真实响应：取指前查 pending 进 handler、`SUBS pc,lr,#4` 返回 | [cpu](src/cpu/cpulog.md) |
+| 2026-08-15 | 12 完成 | 收尾 | 阶段 12 完成：CP15 + 异常向量 + 中断真实化；282 项检查 0 失败 | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |

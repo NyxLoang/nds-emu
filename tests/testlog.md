@@ -227,3 +227,29 @@
 - `test_stage11_integration`：LZ77 解压到 VRAM → Div → Sqrt 串行，断言 VRAM 内容与寄存器。
 - 阶段 11 收尾全量 **256 项检查 0 失败**。
 
+## 12.2 — 用例：异常向量
+
+- `test_exception_vector_undef`：向量表装到 Main RAM（`vector_base=0x02004000`），`LDC`（模拟器未实现）
+  触发未定义异常，断言 PC=vec+0x04、模式=UND、SPSR 保存旧 CPSR、LR=PC+4。
+- `test_exception_vector_swi`：未知 SWI（`SWI 0`）落入 SWI 向量 0x08，模式切 SVC。
+
+## 12.3 — 用例：模式切换 + SPSR 分槽/恢复
+
+- `test_mrs_msr` 改写：`MSR CPSR_c` 可切 IRQ 模式（旧版「模式位保护」断言废止），SPSR 改为
+  `spsr[5]` 分槽读写（SPSR_IRQ 与 SPSR_SVC 互不影响）。
+- `test_spsr_restore`：`LDMIA sp!, {pc}^` 加载 PC + 用 SPSR 恢复 CPSR。
+
+## 12.4 — 用例：CP15 c1 控制向量基址
+
+- `test_cp15_control`：MCR 写 c1 的 V 位（bit13）联动 `vector_base`（0→低向量、0x2000→高向量）。
+
+## 12.5 — 用例：IRQ 真实响应
+
+- `test_irq_response`：向量表装 handler（`SUBS pc, lr, #4`），预置 IE/IF/IME 后取指前触发 IRQ——
+  断言 PC=vec+0x18、模式=IRQ、I 置位、SPSR 保存 User CPSR；再执行 handler 返回断言 PC/模式/I 恢复。
+- **踩坑（回归）**：给 CPU 加真实 IRQ 后，阶段 11 的 `test_bios_wait`（Halt 分支）因残留 `IME=1` +
+  手动置 `IE/IF` 而误入 IRQ 向量；在 Halt 分支显式 `IME=0` 隔离 HLE 轮询语义与真实 IRQ 路径。
+- **踩坑（回归）**：`exec_step` 对「写 PC 的指令」仍 `r[15]+=4`，导致 `SUBS pc`/`LDM {pc}^`/`LDR pc`
+  的跳转目标被 +4 覆盖；修复后异常返回正确。
+- 阶段 12 收尾全量 **282 项检查 0 失败**。
+

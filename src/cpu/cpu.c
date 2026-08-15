@@ -13,6 +13,8 @@ arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc, int is_arm7)
     cpu->is_arm7 = is_arm7;
     /* r15 = PC，初始指向镜像入口；cpsr 清零（真机复位后是 SVC 模式，此处简化） */
     cpu->r[15] = reset_pc;
+    /* 异常向量基址：ARM9 用高向量 0xFFFF0000，ARM7 用低向量 0x00000000（阶段 12） */
+    cpu->vector_base = is_arm7 ? 0x00000000u : 0xFFFF0000u;
     return cpu;
 }
 
@@ -40,11 +42,19 @@ uint32_t cpu_fetch(const arm_cpu_t *cpu)
    返回 0 表示停机（本阶段总是返回 1，停机由死循环达成）。 */
 int cpu_step(arm_cpu_t *cpu)
 {
-    uint32_t insn = cpu_fetch(cpu);
-    cpu->cycles++;
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
     /* 6.5：一条指令 ≈ 一个周期，推进所有使能定时器（分频在 timer.c 内处理） */
     io_advance_timers(cpu->nds->io);
+    /* 12.5：取指前检查 IRQ。条件 = 该核 IF&IE&IME 挂起，且 CPSR 的 I 位未禁止。
+       满足则进 IRQ 异常向量（0x18），PC 跳到 handler；被打断指令地址留作返回点。 */
+    irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
+    if (irq_pending(irq) && !(cpu->cpsr & CPSR_I)) {
+        cpu->cycles++;
+        arm_exception(cpu, EXC_IRQ_OFF, ARM_MODE_IRQ, 4);
+        return 1;
+    }
+    uint32_t insn = cpu_fetch(cpu);
+    cpu->cycles++;
     return exec_step(cpu, insn);
 }

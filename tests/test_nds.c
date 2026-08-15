@@ -1150,7 +1150,7 @@ static void test_more_dataop(nds_t *nds)
     CHECK_EQ("dop Z flag set", (nds->cpu->cpsr & CPSR_Z) ? 1u : 0u, 1u);
 }
 
-/* ---- 10.4 用例：MRS/MSR 读/写 CPSR/SPSR（含字段掩码与模式位保护） ---- */
+/* ---- 10.4/12.3 用例：MRS/MSR 读/写 CPSR/SPSR（含模式切换 + spsr[5] 分槽） ---- */
 static void test_mrs_msr(nds_t *nds)
 {
     const uint32_t base = BUS_MAIN_RAM_BASE;
@@ -1158,29 +1158,31 @@ static void test_mrs_msr(nds_t *nds)
 
     static const uint32_t prog[] = {
         /* 0x00 */ 0xE10F0000, /* MRS r0, CPSR         r0 = cpsr */
-        /* 0x04 */ 0xE3A010DF, /* MOV r1, #0xDF        r1 = 0xDF */
-        /* 0x08 */ 0xE121F001, /* MSR CPSR_c, r1       cpsr 控制字节(bit7-5)写入 */
+        /* 0x04 */ 0xE3A010D2, /* MOV r1, #0xD2        r1 = 控制字节（模式 IRQ + I=1 + F=1） */
+        /* 0x08 */ 0xE121F001, /* MSR CPSR_c, r1       cpsr 控制字节(bit7-0)写入 → 切 IRQ */
         /* 0x0C */ 0xE10F2000, /* MRS r2, CPSR         r2 = 新 cpsr */
-        /* 0x10 */ 0xE14F3000, /* MRS r3, SPSR         r3 = spsr */
+        /* 0x10 */ 0xE14F3000, /* MRS r3, SPSR         r3 = 当前模式(IRQ)的 spsr[1] */
         /* 0x14 */ 0xE3A04055, /* MOV r4, #0x55        r4 = 0x55 */
-        /* 0x18 */ 0xE16FF004, /* MSR SPSR, r4         spsr = 0x55 */
+        /* 0x18 */ 0xE16FF004, /* MSR SPSR, r4         spsr[IRQ] = 0x55 */
         /* 0x1C */ 0xEAFFFFFE, /* B self */
     };
 
-    /* 预置：N=0 Z=0 C=1 V=0 + 模式 0x13(SVC) */
+    /* 预置：N=0 Z=0 C=1 V=0 + 模式 0x13(SVC)；SPSR_IRQ[1] = 0x12345678 */
     cpu->cpsr = 0x20000013u;
-    cpu->spsr = 0x12345678u;
+    cpu->spsr[exec_spsr_index(ARM_MODE_IRQ)] = 0x12345678u;
 
     run_program(nds, base, prog, sizeof prog / sizeof prog[0],
                 base, base + 0x1C, 32);
 
     CHECK_EQ("mrs r0 = cpsr", cpu->r[0], 0x20000013u);
-    /* MSR CPSR_c：bit7-5 写入 0xDF→0xC0，模式位(bit4-0)保留 0x13 → 控制字节 0xD3 */
-    CHECK_EQ("mrs r2 control byte", cpu->r[2] & 0xFFu, 0xD3u);
-    CHECK_EQ("mrs r2 flags preserved", cpu->r[2] & 0xF0000000u, 0x20000000u);
-    CHECK_EQ("mrs r2 mode preserved", cpu->r[2] & 0x1Fu, 0x13u);
-    CHECK_EQ("mrs r3 = spsr", cpu->r[3], 0x12345678u);
-    CHECK_EQ("msr spsr written", cpu->spsr, 0x55u);
+    /* MSR CPSR_c：控制字节 0xD2 写入 → 标志位保留 0x20000000 + 模式 IRQ(0x12) + I/F 置位 */
+    CHECK_EQ("mrs r2 = new cpsr", cpu->r[2], 0x200000D2u);
+    CHECK_EQ("mrs r2 mode = IRQ", cpu->r[2] & CPSR_MODE_MASK, ARM_MODE_IRQ);
+    CHECK_EQ("mrs r2 I set", (cpu->r[2] & CPSR_I) ? 1u : 0u, 1u);
+    CHECK_EQ("mrs r2 F set", (cpu->r[2] & CPSR_F) ? 1u : 0u, 1u);
+    CHECK_EQ("mrs r3 = spsr[IRQ]", cpu->r[3], 0x12345678u);
+    CHECK_EQ("msr spsr[IRQ] written", cpu->spsr[exec_spsr_index(ARM_MODE_IRQ)], 0x55u);
+    CHECK_EQ("msr spsr[SVC] untouched", cpu->spsr[exec_spsr_index(ARM_MODE_SVC)], 0u);
 }
 
 /* ---- 10.5 用例：LDM/STM（含 PUSH/POP 别名，DB/IA 模式 + 写回） ---- */
@@ -1293,19 +1295,19 @@ static void test_byte_halfword(nds_t *nds)
     CHECK_EQ("bhw LDR post r0",   nds->cpu->r[0], data + 4);
 }
 
-/* ---- 10.8 用例：SWI 记录软件中断号、继续执行 ---- */
+/* ---- 10.8 用例：SWI 记录软件中断号、继续执行（已知号走 BIOS HLE） ---- */
 static void test_swi(nds_t *nds)
 {
     const uint32_t base = BUS_MAIN_RAM_BASE;
     static const uint32_t prog[] = {
-        /* 0x00 */ 0xEF000123, /* SWI 0x123 */
+        /* 0x00 */ 0xEF030000, /* SWI 0x03 (WaitByLoop，已知号 → HLE 处理后继续) */
         /* 0x04 */ 0xE3A00005, /* MOV r0, #5（应继续执行） */
         /* 0x08 */ 0xEAFFFFFE, /* B self */
     };
     run_program(nds, base, prog, sizeof prog / sizeof prog[0],
                 base, base + 0x08, 16);
 
-    CHECK_EQ("swi num recorded", nds->cpu->swi_num, 0x123u);
+    CHECK_EQ("swi num recorded", nds->cpu->swi_num, 0x030000u);
     CHECK_EQ("swi continues", nds->cpu->r[0], 5u);
     CHECK_EQ("swi PC at halt", nds->cpu->r[15], base + 0x08);
 }
@@ -1366,7 +1368,7 @@ static void test_stage10_integration(nds_t *nds)
         /* 0x1C */ 0xE3A0000A, /* MOV r0, #10 */
         /* 0x20 */ 0xE3A01014, /* MOV r1, #20 */
         /* 0x24 */ 0xE0020091, /* MUL r2, r1, r0        r2 = 200 */
-        /* 0x28 */ 0xEF00001A, /* SWI 0x1A */
+        /* 0x28 */ 0xEF030000, /* SWI 0x03 (WaitByLoop，已知号 → HLE 继续) */
         /* 0x2C */ 0xE3A03406, /* MOV r3, #0x06000000   r3 = VRAM */
         /* 0x30 */ 0xE3A04C7C, /* MOV r4, #0x7C00       r4 = 红 */
         /* 0x34 */ 0xE3A05010, /* MOV r5, #16           r5 = 16 半字 */
@@ -1382,7 +1384,7 @@ static void test_stage10_integration(nds_t *nds)
                 base, base + 0x4C, 256);
 
     CHECK_EQ("itg r2 (MUL)", nds->cpu->r[2], 200u);
-    CHECK_EQ("itg swi_num", nds->cpu->swi_num, 0x1Au);
+    CHECK_EQ("itg swi_num", nds->cpu->swi_num, 0x030000u);
     CHECK_EQ("itg r4 restored", nds->cpu->r[4], 0x11u);
     CHECK_EQ("itg r5 restored", nds->cpu->r[5], 0x22u);
 
@@ -1650,7 +1652,9 @@ static void test_bios_wait(nds_t *nds)
     cpu_step(nds->cpu);
     cpu_step(nds->cpu);
     CHECK_EQ("halt stuck PC", nds->cpu->r[15], base);
-    /* 置 IE & IF 后 Halt 返回 */
+    /* 置 IE & IF 后 Halt 返回（Halt 的 HLE 直接轮询 IE&IF；IME=0 使真实 IRQ 向量不介入，
+       便于单独验证 Halt 的「满足即返回」语义） */
+    nds->io->irq[0].ime = 0;
     nds->io->irq[0].ie = IO_IF_VBLANK;
     nds->io->irq[0].ifl = IO_IF_VBLANK;
     cpu_step(nds->cpu);
@@ -1696,6 +1700,142 @@ static void test_stage11_integration(nds_t *nds)
     CHECK_EQ("itg11 div r1", nds->cpu->r[1], 3u);
     CHECK_EQ("itg11 div r3", nds->cpu->r[3], 12u);
     CHECK_EQ("itg11 sqrt r0", nds->cpu->r[0], 10u);
+}
+
+/* ---- 12.2 用例：未定义指令 → 未定义异常向量 0x04 ---- */
+static void test_exception_vector_undef(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    cpu->vector_base = 0x02004000u;              /* 向量表放 Main RAM，便于装 handler */
+    bus_write32(nds->bus, cpu->vector_base + EXC_UNDEF_OFF, 0xEAFFFFFE); /* B self */
+
+    cpu->cpsr = 0x00000013u;                     /* SVC、I=0，作为待保存的 CPSR */
+    cpu->r[15] = base;
+    bus_write32(nds->bus, base, 0xEC000000u);    /* LDC 类：模拟器未实现 → 未定义异常 */
+    exec_set_trace(0);
+    cpu_step(cpu);
+    exec_set_trace(1);
+
+    CHECK_EQ("undef PC=vec+0x04", cpu->r[15], cpu->vector_base + EXC_UNDEF_OFF);
+    CHECK_EQ("undef mode=UND", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_UND);
+    CHECK_EQ("undef spsr saved", cpu->spsr[exec_spsr_index(ARM_MODE_UND)], 0x00000013u);
+    CHECK_EQ("undef lr=pc+4", cpu->r[14], base + 4);
+}
+
+/* ---- 12.2 用例：未知 SWI → SWI 异常向量 0x08 ---- */
+static void test_exception_vector_swi(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    cpu->vector_base = 0x02004000u;
+    bus_write32(nds->bus, cpu->vector_base + EXC_SWI_OFF, 0xEAFFFFFE); /* B self */
+
+    cpu->cpsr = 0x00000010u;                     /* User 模式，验证切到 SVC */
+    cpu->r[15] = base;
+    bus_write32(nds->bus, base, 0xEF000000u);    /* SWI 0（SoftReset，未知号） */
+    exec_set_trace(0);
+    cpu_step(cpu);
+    exec_set_trace(1);
+
+    CHECK_EQ("swi PC=vec+0x08", cpu->r[15], cpu->vector_base + EXC_SWI_OFF);
+    CHECK_EQ("swi mode=SVC", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_SVC);
+    CHECK_EQ("swi spsr saved", cpu->spsr[exec_spsr_index(ARM_MODE_SVC)], 0x00000010u);
+    CHECK_EQ("swi lr=pc+4", cpu->r[14], base + 4);
+    CHECK_EQ("swi num recorded", cpu->swi_num, 0u);
+}
+
+/* ---- 12.3 用例：LDM sp!, {pc}^ 用 SPSR 恢复 CPSR（异常返回） ---- */
+static void test_spsr_restore(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t stack = 0x02001000u;
+    bus_write32(nds->bus, stack, base + 0x20);   /* 栈顶 = 返回地址 */
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE8FD8000, /* LDMIA sp!, {pc}^：加载 PC + SPSR→CPSR */
+        /* 0x04 */ 0xEAFFFFFE, /* B self（不应执行到） */
+    };
+    cpu->cpsr = ARM_MODE_IRQ;
+    cpu->spsr[exec_spsr_index(ARM_MODE_IRQ)] = 0x60000010u; /* N,Z 置位 + User 模式 */
+    cpu->r[13] = stack;
+    run_program(nds, base, prog, 2, base, base + 0x20, 8);
+
+    CHECK_EQ("spsr restore PC", cpu->r[15], base + 0x20);
+    CHECK_EQ("spsr restore CPSR", cpu->cpsr, 0x60000010u);
+}
+
+/* ---- 12.4 用例：CP15 c1 的 V 位联动异常向量基址 ---- */
+static void test_cp15_control(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+
+    /* 写 c1 = 0（V=0）→ vector_base 变低 0x00000000 */
+    static const uint32_t prog_low[] = {
+        /* 0x00 */ 0xE3A00000, /* MOV r0, #0 */
+        /* 0x04 */ 0xEE010F10, /* MCR p15, c1 ← r0 */
+        /* 0x08 */ 0xEAFFFFFE, /* B self */
+    };
+    cpu->vector_base = 0xFFFF0000u;
+    run_program(nds, base, prog_low, 3, base, base + 0x08, 16);
+    CHECK_EQ("cp15 c1=0", cpu->cp15[1], 0u);
+    CHECK_EQ("cp15 vector low", cpu->vector_base, 0x00000000u);
+
+    /* 写 c1 = 0x2000（V=1）→ vector_base 变高 0xFFFF0000 */
+    static const uint32_t prog_high[] = {
+        /* 0x00 */ 0xE3A00C20, /* MOV r0, #0x2000 */
+        /* 0x04 */ 0xEE010F10, /* MCR p15, c1 ← r0 */
+        /* 0x08 */ 0xEE111F10, /* MRC p15, r1 ← c1 */
+        /* 0x0C */ 0xEAFFFFFE, /* B self */
+    };
+    run_program(nds, base, prog_high, 4, base, base + 0x0C, 16);
+    CHECK_EQ("cp15 c1=0x2000", cpu->cp15[1], 0x2000u);
+    CHECK_EQ("cp15 mrc r1", cpu->r[1], 0x2000u);
+    CHECK_EQ("cp15 vector high", cpu->vector_base, 0xFFFF0000u);
+}
+
+/* ---- 12.5 用例：IRQ 真实响应：进 handler、SUBS pc,lr,#4 返回 ---- */
+static void test_irq_response(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    cpu->vector_base = 0x02004000u;
+    /* IRQ handler：SUBS pc, lr, #4（返回被打断处并恢复 CPSR） */
+    bus_write32(nds->bus, cpu->vector_base + EXC_IRQ_OFF, 0xE25EF004);
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00005, /* MOV r0, #5 */
+        /* 0x04 */ 0xE3A01007, /* MOV r1, #7 */
+        /* 0x08 */ 0xEAFFFFFE, /* B self */
+    };
+    bus_write32(nds->bus, base + 0, prog[0]);
+    bus_write32(nds->bus, base + 4, prog[1]);
+    bus_write32(nds->bus, base + 8, prog[2]);
+
+    cpu->cpsr = ARM_MODE_USER;                  /* I=0 允许 IRQ */
+    nds->io->irq[0].ie  = IO_IF_VBLANK;
+    nds->io->irq[0].ifl = IO_IF_VBLANK;
+    nds->io->irq[0].ime = 1;
+
+    cpu_reset(cpu, base);
+    exec_set_trace(0);
+    cpu_step(cpu);   /* 第一条：IRQ 触发 → 进 handler（PC=vec+0x18） */
+    exec_set_trace(1);
+
+    CHECK_EQ("irq PC=vec+0x18", cpu->r[15], cpu->vector_base + EXC_IRQ_OFF);
+    CHECK_EQ("irq mode=IRQ", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_IRQ);
+    CHECK_EQ("irq I set", (cpu->cpsr & CPSR_I) ? 1u : 0u, 1u);
+    CHECK_EQ("irq spsr saved", cpu->spsr[exec_spsr_index(ARM_MODE_IRQ)], ARM_MODE_USER);
+    CHECK_EQ("irq lr=pc+4", cpu->r[14], base + 4);
+
+    exec_set_trace(0);
+    cpu_step(cpu);   /* 第二条：SUBS pc, lr, #4 → 返回 base，恢复 CPSR */
+    exec_set_trace(1);
+    CHECK_EQ("irq return PC", cpu->r[15], base);
+    CHECK_EQ("irq return mode", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_USER);
+    CHECK_EQ("irq return I", (cpu->cpsr & CPSR_I) ? 1u : 0u, 0u);
 }
 
 int main(void)
@@ -2002,6 +2142,35 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_stage11_integration(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 12.2] 异常向量：未定义 / 未知 SWI\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_exception_vector_undef(nds);
+        test_exception_vector_swi(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 12.3] CPSR 模式切换 + SPSR 分槽/恢复\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_spsr_restore(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 12.4] CP15 c1 控制向量基址\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_cp15_control(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 12.5] IRQ 真实响应：进 handler + 返回\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_irq_response(nds);
         nds_destroy(nds);
     }
 

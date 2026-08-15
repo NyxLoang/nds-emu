@@ -185,11 +185,17 @@ static void exec_dataop(arm_cpu_t *cpu, uint32_t insn, uint32_t op2, uint32_t ca
     case 0xE: /* BIC（a & ~op2） */ result = a & ~op2; if (s) { set_nz(result, cpu); set_c(carry, cpu); } cpu->r[rd] = result; break;
     case 0xF: /* MVN（~op2） */ result = ~op2; if (s) { set_nz(result, cpu); set_c(carry, cpu); } cpu->r[rd] = result; break;
     }
+    /* S=1 且 Rd=PC（SUBS pc, lr, #4 / MOVS pc, lr / ADDS pc,...）：异常返回。
+       真机此时不更新标志，而是把当前模式的 SPSR 拷回 CPSR（模式/中断位恢复）。 */
+    if (s && rd == 15) {
+        int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
+        if (idx >= 0) cpu->cpsr = cpu->spsr[idx];
+    }
 }
 
 /* ---- 10.4 MRS/MSR：读/写 CPSR/SPSR ----
-   只写被 field_mask 选中的字节（bit0=c 控制/bit1=x 扩展/bit2=s 状态/bit3=f 标志），
-   且始终保护模式位（bit4-0），模式切换留待阶段 12。 */
+   只写被 field_mask 选中的字节（bit0=c 控制/bit1=x 扩展/bit2=s 状态/bit3=f 标志）。
+   阶段 12.3 起允许写模式位（bit4-0），使 `MSR CPSR_c` 能切换特权模式。 */
 static void msr_write(arm_cpu_t *cpu, uint32_t value, unsigned field_mask)
 {
     uint32_t mask = 0;
@@ -197,8 +203,41 @@ static void msr_write(arm_cpu_t *cpu, uint32_t value, unsigned field_mask)
     if (field_mask & 0x2) mask |= 0x0000FF00u;
     if (field_mask & 0x4) mask |= 0x00FF0000u;
     if (field_mask & 0x8) mask |= 0xFF000000u;
-    mask &= ~0x1Fu; /* 保护模式位 bit4-0 */
     cpu->cpsr = (cpu->cpsr & ~mask) | (value & mask);
+}
+
+/* ---- 12.3 特权模式 → spsr[5] 下标 ----
+   只有 FIQ/IRQ/SVC/ABT/UND 有 SPSR（各一份）；User/System 无 SPSR。 */
+int exec_spsr_index(unsigned mode)
+{
+    switch (mode) {
+    case ARM_MODE_FIQ: return 0;
+    case ARM_MODE_IRQ: return 1;
+    case ARM_MODE_SVC: return 2;
+    case ARM_MODE_ABT: return 3;
+    case ARM_MODE_UND: return 4;
+    default:           return -1; /* User(0x10)/System(0x1F) 无 SPSR */
+    }
+}
+
+/* ---- 12.2 异常入口 ----
+   硬件动作：SPSR_<新模式> = 当前 CPSR → 写模式位 → IRQ/FIQ 置 I（FIQ 再置 F）→
+   LR = PC + lr_adjust → PC = vector_base + offset。 */
+void arm_exception(arm_cpu_t *cpu, uint32_t vector_offset, unsigned new_mode,
+                   uint32_t lr_adjust)
+{
+    int idx = exec_spsr_index(new_mode);
+    if (idx >= 0)
+        cpu->spsr[idx] = cpu->cpsr;
+    cpu->cpsr = (cpu->cpsr & ~(uint32_t)CPSR_MODE_MASK) | new_mode;
+    if (new_mode == ARM_MODE_IRQ)      cpu->cpsr |= CPSR_I;      /* IRQ 入口关 IRQ */
+    else if (new_mode == ARM_MODE_FIQ) cpu->cpsr |= CPSR_I | CPSR_F; /* FIQ 关 IRQ+FIQ */
+    cpu->r[14] = cpu->r[15] + lr_adjust;
+    cpu->r[15] = cpu->vector_base + vector_offset;
+    if (g_trace)
+        printf("cpu: PC=%08X exception vec=%08X mode=%02X lr=%08X cycles=%llu\n",
+               cpu->r[15], cpu->vector_base + vector_offset, new_mode, cpu->r[14],
+               (unsigned long long)cpu->cycles);
 }
 
 /* ---- 10.5 LDM/STM（含 PUSH/POP）：块搬移，IA/IB/DA/DB 四模式 ----
@@ -206,6 +245,7 @@ static void msr_write(arm_cpu_t *cpu, uint32_t value, unsigned field_mask)
 static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
 {
     unsigned p = (insn >> 24) & 1u, u = (insn >> 23) & 1u,
+             s = (insn >> 22) & 1u,
              w = (insn >> 21) & 1u, l = (insn >> 20) & 1u;
     unsigned rn = (insn >> 16) & 0xFu;
     uint32_t list = insn & 0xFFFFu;
@@ -226,6 +266,11 @@ static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
     }
     /* 写回：无论增/减方向，最终基址 = 起始 + n*4 或 - n*4 */
     if (w) cpu->r[rn] = u ? rn_val + 4u * n : rn_val - 4u * n;
+    /* LDM ... ^（S=1 且列表含 PC）：加载 PC 后，再用当前模式的 SPSR 恢复 CPSR（12.3 异常返回） */
+    if (l && s && (list & (1u << 15))) {
+        int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
+        if (idx >= 0) cpu->cpsr = cpu->spsr[idx];
+    }
     if (g_trace)
         printf("cpu: PC=%08X insn=%08X %s r%u%s, list=%04X n=%d cycles=%llu\n",
                cpu->r[15], insn, l ? "LDM" : "STM", rn, w ? "!" : "", list, n,
@@ -352,15 +397,22 @@ static void exec_swp(arm_cpu_t *cpu, uint32_t insn)
                cpu->r[15], insn, b ? "B" : "", rd, rm, rn, old);
 }
 
-/* ---- 10.10 MRC/MCR 协处理器访问（CP15 桩，按 CRn 索引存取） ---- */
+/* ---- 10.10/12.4 MRC/MCR 协处理器访问（CP15，按 CRn 索引存取） ----
+   阶段 12.4：c1（系统控制寄存器）的 bit13(V) 控制异常向量基址（0=低 0x00000000，
+   1=高 0xFFFF0000），MCR 写 c1 后联动 vector_base；cache/MMU 使能位仅存储不生效。 */
 static void exec_coprocessor(arm_cpu_t *cpu, uint32_t insn)
 {
     unsigned l = (insn >> 20) & 1u;
     unsigned crn = (insn >> 16) & 0xFu;
     unsigned rd = (insn >> 12) & 0xFu;
     if (crn < 16) {
-        if (l) cpu->r[rd] = cpu->cp15[crn];
-        else   cpu->cp15[crn] = cpu->r[rd];
+        if (l) {
+            cpu->r[rd] = cpu->cp15[crn];
+        } else {
+            cpu->cp15[crn] = cpu->r[rd];
+            if (crn == 1)
+                cpu->vector_base = (cpu->cp15[1] & (1u << 13)) ? 0xFFFF0000u : 0x00000000u;
+        }
     }
     if (g_trace)
         printf("cpu: PC=%08X insn=%08X %s p15, c%u, r%u\n",
@@ -386,16 +438,22 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
     }
 
     /* SWI：bit27-24=1111。24 位立即数 = 注释字段（ARM 状态函数号 = 其 >>16）。
-       阶段 10.8 只记录；阶段 11 起经 BIOS HLE 拦截分发，阶段 12 才真正进异常向量。
-       已处理/未知号 → PC += 4；等待未满足 → PC 不动，重跑本 SWI（等价忙等）。 */
+       阶段 11 起经 BIOS HLE 拦截分发（已知号）；未知号落入 SWI 异常向量 0x08（阶段 12.2），
+       给 SWI 向量留真机路径。已处理 → PC += 4；等待未满足 → PC 不动重跑（等价忙等）。 */
     if ((insn & 0x0F000000u) == 0x0F000000u) {
         cpu->swi_num = insn & 0x00FFFFFFu;
         if (g_trace)
             printf("cpu: PC=%08X insn=%08X SWI %u cycles=%llu\n",
                    cpu->r[15], insn, cpu->swi_num,
                    (unsigned long long)cpu->cycles);
-        if (bios_dispatch(cpu->swi_num >> 16, cpu) != BIOS_RET_WAIT)
+        int ret = bios_dispatch(cpu->swi_num >> 16, cpu);
+        if (ret == BIOS_RET_WAIT) {
+            /* PC 不动，重跑本 SWI */
+        } else if (ret == BIOS_RET_UNKNOWN) {
+            arm_exception(cpu, EXC_SWI_OFF, ARM_MODE_SVC, 4); /* 未知号 → SWI 向量 */
+        } else {
             cpu->r[15] += 4;
+        }
         return 1;
     }
 
@@ -426,7 +484,9 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
     /* LDM/STM：bit27-25 = 100 */
     if (((insn >> 25) & 0x7u) == 0x4u) {
         exec_block_transfer(cpu, insn);
-        cpu->r[15] += 4;
+        /* LDM 且列表含 PC：PC 已被内存值覆盖（如 LDM ..., {pc}^ 异常返回），不再 +4 */
+        if (!((insn & (1u << 20)) && (insn & (1u << 15))))
+            cpu->r[15] += 4;
         return 1;
     }
 
@@ -451,7 +511,9 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
     }
     if ((insn & 0x0FFF0FFFu) == 0x014F0000u) {
         unsigned rd = (insn >> 12) & 0xFu;
-        cpu->r[rd] = cpu->spsr;
+        /* 读当前模式的 SPSR；User/System 无 SPSR，读 0（架构未定义） */
+        int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
+        cpu->r[rd] = (idx >= 0) ? cpu->spsr[idx] : 0u;
         cpu->r[15] += 4;
         return 1;
     }
@@ -460,8 +522,12 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
     if ((insn & 0x0FB0FFF0u) == 0x0120F000u) {
         unsigned rm = insn & 0xFu;
         unsigned field = (insn >> 16) & 0xFu;
-        if (insn & (1u << 22)) cpu->spsr = cpu->r[rm];
-        else                   msr_write(cpu, cpu->r[rm], field);
+        if (insn & (1u << 22)) {
+            int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
+            if (idx >= 0) cpu->spsr[idx] = cpu->r[rm];
+        } else {
+            msr_write(cpu, cpu->r[rm], field);
+        }
         cpu->r[15] += 4;
         return 1;
     }
@@ -471,8 +537,12 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         unsigned rot4 = (insn >> 8) & 0xFu;
         uint32_t value = arm_rotate(imm8, rot4);
         unsigned field = (insn >> 16) & 0xFu;
-        if (insn & (1u << 22)) cpu->spsr = value;
-        else                   msr_write(cpu, value, field);
+        if (insn & (1u << 22)) {
+            int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
+            if (idx >= 0) cpu->spsr[idx] = value;
+        } else {
+            msr_write(cpu, value, field);
+        }
         cpu->r[15] += 4;
         return 1;
     }
@@ -500,14 +570,18 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
     /* 额外传输 LDRH/STRH/LDRSB/LDRSH */
     if ((insn & 0x0E000090u) == 0x00000090u) {
         exec_extra_transfer(cpu, insn);
-        cpu->r[15] += 4;
+        /* LDR 且 Rd=PC：PC 已被内存值覆盖，不再 +4 */
+        if (!((insn & (1u << 20)) && (((insn >> 12) & 0xFu) == 15)))
+            cpu->r[15] += 4;
         return 1;
     }
 
     /* 单数据传输 LDR/STR/LDRB/STRB：bit27-26 = 01 */
     if (((insn >> 26) & 0x3u) == 1) {
         exec_single_transfer(cpu, insn);
-        cpu->r[15] += 4;
+        /* LDR 且 Rd=PC（如 LDR pc, [sp], #4 返回惯用法）：PC 已被覆盖，不再 +4 */
+        if (!((insn & (1u << 20)) && (((insn >> 12) & 0xFu) == 15)))
+            cpu->r[15] += 4;
         return 1;
     }
 
@@ -523,14 +597,16 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         uint32_t carry = 0;
         uint32_t op2 = decode_op2(cpu, insn, &carry);
         exec_dataop(cpu, insn, op2, carry);
-        cpu->r[15] += 4;
+        /* Rd=15：结果是写 PC（如 SUBS pc, lr, #4 / MOVS pc, lr 异常返回），不再 +4 */
+        if (((insn >> 12) & 0xFu) != 15)
+            cpu->r[15] += 4;
         return 1;
     }
 
-    /* 其余未实现指令：打印机器码并继续。 */
+    /* 其余未实现指令：触发未定义指令异常（12.2），跳到向量 0x04（不再打印后继续）。 */
     if (g_trace)
-        printf("cpu: PC=%08X insn=%08X unimplemented (cycles=%llu)\n",
+        printf("cpu: PC=%08X insn=%08X undefined (cycles=%llu)\n",
                cpu->r[15], insn, (unsigned long long)cpu->cycles);
-    cpu->r[15] += 4;
+    arm_exception(cpu, EXC_UNDEF_OFF, ARM_MODE_UND, 4);
     return 1;
 }

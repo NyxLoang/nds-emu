@@ -18,6 +18,7 @@
 #include "io/disp.h"
 #include "io/touch.h"
 #include "snd/snd.h"
+#include "gx/gx.h"
 #include "ppu/render.h"
 #include "cart/cart.h"
 #include "cart/key1.h"
@@ -2786,6 +2787,7 @@ static void test_touch_program(nds_t *nds)
 /* ---- 阶段 18.2 用例：音频寄存器（SOUNDCNT/SOUNDBIAS + 16 通道）读写 ---- */
 static void test_snd_regs(nds_t *nds)
 {
+    nds->bus->active_is_arm7 = 1; /* 音频由 ARM7 控制（阶段 19 起与几何区按 CPU 分流） */
     /* 主控寄存器：主使能(bit15) + 主音量 127，bias 0x200 */
     bus_write16(nds->bus, SND_SOUNDCNT, 0x807F);
     CHECK_EQ("snd soundcnt", bus_read16(nds->bus, SND_SOUNDCNT), 0x807Fu);
@@ -2818,6 +2820,7 @@ static void test_snd_mix(nds_t *nds)
 {
     int16_t L[8], R[8];
     uint32_t b = SND_BASE;
+    nds->bus->active_is_arm7 = 1; /* 音频由 ARM7 控制 */
 
     /* 主使能 + 主音量 127，bias 0x200 */
     bus_write16(nds->bus, SND_SOUNDCNT, 0x807F);
@@ -2919,13 +2922,112 @@ static void test_snd_program(nds_t *nds)
         /* 0x50 */ 0xEAFFFFFE, /* B self 停机 */
     };
 
-    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
-                base, base + 0x50, 128);
-    CHECK_EQ("snd prog halt", nds->cpu->r[15], base + 0x50);
-    CHECK_EQ("snd prog cnt", nds->cpu->r[4], 0x907F007Fu);
-    CHECK_EQ("snd prog sad", nds->cpu->r[5], 0x02000000u);
-    CHECK_EQ("snd prog tmr", nds->cpu->r[6], 0x1000u);
-    CHECK_EQ("snd prog len", nds->cpu->r[7], 0x4u);
+    run_cpu7(nds, base, prog, sizeof prog / sizeof prog[0],
+             base, base + 0x50, 128);
+    CHECK_EQ("snd prog halt", nds->cpu7->r[15], base + 0x50);
+    CHECK_EQ("snd prog cnt", nds->cpu7->r[4], 0x907F007Fu);
+    CHECK_EQ("snd prog sad", nds->cpu7->r[5], 0x02000000u);
+    CHECK_EQ("snd prog tmr", nds->cpu7->r[6], 0x1000u);
+    CHECK_EQ("snd prog len", nds->cpu7->r[7], 0x4u);
+}
+
+/* ---- 阶段 19.3 用例：顶点变换（pos×proj → 透视除 → 视口映射） ---- */
+static void test_gx_transform(nds_t *nds)
+{
+    gx_t *g = &nds->io->gx;
+    int sx, sy;
+    gx_reset(g); /* pos/proj=单位阵，视口=(0,0,255,191) */
+
+    gx_transform_vertex(g, -GX_FP_ONE, -GX_FP_ONE, 0, &sx, &sy);
+    CHECK_EQ("gx (-1,-1) sx", sx, 0);
+    CHECK_EQ("gx (-1,-1) sy", sy, 191);
+
+    gx_transform_vertex(g, GX_FP_ONE, -GX_FP_ONE, 0, &sx, &sy);
+    CHECK_EQ("gx (1,-1) sx", sx, 255);
+    CHECK_EQ("gx (1,-1) sy", sy, 191);
+
+    gx_transform_vertex(g, -GX_FP_ONE, GX_FP_ONE, 0, &sx, &sy);
+    CHECK_EQ("gx (-1,1) sx", sx, 0);
+    CHECK_EQ("gx (-1,1) sy", sy, 0);
+
+    gx_transform_vertex(g, 0, 0, 0, &sx, &sy);
+    CHECK_EQ("gx (0,0) sx", sx, 127);
+    CHECK_EQ("gx (0,0) sy", sy, 95);
+}
+
+/* ---- 阶段 19.4 用例：三角形软件光栅化（平色） ---- */
+static void test_gx_raster(nds_t *nds)
+{
+    gx_t *g = &nds->io->gx;
+    gx_reset(g);
+    gx_raster_tri(g, 10, 10, 100, 10, 10, 100, 0x7C00);
+    CHECK_EQ("gx raster in",   g->fb[50 * GX_SCREEN_W + 50],   0x7C00u);
+    CHECK_EQ("gx raster out1", g->fb[150 * GX_SCREEN_W + 150], 0u);
+    CHECK_EQ("gx raster out2", g->fb[5 * GX_SCREEN_W + 5],     0u);
+}
+
+/* ---- 阶段 19.5 用例：GXFIFO 命令流 → 变换 → 光栅化出图 ---- */
+static void test_gx_fifo(nds_t *nds)
+{
+    gx_t *g = &nds->io->gx;
+    bus_t *bus = nds->bus;
+    gx_reset(g);
+    bus->active_is_arm7 = 0; /* 几何区由 ARM9 访问 */
+
+    /* 投影矩阵 = diag(1/4,1/4,1,1)：模型 ±4 → NDC ±1（列主序 16 参数） */
+    static const uint32_t proj[16] = {
+        0x400, 0, 0, 0,
+        0, 0x400, 0, 0,
+        0, 0, 0x1000, 0,
+        0, 0, 0, 0x1000,
+    };
+
+    /* MTX_MODE=投影(0) */
+    bus_write32(bus, GX_GXFIFO, 0x10); bus_write32(bus, GX_GXFIFO, 0);
+    /* MTX_LOAD_4x4 */
+    bus_write32(bus, GX_GXFIFO, 0x16);
+    for (int i = 0; i < 16; i++) bus_write32(bus, GX_GXFIFO, proj[i]);
+    /* MTX_MODE=位置(1) + MTX_IDENTITY */
+    bus_write32(bus, GX_GXFIFO, 0x10); bus_write32(bus, GX_GXFIFO, 1);
+    bus_write32(bus, GX_GXFIFO, 0x15);
+    /* COLOR=红 + VIEWPORT=(0,0,255,191) */
+    bus_write32(bus, GX_GXFIFO, 0x20); bus_write32(bus, GX_GXFIFO, 0x7C00);
+    bus_write32(bus, GX_GXFIFO, 0x60); bus_write32(bus, GX_GXFIFO, 0xBFFF0000u);
+    /* BEGIN_VTXS 三角形 + 3 个 VTX_16：(0,0) (4,0) (0,-4) */
+    bus_write32(bus, GX_GXFIFO, 0x40); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x23); bus_write32(bus, GX_GXFIFO, 0x00000000u); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x23); bus_write32(bus, GX_GXFIFO, 0x00004000u); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x23); bus_write32(bus, GX_GXFIFO, 0xC0000000u); bus_write32(bus, GX_GXFIFO, 0);
+    /* END_VTXS → 光栅化三角形 (127,95)-(255,95)-(127,191) */
+    bus_write32(bus, GX_GXFIFO, 0x41);
+
+    CHECK_EQ("gx fifo in",   g->fb[120 * GX_SCREEN_W + 200], 0x7C00u);
+    CHECK_EQ("gx fifo out1", g->fb[160 * GX_SCREEN_W + 200], 0u);
+    CHECK_EQ("gx fifo out2", g->fb[100 * GX_SCREEN_W + 120], 0u);
+}
+
+/* ---- 阶段 19.4 用例：3D 图层合成进 2D 顶屏 ---- */
+static void test_gx_layer(nds_t *nds)
+{
+    gx_t *g = &nds->io->gx;
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    gx_reset(g);
+    gx_raster_tri(g, 10, 10, 100, 10, 10, 100, 0x7C00); /* 红三角，(50,50) 在内 */
+
+    /* 2D 顶屏：mode 5 直色位图（未写 VRAM → 全黑背景） */
+    bus_write32(nds->bus, IO_DISPCNT, 5u | DISPCNT_BG2 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+    bus_write16(nds->bus, IO_BGCNT_BASE + 2 * 2, BGCNT_COLORS_256 | BGCNT_DIRECT_COLOR | (1u << 14));
+
+    /* 3D 未使能：三角形不显示（露出 2D 黑背景） */
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("gx layer off", fb_top[50 * RENDER_SCREEN_W + 50], 0xFF000000u);
+
+    /* 3D 使能（DISP3DCNT bit13）：三角形像素覆盖到顶屏 */
+    bus_write32(nds->bus, IO_DISP3DCNT, DISP3D_ENABLE);
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("gx layer on", fb_top[50 * RENDER_SCREEN_W + 50], 0xFFF80000u);
 }
 
 int main(void)
@@ -3422,6 +3524,35 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_snd_program(nds);
+        nds_destroy(nds);
+    }
+
+    printf("\n[case 19.3] 顶点变换（pos×proj → 透视除 → 视口映射）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_gx_transform(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 19.4] 三角形软件光栅化\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_gx_raster(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 19.5] GXFIFO 命令流 → 变换 → 光栅化出图\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_gx_fifo(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 19.4] 3D 图层合成进 2D 顶屏\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_gx_layer(nds);
         nds_destroy(nds);
     }
 

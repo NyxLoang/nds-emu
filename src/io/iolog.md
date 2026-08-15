@@ -166,3 +166,13 @@
   转发到 `snd_read8/snd_write8`（音频寄存器虽在 IO 区，但语义/混音在独立模块 `src/snd/`，详见 sndlog）。
 - `io.h` 引入 `snd/snd.h`；`CMakeLists.txt` 的 `ndscore` 加入 `snd.c`。
 - **怎么验证**：`test_snd_regs`（经总线读写 SOUNDCNT/SOUNDBIAS + 通道寄存器）全过。
+
+## 19.2 — 3D 几何寄存器路由（gx 接线）
+
+- `io_t` 增 `gx_t gx` 字段；`io_create` 里 `gx_reset`（矩阵置单位阵 + 视口默认 (0,0,255,191) + GXSTAT 置 FIFO 空）。
+- `io_read8/io_write8` 增 `gx_is_addr && !is_arm7` 路由（DISP3DCNT `0x04000060` + GXSTAT/RAM_COUNT `0x04000600..07`）；
+  `snd_is_addr` 由「不区分 CPU」收紧为 `&& is_arm7`（音频由 ARM7 控制）。
+- 新增 `io_gx_write32`（转发 `gx_write32`）：几何区 `0x04000400..0x040005FF` 是 32 位命令区，需整字转发。
+- `bus.c` 的 `bus_write32` 增几何区 ARM9 整字转发（`addr∈[0x04000400,0x04000600) && !active_is_arm7` → `io_gx_write32`），
+  避免拆字节破坏「命令字 + 参数字」的 40 位命令语义；ARM7 侧仍走音频（`bus_write32` 拆字节 → `snd_write8`）。
+- **怎么验证**：`test_gx_fifo`（GXFIFO 命令流出图）+ 原 `test_snd_*` 切到 `active_is_arm7=1` 后仍全过。

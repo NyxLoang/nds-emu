@@ -137,3 +137,10 @@
   （4 色）+ OBJ 白方块，底屏副引擎 8bpp 竖条纹（青/品红）。
 - `ppu.h` 删除旧 framebuffer 常量（`PPU_SCREEN_W/H`、`PPU_VRAM_TOP/BOTTOM_OFFSET`）。
 - 验收：148 项检查 0 失败（ctest 通过）。
+
+### 19.4 — 3D 图层合成进 2D 顶屏
+
+- `render.c` 新增 `render_3d(bus, fb)`：`DISP3DCNT` 使能位（bit13）置位时，把 3D 帧缓冲覆盖到主引擎（顶屏）。
+  0 像素视作「无几何」背景保留 2D 输出，非 0 像素用其 RGB555 颜色覆盖（最小实现：不分优先级、无 alpha 混合）。
+- `render_frame` 末尾调用（仅顶屏；副引擎无 3D）。`render.c` 引入 `io/io.h` + `gx/gx.h` 以读 `bus->io->gx`。
+- 验收：`test_gx_layer`——3D 未使能时像素露 2D 黑背景、使能后三角形红覆盖到顶屏。

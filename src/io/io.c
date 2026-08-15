@@ -5,8 +5,10 @@
 io_t *io_create(void)
 {
     io_t *io = calloc(1, sizeof(io_t));
-    if (io != NULL)
+    if (io != NULL) {
         cartbus_init(&io->cartbus);
+        gx_reset(&io->gx); /* 矩阵置单位阵 + 视口默认 + GXSTAT 置 FIFO 空 */
+    }
     return io;
 }
 
@@ -72,7 +74,9 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return disp_read8(&io->disp, addr);
     if (touch_is_addr(addr))
         return touch_read8((touch_t *)&io->touch, addr);
-    if (snd_is_addr(addr))
+    if (gx_is_addr(addr) && !is_arm7)
+        return gx_read8(&io->gx, addr);
+    if (snd_is_addr(addr) && is_arm7)
         return snd_read8(&io->snd, addr);
     return 0;
 }
@@ -126,7 +130,11 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         touch_write8(&io->touch, addr, val);
         return;
     }
-    if (snd_is_addr(addr)) {
+    if (gx_is_addr(addr) && !is_arm7) {
+        gx_write8(&io->gx, addr, val);
+        return;
+    }
+    if (snd_is_addr(addr) && is_arm7) {
         snd_write8(&io->snd, addr, val);
         return;
     }
@@ -145,6 +153,11 @@ void io_send32(io_t *io, int is_arm7, uint32_t val)
 {
     fifo_send(&io->fifo, is_arm7, val);
     io_fifo_update_irq_all(io);
+}
+
+void io_gx_write32(io_t *io, uint32_t addr, uint32_t val)
+{
+    gx_write32(&io->gx, addr, val);
 }
 
 uint32_t io_card_data_read32(io_t *io)

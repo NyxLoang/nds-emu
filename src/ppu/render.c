@@ -1,6 +1,8 @@
 #include "render.h"
 #include "bus/bus.h"
 #include "io/disp.h"
+#include "io/io.h"   /* 3D 图层：读 bus->io->gx 的帧缓冲（阶段 19.4） */
+#include "gx/gx.h"
 
 /* BG 图形内存基址：主引擎 0x06000000，副引擎 0x06200000（阶段 9 固定窗口） */
 #define BG_GFX_MAIN 0x06000000u
@@ -225,8 +227,26 @@ static void render_engine(const bus_t *bus, uint32_t *fb, int is_sub)
         render_obj(bus, fb, is_sub);
 }
 
+/* 3D 图层合成（阶段 19.4）：DISP3DCNT 使能位(bit13)置位时，把 3D 帧缓冲
+   覆盖到主引擎（顶屏）。3D 帧缓冲的 0 像素视为「无几何」背景，保留 2D 输出；
+   非 0 像素用其 RGB555 颜色覆盖。最小实现：不分优先级、不做 alpha 混合。 */
+static void render_3d(const bus_t *bus, uint32_t *fb)
+{
+    if (bus->io == NULL)
+        return;
+    const gx_t *g = &bus->io->gx;
+    if (!(g->disp3dcnt & DISP3D_ENABLE))
+        return;
+    const uint16_t *src = gx_framebuffer(g);
+    for (int i = 0; i < RENDER_SCREEN_W * RENDER_SCREEN_H; i++) {
+        if (src[i] != 0)
+            fb[i] = rgb555_to_888(src[i]);
+    }
+}
+
 void render_frame(const bus_t *bus, uint32_t *fb_top, uint32_t *fb_bot)
 {
     render_engine(bus, fb_top, 0);
     render_engine(bus, fb_bot, 1);
+    render_3d(bus, fb_top);
 }

@@ -17,7 +17,8 @@
 | 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 真 2D PPU：读寄存器出图（`src/ppu/ppu.h/.c` SDL 侧 + 纯渲染 `src/ppu/render.h/.c`） |
 | IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA 4 通道、IPC FIFO、显示控制 DISPCNT/BGxCNT、触摸屏 SPI、音频寄存器路由、卡带总线/存档接线（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo/disp/touch） |
 | 音频 | [`src/snd/sndlog.md`](src/snd/sndlog.md) | 16 通道音频寄存器 + 混音合成（PCM8/PCM16/IMA-ADPCM/PSG），`snd_render` 输出 32768Hz 立体声（`src/snd/snd.h/.c`） |
-| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO/2D PPU/触摸/音频） |
+| 3D 几何 | [`src/gx/gxlog.md`](src/gx/gxlog.md) | 3D 几何引擎：DISP3DCNT/GXSTAT/GXFIFO 寄存器 + 命令解码 + 矩阵/顶点变换 + 软件光栅化（`src/gx/gx.h/.c`） |
+| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO/2D PPU/触摸/音频/3D） |
 
 ## 按时间索引
 
@@ -168,3 +169,9 @@
 | 2026-08-15 | 18.4 | 音频/主循环 | SDL 音频回调 + `main.c` 接线 + demo 提示音（~256Hz 方波） | [snd](src/snd/sndlog.md) · [main](src/mainlog.md) |
 | 2026-08-15 | 18.5 | 测试 | 综合：寄存器读写 + 混音样本 + CPU 程序配置通道；467 项检查 0 失败 | [tests](tests/testlog.md) |
 | 2026-08-15 | 18 完成 | 收尾 | 阶段 18 完成：音频（16 通道 PCM/ADPCM/PSG 混音 + SDL 回调发声，游戏能出声音） | [snd](src/snd/sndlog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 19.1 | 预习/3D | 新增 `docs/20-3d.md`：3D 几何引擎（GE/RE、GXFIFO 命令、矩阵/顶点定点格式、图元） | [20](docs/20-3d.md) · [gx](src/gx/gxlog.md) |
+| 2026-08-15 | 19.2 | 3D 几何 | 新建 `gx`：DISP3DCNT/GXSTAT/RAM_COUNT 寄存器 + GXFIFO/命令端口 32 位写 + 命令 FIFO 解码 | [gx](src/gx/gxlog.md) · [io](src/io/iolog.md) · [bus](src/bus/buslog.md) |
+| 2026-08-15 | 19.3 | 3D 几何 | 几何命令：矩阵（LOAD/MULT/SCALE/TRANS/PUSH/POP/IDENTITY）+ 顶点提交 + 变换（pos×proj→透视除→视口） | [gx](src/gx/gxlog.md) |
+| 2026-08-15 | 19.4 | 3D 几何/显示 | 三角形软件光栅化（半平面判定）+ render.c 合成 3D 图层进 2D 顶屏（DISP3DCNT 使能位） | [gx](src/gx/gxlog.md) · [ppu](src/ppu/ppulog.md) |
+| 2026-08-15 | 19.5 | 测试 | 综合：顶点变换 + 光栅化 + GXFIFO 命令流出图 + 3D 图层合成；483 项检查 0 失败 | [tests](tests/testlog.md) |
+| 2026-08-15 | 19 完成 | 收尾 | 阶段 19 完成：3D 几何引擎（GXFIFO 命令流 + 矩阵/顶点变换 + 软件光栅化 + 3D 图层合成） | [gx](src/gx/gxlog.md) · [tests](tests/testlog.md) |

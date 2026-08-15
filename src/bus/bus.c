@@ -151,6 +151,13 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
             io_card_data_write32(bus->io, val);
         return;
     }
+    /* 几何命令区（0x04000400..0x040005FF）：ARM9 视角整体转发给 gx，
+       拆字节会破坏「命令字 + 参数字」的 40 位命令语义。ARM7 视角仍走音频。 */
+    if (addr >= GX_GXFIFO && addr < GX_CMD_PORT_END && !bus->active_is_arm7) {
+        if (bus->io != NULL)
+            io_gx_write32(bus->io, addr, val);
+        return;
+    }
     bus_write8(bus, addr,     (uint8_t)(val & 0xFF));
     bus_write8(bus, addr + 1, (uint8_t)(val >> 8));
     bus_write8(bus, addr + 2, (uint8_t)(val >> 16));

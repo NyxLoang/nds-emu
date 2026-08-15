@@ -57,6 +57,7 @@ add_library(ndscore STATIC
     src/io/disp.c
     src/io/touch.c
     src/snd/snd.c
+    src/gx/gx.c
     src/ppu/render.c
             src/cart/cart.c
             src/cart/cartbus.c

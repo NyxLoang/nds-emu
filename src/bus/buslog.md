@@ -69,3 +69,11 @@
 - 与 8.3 的 FIFO RECV/SEND 同理：`0x04100010` 在 IO 区间外、且是「读一次游标 +4」的有副作用端口，
   不能拆成 4 字节逐字节读，必须整字路由。
 - 验收：`test_card_dma` / `test_card_program` 经 `bus_read32(CARD_DATA)` 连续读卡带数据正确。
+
+## 19.2 — 几何命令区整字路由（GXFIFO / 命令端口）
+
+- `bus_write32` 增几何区（`0x04000400..0x040005FF`）ARM9 整字转发：`addr∈[GX_GXFIFO, GX_CMD_PORT_END) && !active_is_arm7`
+  时整体走 `io_gx_write32`，不再拆成 4 字节——否则会破坏「命令字 + 参数字」的 40 位命令语义。
+- 该区间与音频寄存器重叠：ARM9 视角是几何命令 FIFO/命令端口，ARM7 视角仍是音频（`active_is_arm7=1`
+  时 `bus_write32` 走原拆字节路径 → `io_write8` → `snd_write8`）。
+- 验收：`test_gx_fifo`（GXFIFO 命令流经 `bus_write32` 出图）；原 `test_snd_*` 切 ARM7 视角后全过。

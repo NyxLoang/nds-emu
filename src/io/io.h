@@ -10,6 +10,7 @@
 #include "disp.h"
 #include "touch.h"
 #include "snd/snd.h"
+#include "gx/gx.h"
 #include "cart/cartbus.h"
 
 struct bus; /* 前向声明：io 需要 bus 反指，供 DMA 搬运访存 */
@@ -30,6 +31,7 @@ typedef struct io {
     disp_t disp;                      /* 2D 显示控制（阶段 9：DISPCNT/BGxCNT/滚动） */
     touch_t touch;                    /* 触摸屏 SPI（阶段 17：SPICNT/SPIDATA + TSC） */
     snd_t snd;                        /* 音频（阶段 18：16 通道 + SOUNDCNT/SOUNDBIAS） */
+    gx_t gx;                          /* 3D 几何引擎（阶段 19：DISP3DCNT/GXSTAT/GXFIFO） */
     cartbus_t cartbus;                /* 卡带总线（阶段 15：ROMCTRL/命令/数据端口） */
     struct bus *bus;                  /* bus 反指：DMA 搬运需经 bus 访存 */
 } io_t;
@@ -45,6 +47,10 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7);
 /* FIFO 32 位收发（bus 对 SEND/RECV 地址整体转发，避免拆字节破坏队列） */
 uint32_t io_recv32(io_t *io, int is_arm7);
 void io_send32(io_t *io, int is_arm7, uint32_t val);
+
+/* 几何命令区（0x04000400..0x040005FF）32 位整体写：GXFIFO 命令字 / 命令端口参数。
+   由 bus 在 ARM9 视角整体转发（拆字节会破坏 40 位命令语义）。 */
+void io_gx_write32(io_t *io, uint32_t addr, uint32_t val);
 
 /* 卡带数据端口 CARD_DATA（0x04100010）32 位读写（bus 在 IO 区外整体转发）。
    读会推进卡带内部读地址；写本阶段仅占位（读 ROM 用不到）。 */

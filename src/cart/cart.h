@@ -32,6 +32,11 @@ cart_t *cart_load_w(const wchar_t *path, char *err, size_t errsz);
 /* 按偏移解析 ROM 头（ARM9 + ARM7）。文件不足头长时返回 -1。 */
 int cart_parse_header(const cart_t *cart, cart_header_t *hdr);
 
+/* 阶段 14：若卡带安全区被 KEY1 加密，就地解密 ROM 缓冲里 ARM9 镜像开头的
+   0x800 字节安全区。gamecode 由本函数从头 0x00C 处读出。
+   返回 1 = 已解密（"encryObj" 校验通过）；0 = 未加密（homebrew）或解密失败（缓冲保持原样）。 */
+int cart_decrypt_secure_area(cart_t *cart);
+
 /* 释放 cart_t 及内部缓冲。 */
 void cart_free(cart_t *cart);
 

@@ -277,3 +277,24 @@
   ② `MOV r1,r3` 误编 `0x4631`（Rs=6 而非 3），除数为 0 触发 bios_div 的除零防御分支，改 `0x4619`。
 - 阶段 13 收尾全量 **336 项检查 0 失败**。
 
+## 14.2 — 用例：KEY1（Blowfish）块加解密 + 密钥表自检
+
+- `test_key1_roundtrip`：`key1_table_checksum()` 累加和 == `0x000803BA`（0x1048 字节之和，防表被误改）；
+  `key1_bswap32(0x12345678) == 0x78563412`；level 1/2/3 各做「`key1_encrypt64` → `key1_decrypt64` 还原」
+  且断言密文 ≠ 明文。
+- 说明：`key1_encrypt64/decrypt64`、`key1_init_keycode`、`key1_table_checksum` 为 `src/cart/key1.h` 公开接口，
+  测试直接调用（不依赖 nds 实例）。
+
+## 14.2 — 用例：安全区加密→解密往返 + encryObj 魔数
+
+- `test_key1_secure_area`：0x800 字节填可辨认模式 → `key1_encrypt_secure_area(gamecode)` →
+  断言头 8 字节与 body 均改变 → `key1_decrypt_secure_area` → 断言返回 1、头 8 字节 == `"encryObj"`、
+  body 与明文一致。覆盖 level2 剥外层 + level3 解全部的双层协议。
+
+## 14.5 — 用例：自制含加密安全区的 ROM 完整装载
+
+- `test_secure_area_load`：内存里造一份最小 ROM（头 gamecode `0x00C` + ARM9 四字段 `0x020`、安全区 `0x4000`），
+  `key1_encrypt_secure_area` 加密安全区 → `cart_decrypt_secure_area` 解密 → 逐字节拷进 Main RAM →
+  断言 RAM 里魔数 + `cpu_reset(entry)` 后 PC 正确。用 `put_le32` 小端写头字段。
+- 阶段 14 收尾全量 **360 项检查 0 失败**。
+

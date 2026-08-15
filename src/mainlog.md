@@ -74,3 +74,11 @@
   `image : loaded 128 bytes into ARM7 WRAM @ 03800000`、`cpu7 : reset PC=03800000`，主循环打印
   `ARM9 PC=02000800 | ARM7 PC=03800000`（两核各自死循环）。
 - **结果**：✅ 编译与自动化测试通过。
+
+## 2026-08-15 · 阶段 14.4 装载时解密安全区
+
+- **做了什么**：`main.c` 在解析 ROM 头后、拷贝 ARM9 镜像前调用 `cart_decrypt_secure_area(cart)`，
+  就地解密 ROM 缓冲里 ARM9 镜像开头的 0x800 字节安全区（KEY1），使后续 `bus_write8` 拷进 Main RAM 的
+  已是明文；打印 `secure: KEY1 area decrypted (encryObj OK)` 或 `secure: not encrypted (homebrew) or decrypt failed`。
+- **怎么验证**：`test_secure_area_load` 走完整装载流程通过；`ctest` 360 项检查 0 失败。
+- **结果**：✅ 通过。

@@ -187,6 +187,13 @@ int main(int argc, char *argv[])
             printf("arm7  : offset=%08X entry=%08X ram=%08X size=%08X\n",
                    hdr.arm7.offset, hdr.arm7.entry, hdr.arm7.ram, hdr.arm7.size);
 
+            /* 阶段 14：若为加密商业卡带，先就地解密 ROM 缓冲里的安全区
+               （ARM9 镜像前 0x800 字节），使后面拷进 Main RAM 的已是明文。 */
+            if (cart_decrypt_secure_area(cart))
+                printf("secure: KEY1 area decrypted (encryObj OK)\n");
+            else
+                printf("secure: not encrypted (homebrew) or decrypt failed, kept as-is\n");
+
             /* 把 ARM9 镜像逐字节写进 bus 的 Main RAM（地址 = 头里的 ram 字段）。
                逐字节走 bus_write8，让每个字节都经过地址换算，验证 bus 语义。 */
             if (hdr.arm9.offset + hdr.arm9.size > cart->size) {

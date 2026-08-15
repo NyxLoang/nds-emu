@@ -11,7 +11,7 @@
 | 窗口 | [`src/window/windowlog.md`](src/window/windowlog.md) | 窗口/渲染器生命周期、缩放、退出事件 |
 | 菜单 | [`src/menu/menulog.md`](src/menu/menulog.md) | 菜单 UI、字体、文本渲染、语言切换 |
 | 整机状态 | [`src/nds/ndslog.md`](src/nds/ndslog.md) | 整机状态容器 `nds_t`（`src/nds/nds.h` / `src/nds/nds.c`） |
-| 卡带装载 | [`src/cart/cartlog.md`](src/cart/cartlog.md) | 读 `.nds` 文件、解析 ROM 头（`src/cart/cart.h` / `src/cart/cart.c`） |
+| 卡带装载 | [`src/cart/cartlog.md`](src/cart/cartlog.md) | 读 `.nds` 文件、解析 ROM 头、KEY1 安全区解密（`src/cart/cart.h` / `cart.c` / `key1.c` / `key1.h` / `key1_table.inc`） |
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 | CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9/ARM7 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/arm9.h/.c`、`src/cpu/arm7.h/.c`、`src/cpu/exec.h/.c`） |
 | 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 真 2D PPU：读寄存器出图（`src/ppu/ppu.h/.c` SDL 侧 + 纯渲染 `src/ppu/render.h/.c`） |
@@ -140,3 +140,9 @@
 | 2026-08-15 | 13.6 | CPU | Thumb 杂项：高寄存器 ADD/CMP/MOV、取地址、SWI 进 HLE | [cpu](src/cpu/cpulog.md) |
 | 2026-08-15 | 13.7 | CPU/测试 | Thumb 真码写 VRAM + 调 SWI；336 项检查 0 失败 | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
 | 2026-08-15 | 13 完成 | 收尾 | 阶段 13 完成：Thumb 指令集（16 位译码 + 全指令语义 + T 位切换） | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 14.1 | 预习/卡带装载 | 新增 `docs/15-secure-area.md`：安全区加密（KEY1/Blowfish + 子密钥派生 + encryObj） | [15](docs/15-secure-area.md) |
+| 2026-08-15 | 14.2 | 卡带装载 | KEY1（Blowfish）实现：块加解密 + 三级密钥调度 + 密钥表常量 0x1048 字节 | [cart](src/cart/cartlog.md) |
+| 2026-08-15 | 14.3 | 卡带装载 | 安全区解密 + 游戏子密钥派生 + `cart_decrypt_secure_area` | [cart](src/cart/cartlog.md) |
+| 2026-08-15 | 14.4 | 卡带装载/主循环 | 装载时解密安全区后再拷 RAM（`main.c` 接入） | [cart](src/cart/cartlog.md) · [main](src/mainlog.md) |
+| 2026-08-15 | 14.5 | 测试 | 自制含加密安全区 ROM 完整装载；360 项检查 0 失败 | [tests](tests/testlog.md) |
+| 2026-08-15 | 14 完成 | 收尾 | 阶段 14 完成：商业 ROM 装载 + 安全区解密（KEY1/Blowfish） | [cart](src/cart/cartlog.md) · [tests](tests/testlog.md) |

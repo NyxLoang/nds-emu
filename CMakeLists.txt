@@ -59,6 +59,7 @@ add_library(ndscore STATIC
     src/cart/cart.c
     src/cart/arm9.c
     src/cart/arm7.c
+    src/cart/key1.c
 )
 # PUBLIC：include 路径随链接传递，nds-emu 与 test_nds 都能 #include "nds/..." 等
 target_include_directories(ndscore PUBLIC src)

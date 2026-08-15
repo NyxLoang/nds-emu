@@ -60,3 +60,33 @@
 - **做了什么**：`main.c` 装载块整理为 `=== NDS cartridge ===` 结构：file 大小 + arm9/arm7 头字段 + image 拷贝行（首字节对照）。一条命令展示 1.3–1.6 全部内容。
 - **怎么验证**：假 ROM 与真实 ROM 运行均输出完整摘要。
 - **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 14.1 安全区加密短文
+
+- **做了什么**：新增 `docs/15-secure-area.md`：NDS 商业卡带安全区加密（KEY1 = 定制 Blowfish + 固定密钥表 + 三级子密钥派生 + `"encryObj"` 魔数校验）。纠正路线图「ARM9/ARM7 全加密」的说法：只有 ARM9 镜像前 0x800 字节安全区加密。
+- **怎么验证**：能复述安全区位置、密钥表结构、level2/level3 派生差异与解密流程。
+- **结果**：✅ 完成。
+
+## 2026-08-15 · 阶段 14.2/14.3 KEY1 实现 + 安全区解密
+
+- **做了什么**：
+  - 新建 `src/cart/key1.h/.c` 功能文件：Blowfish 块加解密（`key1_encrypt64/decrypt64`，16 轮 + F 函数查 4 个 S 盒）、
+    三级密钥调度（`key1_init_keycode` + `key1_apply_keycode`，keycode 就地加密 + P 数组 `^ bswap32(keycode[i%2])` + 整表重滚）、
+    安全区就地解密/加密（`key1_decrypt/encrypt_secure_area`，level2 剥头 8 字节外层 + level3 解全 0x800 字节）。
+  - 密钥表常量 `src/cart/key1_table.inc`：0x1048 字节（P 数组 18 字 + S 盒 4×256 字），
+    由 `tools/gen_key1_table.py` 从 ndstool `encryption.cpp` 自动生成（= NDS ARM7 BIOS `0x30..0x1077`），
+    首字节 `99 D5 20 5F` 与 melonDS/nds-bootstrap 一致。
+  - `cart.h/.c` 增接口 `cart_decrypt_secure_area(cart)`：从头读 gamecode(`0x00C`)/ARM9 offset(`0x020`)，
+    解密到临时缓冲、魔数校验通过才写回，避免误伤 homebrew。
+  - `CMakeLists.txt` 加 `key1.c`。
+- **怎么验证**：`ctest` 全绿；`test_nds.exe` 新增 24 项检查（块往返×三级、安全区往返、密钥表累加和 0x803BA、
+  bswap32、自制加密 ROM 装载）全过。
+- **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 14.4 装载时解密安全区
+
+- **做了什么**：`main.c` 在解析头后、拷贝 ARM9 镜像前调用 `cart_decrypt_secure_area(cart)`，
+  就地解密 ROM 缓冲里的安全区，使拷进 Main RAM 的镜像已是明文；打印 `secure: KEY1 area decrypted` 或 `not encrypted`。
+- **怎么验证**：`test_secure_area_load` 走完整流程（造加密 ROM → 解密 → 拷 RAM → 断言魔数 + entry PC）通过；`ctest` 全绿。
+- **结果**：✅ 通过。
+

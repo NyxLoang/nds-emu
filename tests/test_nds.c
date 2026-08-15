@@ -6,6 +6,8 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "nds/nds.h"
 #include "bus/bus.h"
@@ -15,6 +17,8 @@
 #include "io/io.h"
 #include "io/disp.h"
 #include "ppu/render.h"
+#include "cart/cart.h"
+#include "cart/key1.h"
 
 /* 与 ppu.h 的 framebuffer 约定保持一致（此处不 include SDL 头，故重复定义）：
    顶屏 = VRAM 起始 256×192；底屏 = VRAM + 0x18000（见 docs/05-framebuffer.md）。 */
@@ -2128,6 +2132,128 @@ static void test_thumb_vram(nds_t *nds)
     CHECK_EQ("thumb swi abs", nds->cpu->r[3], 3);
 }
 
+/* ---- 阶段 14 KEY1 辅助：测试用小端写 32 位 ---- */
+static void put_le32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v);
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+/* ---- 阶段 14.2 KEY1 (Blowfish) 块加解密 + 密钥表自检 ---- */
+static void test_key1_roundtrip(nds_t *nds)
+{
+    (void)nds;
+
+    /* 密钥表自检：累加和固定；bswap32 已知值。 */
+    CHECK_EQ("key1 table checksum", key1_table_checksum(), 0x000803BAu);
+    CHECK_EQ("key1 bswap32", key1_bswap32(0x12345678u), 0x78563412u);
+
+    /* 三级密钥各做一次「加密→解密=还原」往返，覆盖不同调度深度 */
+    for (uint32_t level = 1; level <= 3; level++) {
+        uint32_t keybuf[0x412];
+        key1_init_keycode(keybuf, 0x4D534141u /* "AASM" */, level);
+
+        uint32_t blk[2] = {0x01234567u, 0x89ABCDEFu};
+        uint32_t orig0 = blk[0], orig1 = blk[1];
+        key1_encrypt64(keybuf, blk);
+        int changed = (blk[0] != orig0) || (blk[1] != orig1);
+        key1_decrypt64(keybuf, blk);
+
+        char lo[32], hi[32], ch[32];
+        snprintf(lo, sizeof lo, "key1 L%u rt lo", level);
+        snprintf(hi, sizeof hi, "key1 L%u rt hi", level);
+        snprintf(ch, sizeof ch, "key1 L%u changed", level);
+        CHECK_EQ(lo, blk[0], orig0);
+        CHECK_EQ(hi, blk[1], orig1);
+        CHECK_EQ(ch, changed, 1);
+    }
+}
+
+/* ---- 阶段 14.2 安全区「加密→解密」完整往返 + "encryObj" 魔数 ---- */
+static void test_key1_secure_area(nds_t *nds)
+{
+    (void)nds;
+
+    uint8_t sec[0x800];
+    for (uint32_t i = 0; i < 0x800; i++)
+        sec[i] = (uint8_t)(i * 7u + 3u);   /* 全填可辨认模式 */
+
+    uint8_t plain[0x800];
+    memcpy(plain, sec, sizeof sec);
+
+    const uint32_t gamecode = 0x4D534141u; /* "AASM" */
+
+    key1_encrypt_secure_area(gamecode, sec);
+    /* 加密后头 8 字节不再是明文，body 也应改变 */
+    CHECK_EQ("key1 sec head changed", memcmp(sec, plain, 8) != 0, 1);
+    CHECK_EQ("key1 sec body changed", memcmp(sec + 8, plain + 8, 0x800 - 8) != 0, 1);
+
+    int ok = key1_decrypt_secure_area(gamecode, sec);
+    CHECK_EQ("key1 sec decrypt ok", ok, 1);
+    CHECK_EQ("key1 sec magic e", sec[0], (uint8_t)'e');
+    CHECK_EQ("key1 sec magic j", sec[7], (uint8_t)'j');
+    CHECK_EQ("key1 sec body match", memcmp(sec + 8, plain + 8, 0x800 - 8) == 0, 1);
+}
+
+/* ---- 阶段 14.5 自制含加密安全区的 ROM 走完整装载流程 ---- */
+static void test_secure_area_load(nds_t *nds)
+{
+    const uint32_t gamecode = 0x4D534141u; /* "AASM" */
+    const uint32_t arm9_off = 0x4000;
+    const uint32_t arm9_ram = 0x02000000;  /* Main RAM 基址 */
+    const uint32_t arm9_entry = 0x02000800;
+    const uint32_t arm9_size = 0x1000;
+
+    /* 造一份最小 ROM：头(0x200) + 安全区(0x4000..0x47FF) + 少量 ARM9 代码区 */
+    size_t rom_size = 0x4000 + arm9_size;
+    cart_t cart;
+    cart.data = (unsigned char *)calloc(1, rom_size);
+    cart.size = rom_size;
+    if (cart.data == NULL) {
+        CHECK_EQ("cart alloc", 0, 1);
+        return;
+    }
+
+    /* 头：gamecode @0x00C，ARM9 四字段 @0x020..0x02F */
+    cart.data[0] = 'N'; cart.data[1] = 'T'; cart.data[2] = 'R'; cart.data[3] = 'J';
+    put_le32(cart.data + 0x00C, gamecode);
+    put_le32(cart.data + 0x020, arm9_off);
+    put_le32(cart.data + 0x024, arm9_entry);
+    put_le32(cart.data + 0x028, arm9_ram);
+    put_le32(cart.data + 0x02C, arm9_size);
+
+    /* 安全区明文：body 填模式，头 8 字节由加密函数写 "encryObj" */
+    for (uint32_t i = 0; i < 0x800; i++)
+        cart.data[arm9_off + i] = (uint8_t)(i * 5u + 1u);
+    uint8_t plain_body[0x800 - 8];
+    memcpy(plain_body, cart.data + arm9_off + 8, sizeof plain_body);
+
+    /* 加密安全区，再走 cart 层解密 */
+    key1_encrypt_secure_area(gamecode, cart.data + arm9_off);
+    int decrypted = cart_decrypt_secure_area(&cart);
+    CHECK_EQ("cart sec decrypted", decrypted, 1);
+    CHECK_EQ("cart sec magic e", cart.data[arm9_off + 0], (uint8_t)'e');
+    CHECK_EQ("cart sec magic j", cart.data[arm9_off + 7], (uint8_t)'j');
+    CHECK_EQ("cart sec body match",
+             memcmp(cart.data + arm9_off + 8, plain_body, sizeof plain_body) == 0, 1);
+
+    /* 把解密后的 ARM9 镜像逐字节拷进 Main RAM（模拟 main.c 装载） */
+    for (uint32_t i = 0; i < arm9_size; i++)
+        bus_write8(nds->bus, arm9_ram + i, cart.data[arm9_off + i]);
+
+    /* 读回验证：RAM 里的安全区头 8 字节已是明文魔数 */
+    CHECK_EQ("ram sec magic e", bus_read8(nds->bus, arm9_ram + 0), (uint8_t)'e');
+    CHECK_EQ("ram sec magic j", bus_read8(nds->bus, arm9_ram + 7), (uint8_t)'j');
+
+    /* 从 entry 启动：PC 落在正确入口 */
+    cpu_reset(nds->cpu, arm9_entry);
+    CHECK_EQ("arm9 entry pc", nds->cpu->r[15], arm9_entry);
+
+    free(cart.data);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -2496,6 +2622,27 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_thumb_vram(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 14.2] KEY1 (Blowfish) 块加解密 + 密钥表自检\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_key1_roundtrip(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 14.2] 安全区加密→解密往返 + encryObj 魔数\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_key1_secure_area(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 14.5] 自制含加密安全区的 ROM 完整装载\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_secure_area_load(nds);
         nds_destroy(nds);
     }
 

@@ -1,9 +1,20 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #ifdef _WIN32
 #include <wchar.h>
 #endif
 #include "cart.h"
+#include "key1.h"
+
+/* 从缓冲区读 32 位小端整数（低地址先放低字节）。 */
+static uint32_t read_le32(const unsigned char *p)
+{
+    return (uint32_t)p[0]
+         | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16)
+         | ((uint32_t)p[3] << 24);
+}
 
 /* 从已打开的流读完整份文件到堆缓冲。失败返回 NULL（错误信息写入 err）。
    fname 仅用于错误信息。 */
@@ -89,5 +100,27 @@ int cart_parse_header(const cart_t *cart, cart_header_t *hdr)
         return -1;
     if (arm7_parse(cart->data, cart->size, &hdr->arm7) != 0)
         return -1;
+    return 0;
+}
+
+int cart_decrypt_secure_area(cart_t *cart)
+{
+    /* 需要至少读到 ARM9 offset + 0x800 字节的安全区 */
+    if (cart == NULL || cart->size < 0x30)
+        return 0;
+
+    /* gamecode 在头 0x00C（4 字节小端）；ARM9 offset 在 0x020。 */
+    uint32_t gamecode = read_le32(cart->data + 0x00C);
+    uint32_t arm9_off = read_le32(cart->data + 0x020);
+    if (arm9_off + 0x800 > cart->size)
+        return 0;
+
+    /* 先解密到临时缓冲，校验魔数通过才写回，避免误伤未加密的 homebrew。 */
+    uint8_t sec[0x800];
+    memcpy(sec, cart->data + arm9_off, 0x800);
+    if (key1_decrypt_secure_area(gamecode, sec)) {
+        memcpy(cart->data + arm9_off, sec, 0x800);
+        return 1;
+    }
     return 0;
 }

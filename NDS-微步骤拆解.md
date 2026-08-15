@@ -244,16 +244,21 @@
 ## 阶段 11 — BIOS HLE + SWI 分发
 
 > 真游戏启动时大量调用 BIOS 函数（经 `SWI <编号>`），用 C 直接实现拦截，免于执行 BIOS ROM。
+> 阶段 11（11.1–11.7）沿用**统一确认模式**：阶段末统一汇报，不逐项停下。
+> 11.1–11.7 已全部完成 ✅（2026-08-15 统一确认，`ctest` 256 项检查 0 失败）。
+> 成果：新建 `src/bios/` 模块（接口 `bios_dispatch` + 功能文件 arith/mem/decompress/wait）；
+> `exec.c` 的 SWI 改为「`swi_num>>16` 取号 → HLE 分发，等待未满足则 PC 不动重跑」。
+> 注：`DivArm` 是 GBA 专属（NDS 已移除），故 11.3 只实现 `Div`/`Sqrt`。
 
 | 微步 | 做什么 | 验收 |
 |------|--------|------|
-| 11.1 | 短文：BIOS / SWI / HLE 概念 + NDS SWI 编号表 | 能复述 |
-| 11.2 | SWI 分发框架：`SWI <n>` → `bios_dispatch(n, regs)` | 未知号不崩 |
-| 11.3 | 除法/开方：`Div/DivArm/Sqrt` | 数值单测过 |
-| 11.4 | 内存搬移：`CpuSet/CpuFastSet` | 块搬移单测过 |
-| 11.5 | 解压：`LZ77/RL/Huffman/UnComp` | 解压结果单测过 |
-| 11.6 | 等待：`Halt/IntrWait/VBlankIntrWait` | 能等 VBlank 返回 |
-| 11.7 | 综合：一段调多个 SWI 的真码 | 结果正确 |
+| 11.1 | 短文：BIOS / SWI / HLE 概念 + NDS SWI 编号表 → `docs/12-bios-hle.md` | 能复述 ✅ |
+| 11.2 | SWI 分发框架：`src/bios/` 模块 + `SWI <n>` → `bios_dispatch(n, regs)` | 未知号不崩 ✅ |
+| 11.3 | 除法/开方：`Div`(0x09)/`Sqrt`(0x0D) | 数值单测过 ✅ |
+| 11.4 | 内存搬移：`CpuSet`(0x0B)/`CpuFastSet`(0x0C) | 块搬移单测过 ✅ |
+| 11.5 | 解压：`BitUnPack`(0x10)/`LZ77`(0x11)/`RL`(0x14)/`Huffman`(0x13) | 解压结果单测过 ✅ |
+| 11.6 | 等待：`Halt`(0x06)/`IntrWait`(0x04)/`VBlankIntrWait`(0x05) | 能等 VBlank 返回 ✅ |
+| 11.7 | 综合：一段调多个 SWI 的真码（LZ77 + Div + Sqrt） | 结果正确 ✅ |
 
 ---
 
@@ -321,11 +326,12 @@
 - 阶段 8：ARM7 实例 → 交错 → 中断分流 → FIFO 完整 ✅
 - 阶段 9：真 2D PPU（DISPCNT → Mode3 直色位图 → Mode0 tile → Engine B → OBJ）全部完成 ✅
 - 阶段 10：指令集补全 + SWI（移位操作数 → MRS/MSR → LDM/STM → 乘法 → 半字访存 → SWI → SWP → MRC/MCR → 综合）✅
+- 阶段 11：BIOS HLE + SWI 分发（`src/bios/` 模块 → Div/Sqrt → CpuSet/CpuFastSet → 解压 → 等待 → 综合）✅
 
 ---
 
 ## 建议的立即下一步（确认后才编码）
 
 只做 **一个** 微步，完成后停住请你验证；通过后再做下一步。  
-当前进度：预习 P1–P4 完成；阶段 0–10 全部完成（见总览待办）；阶段 10 的 10.1–10.11 已全部完成（ARM 指令集补全 + SWI，204 项检查 0 失败）。  
-默认顺序：**11.1 短文（BIOS / SWI / HLE 概念 + NDS SWI 编号表）**；每步之间都等你验证。
+当前进度：预习 P1–P4 完成；阶段 0–11 全部完成（见总览待办）；阶段 11 的 11.1–11.7 已全部完成（BIOS HLE + SWI 分发，256 项检查 0 失败）。  
+默认顺序：**12.1 短文（特权模式 / CPSR 模式位 / 异常向量表）**；每步之间都等你验证。

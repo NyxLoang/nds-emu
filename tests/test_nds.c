@@ -1392,6 +1392,312 @@ static void test_stage10_integration(nds_t *nds)
     CHECK_EQ("itg vram fill 16px", ok, 1);
 }
 
+/* ---- 11.3 用例：Div 有符号除法 + Sqrt 开方 ---- */
+static void test_bios_div_sqrt(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    static const uint32_t prog_div[] = {
+        /* 0x00 */ 0xEF090000, /* SWI 0x09 (Div) */
+        /* 0x04 */ 0xEAFFFFFE, /* B self */
+    };
+    static const uint32_t prog_sqrt[] = {
+        /* 0x00 */ 0xEF0D0000, /* SWI 0x0D (Sqrt) */
+        /* 0x04 */ 0xEAFFFFFE, /* B self */
+    };
+
+    /* 正数除法：1234 / 10 → 123 r 4 */
+    nds->cpu->r[0] = 1234u;
+    nds->cpu->r[1] = 10u;
+    run_program(nds, base, prog_div, 2, base, base + 4, 8);
+    CHECK_EQ("div quot", nds->cpu->r[0], 123u);
+    CHECK_EQ("div rem",  nds->cpu->r[1], 4u);
+    CHECK_EQ("div abs",  nds->cpu->r[3], 123u);
+
+    /* 负数除法：-1234 / 10 → -123 r -4, |商|=123 */
+    nds->cpu->r[0] = (uint32_t)(int32_t)(-1234);
+    nds->cpu->r[1] = 10u;
+    run_program(nds, base, prog_div, 2, base, base + 4, 8);
+    CHECK_EQ("div neg quot", nds->cpu->r[0], (uint32_t)(int32_t)(-123));
+    CHECK_EQ("div neg rem",  nds->cpu->r[1], (uint32_t)(int32_t)(-4));
+    CHECK_EQ("div neg abs",  nds->cpu->r[3], 123u);
+
+    /* 开方：100 → 10、2 → 1、最大 → 65535 */
+    nds->cpu->r[0] = 100u;
+    run_program(nds, base, prog_sqrt, 2, base, base + 4, 8);
+    CHECK_EQ("sqrt 100", nds->cpu->r[0], 10u);
+    nds->cpu->r[0] = 2u;
+    run_program(nds, base, prog_sqrt, 2, base, base + 4, 8);
+    CHECK_EQ("sqrt 2", nds->cpu->r[0], 1u);
+    nds->cpu->r[0] = 0xFFFFFFFFu;
+    run_program(nds, base, prog_sqrt, 2, base, base + 4, 8);
+    CHECK_EQ("sqrt max", nds->cpu->r[0], 65535u);
+}
+
+/* ---- 11.4 用例：CpuSet / CpuFastSet 搬移与填充 ---- */
+static void test_bios_cpuset(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    uint32_t src = 0x02001000u;
+    uint32_t dst = 0x02002000u;
+
+    bus_write32(nds->bus, src + 0, 0x11111111u);
+    bus_write32(nds->bus, src + 4, 0x22222222u);
+    bus_write32(nds->bus, src + 8, 0x33333333u);
+    bus_write32(nds->bus, src + 12, 0x44444444u);
+
+    static const uint32_t prog_cpuset[] = {
+        /* 0x00 */ 0xEF0B0000, /* SWI 0x0B (CpuSet) */
+        /* 0x04 */ 0xEAFFFFFE, /* B self */
+    };
+    static const uint32_t prog_fast[] = {
+        /* 0x00 */ 0xEF0C0000, /* SWI 0x0C (CpuFastSet) */
+        /* 0x04 */ 0xEAFFFFFE, /* B self */
+    };
+
+    /* 32 位拷贝 4 字：ctl = bit26(32bit) | 4 */
+    nds->cpu->r[0] = src;
+    nds->cpu->r[1] = dst;
+    nds->cpu->r[2] = (1u << 26) | 4u;
+    run_program(nds, base, prog_cpuset, 2, base, base + 4, 8);
+    CHECK_EQ("cpuset copy w0", bus_read32(nds->bus, dst + 0), 0x11111111u);
+    CHECK_EQ("cpuset copy w1", bus_read32(nds->bus, dst + 4), 0x22222222u);
+    CHECK_EQ("cpuset copy w2", bus_read32(nds->bus, dst + 8), 0x33333333u);
+    CHECK_EQ("cpuset copy w3", bus_read32(nds->bus, dst + 12), 0x44444444u);
+
+    /* 16 位填充 8 半字：ctl = bit24(固定源) | 8 */
+    nds->cpu->r[0] = src;         /* src 低半字 0x1111 */
+    nds->cpu->r[1] = dst;
+    nds->cpu->r[2] = (1u << 24) | 8u;
+    run_program(nds, base, prog_cpuset, 2, base, base + 4, 8);
+    int ok = 1;
+    for (int i = 0; i < 8; i++)
+        if (bus_read16(nds->bus, dst + 2u * i) != 0x1111u) { ok = 0; break; }
+    CHECK_EQ("cpuset fill 16bit", ok, 1);
+
+    /* CpuFastSet 拷贝 4 字 */
+    nds->cpu->r[0] = src;
+    nds->cpu->r[1] = dst;
+    nds->cpu->r[2] = 4u;
+    run_program(nds, base, prog_fast, 2, base, base + 4, 8);
+    CHECK_EQ("fastset copy w0", bus_read32(nds->bus, dst + 0), 0x11111111u);
+    CHECK_EQ("fastset copy w3", bus_read32(nds->bus, dst + 12), 0x44444444u);
+}
+
+/* ---- 11.5 用例：BitUnPack / LZ77 / RL / Huffman 解压 ---- */
+static void test_bios_decompress(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    uint32_t src = 0x02001000u;
+    uint32_t dst = 0x02002000u;
+
+    /* --- BitUnPack：src_w=4, dst_w=8，源 {0x12,0x34} → 0x01,0x02,0x03,0x04 --- */
+    uint32_t info = 0x02003000u;
+    bus_write8(nds->bus, src + 0, 0x12);
+    bus_write8(nds->bus, src + 1, 0x34);
+    bus_write16(nds->bus, info + 0, 2);   /* 源长 2 字节 */
+    bus_write8(nds->bus, info + 2, 4);    /* 源位宽 4 */
+    bus_write8(nds->bus, info + 3, 8);    /* 目的位宽 8 */
+    bus_write32(nds->bus, info + 4, 0);   /* 偏移 0，零标志 0 */
+
+    static const uint32_t prog_unpack[] = {
+        /* 0x00 */ 0xEF100000, /* SWI 0x10 (BitUnPack) */
+        /* 0x04 */ 0xEAFFFFFE,
+    };
+    nds->cpu->r[0] = src;
+    nds->cpu->r[1] = dst;
+    nds->cpu->r[2] = info;
+    run_program(nds, base, prog_unpack, 2, base, base + 4, 8);
+    CHECK_EQ("unpack b0", bus_read8(nds->bus, dst + 0), 0x01u);
+    CHECK_EQ("unpack b1", bus_read8(nds->bus, dst + 1), 0x02u);
+    CHECK_EQ("unpack b2", bus_read8(nds->bus, dst + 2), 0x03u);
+    CHECK_EQ("unpack b3", bus_read8(nds->bus, dst + 3), 0x04u);
+
+    /* 带偏移 + 零标志：源 {0x12,0x03} → 0x31,0x32,0x30,0x33 */
+    bus_write8(nds->bus, src + 0, 0x12);
+    bus_write8(nds->bus, src + 1, 0x03);
+    bus_write32(nds->bus, info + 4, 0x80000030u); /* 零标志 + 偏移 0x30 */
+    run_program(nds, base, prog_unpack, 2, base, base + 4, 8);
+    CHECK_EQ("unpack off b0", bus_read8(nds->bus, dst + 0), 0x31u);
+    CHECK_EQ("unpack off b1", bus_read8(nds->bus, dst + 1), 0x32u);
+    CHECK_EQ("unpack off b2", bus_read8(nds->bus, dst + 2), 0x30u);
+    CHECK_EQ("unpack off b3", bus_read8(nds->bus, dst + 3), 0x33u);
+
+    /* --- LZ77：解压出 "ABCABCABC" --- */
+    bus_write32(nds->bus, src + 0, 0x00000910u); /* size=9, type=1 */
+    bus_write8(nds->bus, src + 4, 0x1C);          /* 块 0-2 字面量、3-5 回溯 */
+    bus_write8(nds->bus, src + 5, 'A');
+    bus_write8(nds->bus, src + 6, 'B');
+    bus_write8(nds->bus, src + 7, 'C');
+    bus_write16(nds->bus, src + 8, 0x0200);       /* disp=2, len=3 */
+    bus_write16(nds->bus, src + 10, 0x0200);
+    bus_write16(nds->bus, src + 12, 0x0200);
+
+    static const uint32_t prog_lz77[] = {
+        /* 0x00 */ 0xEF110000, /* SWI 0x11 (LZ77 Wram) */
+        /* 0x04 */ 0xEAFFFFFE,
+    };
+    nds->cpu->r[0] = src;
+    nds->cpu->r[1] = dst;
+    run_program(nds, base, prog_lz77, 2, base, base + 4, 8);
+    CHECK_EQ("lz77 b0", bus_read8(nds->bus, dst + 0), (uint8_t)'A');
+    CHECK_EQ("lz77 b2", bus_read8(nds->bus, dst + 2), (uint8_t)'C');
+    CHECK_EQ("lz77 b3", bus_read8(nds->bus, dst + 3), (uint8_t)'A');
+    CHECK_EQ("lz77 b8", bus_read8(nds->bus, dst + 8), (uint8_t)'C');
+
+    /* --- RL：解压出 "AAAAABBBBB" --- */
+    bus_write32(nds->bus, src + 0, 0x00000A30u); /* size=10, type=3 */
+    bus_write8(nds->bus, src + 4, 0x82);          /* 压缩 5 字节 */
+    bus_write8(nds->bus, src + 5, 'A');
+    bus_write8(nds->bus, src + 6, 0x82);
+    bus_write8(nds->bus, src + 7, 'B');
+
+    static const uint32_t prog_rl[] = {
+        /* 0x00 */ 0xEF140000, /* SWI 0x14 (RL Wram) */
+        /* 0x04 */ 0xEAFFFFFE,
+    };
+    nds->cpu->r[0] = src;
+    nds->cpu->r[1] = dst;
+    run_program(nds, base, prog_rl, 2, base, base + 4, 8);
+    CHECK_EQ("rl b0", bus_read8(nds->bus, dst + 0), (uint8_t)'A');
+    CHECK_EQ("rl b4", bus_read8(nds->bus, dst + 4), (uint8_t)'A');
+    CHECK_EQ("rl b5", bus_read8(nds->bus, dst + 5), (uint8_t)'B');
+    CHECK_EQ("rl b9", bus_read8(nds->bus, dst + 9), (uint8_t)'B');
+
+    /* --- Huffman：解压出 "ABBA" --- */
+    bus_write32(nds->bus, src + 0, 0x00000428u); /* 数据位宽8, type=2, size=4 */
+    bus_write8(nds->bus, src + 4, 0x01);          /* 树长字节 = (表字节数/2)-1 = 1 */
+    bus_write8(nds->bus, src + 5, 0xC0);          /* 根：node0/node1 都是数据 */
+    bus_write8(nds->bus, src + 6, 'A');           /* node0 数据 */
+    bus_write8(nds->bus, src + 7, 'B');           /* node1 数据 */
+    bus_write8(nds->bus, src + 8, 0x00);          /* 填充，使树表 4 字节 */
+    bus_write32(nds->bus, src + 9, 0x60000000u);  /* 位流 0,1,1,0 = A,B,B,A */
+
+    static const uint32_t prog_huff[] = {
+        /* 0x00 */ 0xEF130000, /* SWI 0x13 (Huff) */
+        /* 0x04 */ 0xEAFFFFFE,
+    };
+    nds->cpu->r[0] = src;
+    nds->cpu->r[1] = dst;
+    run_program(nds, base, prog_huff, 2, base, base + 4, 8);
+    CHECK_EQ("huff b0", bus_read8(nds->bus, dst + 0), (uint8_t)'A');
+    CHECK_EQ("huff b1", bus_read8(nds->bus, dst + 1), (uint8_t)'B');
+    CHECK_EQ("huff b2", bus_read8(nds->bus, dst + 2), (uint8_t)'B');
+    CHECK_EQ("huff b3", bus_read8(nds->bus, dst + 3), (uint8_t)'A');
+}
+
+/* ---- 11.6 用例：Halt / IntrWait / VBlankIntrWait ---- */
+static void test_bios_wait(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+
+    /* VBlankIntrWait：SWI 0x05 等 VBlank，未置位时 PC 停在 SWI，置位后前进并清位 */
+    static const uint32_t prog_vb[] = {
+        /* 0x00 */ 0xEF050000, /* SWI 0x05 (VBlankIntrWait) */
+        /* 0x04 */ 0xE3A00005, /* MOV r0, #5 */
+        /* 0x08 */ 0xEAFFFFFE, /* B self */
+    };
+    bus_write32(nds->bus, base + 0, prog_vb[0]);
+    bus_write32(nds->bus, base + 4, prog_vb[1]);
+    bus_write32(nds->bus, base + 8, prog_vb[2]);
+    exec_set_trace(0);
+    cpu_reset(nds->cpu, base);
+    for (int i = 0; i < 4; i++)
+        cpu_step(nds->cpu);
+    CHECK_EQ("vbwait stuck PC", nds->cpu->r[15], base);
+    io_set_vblank(nds->io);
+    cpu_step(nds->cpu);   /* SWI 看到 VBlank → 清位 → 前进 */
+    cpu_step(nds->cpu);   /* MOV r0,#5 */
+    exec_set_trace(1);
+    CHECK_EQ("vbwait r0", nds->cpu->r[0], 5u);
+    CHECK_EQ("vbwait PC", nds->cpu->r[15], base + 8);
+    CHECK_EQ("vbwait flag cleared", nds->io->irq[0].ifl & IO_IF_VBLANK, 0u);
+
+    /* IntrWait：SWI 0x04 等 r1 指定的位，置位后前进并清位 */
+    static const uint32_t prog_iw[] = {
+        /* 0x00 */ 0xEF040000, /* SWI 0x04 (IntrWait) */
+        /* 0x04 */ 0xE3A00006, /* MOV r0, #6 */
+        /* 0x08 */ 0xEAFFFFFE,
+    };
+    bus_write32(nds->bus, base + 0, prog_iw[0]);
+    bus_write32(nds->bus, base + 4, prog_iw[1]);
+    bus_write32(nds->bus, base + 8, prog_iw[2]);
+    cpu_reset(nds->cpu, base);
+    nds->cpu->r[1] = IO_IF_VBLANK; /* 等 VBlank 位 */
+    exec_set_trace(0);
+    cpu_step(nds->cpu);
+    cpu_step(nds->cpu);
+    CHECK_EQ("intrwait stuck PC", nds->cpu->r[15], base);
+    CHECK_EQ("intrwait ime=1", nds->io->irq[0].ime, 1u);
+    io_set_vblank(nds->io);
+    cpu_step(nds->cpu);
+    cpu_step(nds->cpu);
+    exec_set_trace(1);
+    CHECK_EQ("intrwait r0", nds->cpu->r[0], 6u);
+    CHECK_EQ("intrwait flag cleared", nds->io->irq[0].ifl & IO_IF_VBLANK, 0u);
+
+    /* Halt：SWI 0x06 等 (IE & IF) != 0 */
+    static const uint32_t prog_halt[] = {
+        /* 0x00 */ 0xEF060000, /* SWI 0x06 (Halt) */
+        /* 0x04 */ 0xE3A00007, /* MOV r0, #7 */
+        /* 0x08 */ 0xEAFFFFFE,
+    };
+    bus_write32(nds->bus, base + 0, prog_halt[0]);
+    bus_write32(nds->bus, base + 4, prog_halt[1]);
+    bus_write32(nds->bus, base + 8, prog_halt[2]);
+    cpu_reset(nds->cpu, base);
+    /* 无中断时 Halt 等待 */
+    exec_set_trace(0);
+    cpu_step(nds->cpu);
+    cpu_step(nds->cpu);
+    CHECK_EQ("halt stuck PC", nds->cpu->r[15], base);
+    /* 置 IE & IF 后 Halt 返回 */
+    nds->io->irq[0].ie = IO_IF_VBLANK;
+    nds->io->irq[0].ifl = IO_IF_VBLANK;
+    cpu_step(nds->cpu);
+    cpu_step(nds->cpu);
+    exec_set_trace(1);
+    CHECK_EQ("halt r0", nds->cpu->r[0], 7u);
+    CHECK_EQ("halt PC", nds->cpu->r[15], base + 8);
+}
+
+/* ---- 11.7 用例：综合（LZ77 解压到 VRAM + Div + Sqrt 串行） ---- */
+static void test_stage11_integration(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    uint32_t src = 0x02001000u;
+    uint32_t dst = BUS_VRAM_BASE;
+
+    /* LZ77 压缩数据：解压出 "ABCABCABC" */
+    bus_write32(nds->bus, src + 0, 0x00000910u);
+    bus_write8(nds->bus, src + 4, 0x1C);
+    bus_write8(nds->bus, src + 5, 'A');
+    bus_write8(nds->bus, src + 6, 'B');
+    bus_write8(nds->bus, src + 7, 'C');
+    bus_write16(nds->bus, src + 8, 0x0200);
+    bus_write16(nds->bus, src + 10, 0x0200);
+    bus_write16(nds->bus, src + 12, 0x0200);
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xEF110000, /* SWI 0x11 (LZ77)  r0=src, r1=VRAM 预置 */
+        /* 0x04 */ 0xE3A0007B, /* MOV r0, #123 */
+        /* 0x08 */ 0xE3A0100A, /* MOV r1, #10 */
+        /* 0x0C */ 0xEF090000, /* SWI 0x09 (Div)  r0=12, r1=3, r3=12 */
+        /* 0x10 */ 0xE3A00064, /* MOV r0, #100 */
+        /* 0x14 */ 0xEF0D0000, /* SWI 0x0D (Sqrt) r0=10 */
+        /* 0x18 */ 0xEAFFFFFE, /* B self */
+    };
+    nds->cpu->r[0] = src;
+    nds->cpu->r[1] = dst;
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x18, 64);
+
+    CHECK_EQ("itg11 lz77[0]", bus_read8(nds->bus, dst + 0), (uint8_t)'A');
+    CHECK_EQ("itg11 lz77[8]", bus_read8(nds->bus, dst + 8), (uint8_t)'C');
+    CHECK_EQ("itg11 div r1", nds->cpu->r[1], 3u);
+    CHECK_EQ("itg11 div r3", nds->cpu->r[3], 12u);
+    CHECK_EQ("itg11 sqrt r0", nds->cpu->r[0], 10u);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -1661,6 +1967,41 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_stage10_integration(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 11.3] Div 除法 / Sqrt 开方\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bios_div_sqrt(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 11.4] CpuSet / CpuFastSet 搬移与填充\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bios_cpuset(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 11.5] BitUnPack / LZ77 / RL / Huffman 解压\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bios_decompress(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 11.6] Halt / IntrWait / VBlankIntrWait\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bios_wait(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 11.7] 综合（LZ77 解压 + Div + Sqrt 串行）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_stage11_integration(nds);
         nds_destroy(nds);
     }
 

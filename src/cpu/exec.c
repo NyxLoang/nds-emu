@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include "exec.h"
 #include "bus/bus.h"
+#include "bios/bios.h"
 
 /* 指令级跟踪开关（exec_set_trace 控制） */
 static int g_trace = 1;
@@ -384,15 +385,17 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         return 1;
     }
 
-    /* SWI：bit27-24=1111。24 位立即数 = BIOS 函数号（阶段 10.8 只记录，
-       阶段 11 BIOS HLE 拦截，阶段 12 才真正进异常向量）。 */
+    /* SWI：bit27-24=1111。24 位立即数 = 注释字段（ARM 状态函数号 = 其 >>16）。
+       阶段 10.8 只记录；阶段 11 起经 BIOS HLE 拦截分发，阶段 12 才真正进异常向量。
+       已处理/未知号 → PC += 4；等待未满足 → PC 不动，重跑本 SWI（等价忙等）。 */
     if ((insn & 0x0F000000u) == 0x0F000000u) {
         cpu->swi_num = insn & 0x00FFFFFFu;
         if (g_trace)
             printf("cpu: PC=%08X insn=%08X SWI %u cycles=%llu\n",
                    cpu->r[15], insn, cpu->swi_num,
                    (unsigned long long)cpu->cycles);
-        cpu->r[15] += 4;
+        if (bios_dispatch(cpu->swi_num >> 16, cpu) != BIOS_RET_WAIT)
+            cpu->r[15] += 4;
         return 1;
     }
 

@@ -118,3 +118,11 @@
 | 2026-08-15 | 10.10 | CPU | MRC/MCR 协处理器访问（CP15 桩，按 CRn 索引） | [cpu](src/cpu/cpulog.md) |
 | 2026-08-15 | 10.11 | CPU/测试 | 综合真码（PUSH/POP + SWI + MUL + STRH 循环搬 VRAM）；204 项检查 0 失败 | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
 | 2026-08-15 | 10 完成 | 收尾 | 阶段 10 完成：ARM 指令集补全 + SWI（移位/MRS/MSR/LDM/STM/乘法/半字访存/SWI/SWP/MRC/MCR） | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 11.1 | 预习/BIOS | 新增 `docs/12-bios-hle.md`：BIOS/SWI/HLE 概念 + NDS SWI 编号表 + 寄存器约定 | [12](docs/12-bios-hle.md) |
+| 2026-08-15 | 11.2 | BIOS | 新建 `src/bios/` 模块：`bios_dispatch` 分发框架；exec.c SWI 改 HLE 拦截（等待不前进 PC） | [bios](src/bios/bioslog.md) |
+| 2026-08-15 | 11.3 | BIOS | Div(0x09)/Sqrt(0x0D)；注 DivArm 为 GBA 专属 | [bios](src/bios/bioslog.md) |
+| 2026-08-15 | 11.4 | BIOS | CpuSet(0x0B)/CpuFastSet(0x0C) 16/32 位搬移与填充 | [bios](src/bios/bioslog.md) |
+| 2026-08-15 | 11.5 | BIOS | 解压 BitUnPack(0x10)/LZ77(0x11)/RL(0x14)/Huffman(0x13) | [bios](src/bios/bioslog.md) |
+| 2026-08-15 | 11.6 | BIOS | 等待 Halt(0x06)/IntrWait(0x04)/VBlankIntrWait(0x05)（PC 不动等价等待） | [bios](src/bios/bioslog.md) |
+| 2026-08-15 | 11.7 | BIOS/测试 | 综合真码（LZ77 解压到 VRAM + Div + Sqrt 串行）；256 项检查 0 失败 | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 11 完成 | 收尾 | 阶段 11 完成：BIOS HLE + SWI 分发（`src/bios/` 模块 + 除法/开方/搬移/解压/等待） | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) |

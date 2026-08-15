@@ -202,3 +202,28 @@
 - **踩坑（测试）**：`MOV r4,#0x7C00` 编码误用 `0xE3A0447C`（带旋转），改 `0xE3A04C7C`（无旋转）。
 - 阶段 10 收尾全量 **204 项检查 0 失败**。
 
+## 11.3 — 用例：Div / Sqrt
+
+- `test_bios_div_sqrt`：正/负除法（商/余/绝对值商）与开方（100/2/max）。参数经 `cpu->r[]` 直接预置，
+  程序只需 `SWI Div` / `SWI Sqrt`（`0xEF090000`/`0xEF0D0000`）。
+
+## 11.4 — 用例：CpuSet / CpuFastSet
+
+- `test_bios_cpuset`：CpuSet 32 位拷贝 4 字、16 位固定源填充 8 半字、CpuFastSet 拷贝 4 字。
+  控制字 `r2` 按 bit24(固定源)/bit26(宽度) 组合。
+
+## 11.5 — 用例：BitUnPack / LZ77 / RL / Huffman
+
+- `test_bios_decompress`：手造压缩流解压断言——BitUnPack（含偏移+零标志）、LZ77（"ABCABCABC"）、
+  RL（"AAAAABBBBB"）、Huffman（"ABBA"，树：根两子均数据）。
+
+## 11.6 — 用例：Halt / IntrWait / VBlankIntrWait
+
+- `test_bios_wait`：自定义驱动（非 `run_program`）在等待中注入 `io_set_vblank`——
+  未置位时 PC 停在 SWI，置位后前进并清 IF 位；IntrWait 验证 `IME=1`；Halt 验证 `(IE&IF)!=0` 才返回。
+
+## 11.7 — 用例：综合真码
+
+- `test_stage11_integration`：LZ77 解压到 VRAM → Div → Sqrt 串行，断言 VRAM 内容与寄存器。
+- 阶段 11 收尾全量 **256 项检查 0 失败**。
+

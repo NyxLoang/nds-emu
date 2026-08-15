@@ -42,6 +42,11 @@ add_library(ndscore STATIC
     src/cpu/exec.c
     src/cpu/arm9.c
     src/cpu/arm7.c
+    src/bios/bios.c
+    src/bios/bios_arith.c
+    src/bios/bios_mem.c
+    src/bios/bios_decompress.c
+    src/bios/bios_wait.c
     src/io/io.c
     src/io/irq.c
     src/io/timer.c

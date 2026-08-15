@@ -74,6 +74,13 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - BUS_VRAM_SUB_OBJ_BASE);
         return 1;
     }
+    /* LCDC 分配 VRAM（阶段 20.2 显示捕获目标）→ vram[0] */
+    if (addr >= BUS_LCDC_VRAM_BASE &&
+        addr - BUS_LCDC_VRAM_BASE < BUS_LCDC_VRAM_SIZE) {
+        *region = bus->vram;
+        *off = (size_t)(addr - BUS_LCDC_VRAM_BASE);
+        return 1;
+    }
     /* IO 寄存器区不在这里命中（阶段 6 起由 io 模块处理），返回 0 表示非内存数组 */
     return 0;
 }

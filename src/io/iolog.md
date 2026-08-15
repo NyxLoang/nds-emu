@@ -176,3 +176,21 @@
 - `bus.c` 的 `bus_write32` 增几何区 ARM9 整字转发（`addr∈[0x04000400,0x04000600) && !active_is_arm7` → `io_gx_write32`），
   避免拆字节破坏「命令字 + 参数字」的 40 位命令语义；ARM7 侧仍走音频（`bus_write32` 拆字节 → `snd_write8`）。
 - **怎么验证**：`test_gx_fifo`（GXFIFO 命令流出图）+ 原 `test_snd_*` 切到 `active_is_arm7=1` 后仍全过。
+
+## 20.1 — 仿射背景寄存器（disp 扩展）
+
+- `disp_t` 增 `bg_pa[2][4]` / `bg_ref[2][2]`（主）+ `_sub` 镜像（副）；`disp.h` 定义
+  `IO_BG_AFFINE_BASE=0x04000020`（主）/`IO_BG_AFFINE_SUB_BASE=0x04001020`（副），块内布局：
+  BG2 的 PA/PB/PC/PD（4×16b）+ X/Y（2×32b），其后 BG3 同样 0x10 字节。
+- `disp_affine_parse()` 把地址解析成 (engine, bg, 块内偏移)；`disp_read8/write8` 处理仿射区：
+  PA-PD 16 位小端；X/Y 32 位小端，**bit28-31 无效**（写 byte3 只低 4 位有效，读回为 28 位符号值）。
+
+## 20.2/20.3 — 混合/亮度/窗口/捕获寄存器（disp 扩展）
+
+- `disp_t` 增 `blendcnt/blendalpha/blendy/master_bright/dispcapcnt/win0h..winout`（主）+ `_sub` 镜像；
+  `disp.h` 定义 `IO_WIN0H..IO_WINOUT`（0x04000040..4A）、`IO_BLENDCNT/BLDALPHA/BLDY`（0x04000050..54）、
+  `IO_DISPCAPCNT`（0x04000064）、`IO_MASTER_BRIGHT`（0x0400006C）及副引擎 `+0x1000` 偏移。
+- 16 位寄存器经 `disp_reg16` 查找表（`offsetof` 映射）按字节读写；DISPCAPCNT 32 位单独处理。
+- **踩坑修复**：`disp_reg16` 原按寄存器基址精确匹配，`bus_write16` 写高字节（奇地址）时匹配失败导致高字节丢失；
+  改为 `addr & ~1u` 对齐基址后，低/高字节都能正确写入对应字段。
+- **怎么验证**：`test_blend_regs`（主/副混合三件套 + 主亮度 + 窗口 + 捕获全读写回）全过。

@@ -30,6 +30,10 @@
 #define BUS_VRAM_MAIN_OBJ_PHYS  0x20000u      /* 主 OBJ 窗口物理偏移（bank B） */
 #define BUS_VRAM_SUB_OBJ_PHYS   0x60000u      /* 副 OBJ 窗口物理偏移（bank D） */
 
+/* LCDC 分配 VRAM 窗口（阶段 20.2 显示捕获目标）：0x06800000 起 512KB，映射到 vram[0] */
+#define BUS_LCDC_VRAM_BASE 0x06800000u
+#define BUS_LCDC_VRAM_SIZE (512 * 1024)
+
 /* 地址区间基址（内存地图见 docs/03-memory-map.md） */
 #define BUS_MAIN_RAM_BASE 0x02000000u
 #define BUS_VRAM_BASE     0x06000000u

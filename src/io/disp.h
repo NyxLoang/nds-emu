@@ -18,6 +18,55 @@
 
 #define IO_BG_COUNT 4
 
+/* 仿射（旋转/缩放）背景参数区（阶段 20.1）：主引擎 0x04000020 起 0x20 字节，副引擎 +0x1000。
+   布局：BG2 的 PA/PB/PC/PD（4×16bit）+ X/Y 参考点（2×32bit），其后 BG3 同样 0x10 字节。 */
+#define IO_BG_AFFINE_BASE     0x04000020u
+#define IO_BG_AFFINE_SUB_BASE 0x04001020u
+#define IO_BG_AFFINE_SIZE     0x20u
+
+/* BGxCNT 溢出位：旋转/缩放模式下，纹理越界时 0=透明、1=环绕（阶段 20.1） */
+#define BGCNT_OVERFLOW        (1u << 13)
+
+/* ---- 阶段 20.2/20.3：混合/亮度/窗口/捕获寄存器（主引擎地址，副引擎 +0x1000） ---- */
+#define IO_WIN0H             0x04000040u
+#define IO_WIN1H             0x04000042u
+#define IO_WIN0V             0x04000044u
+#define IO_WIN1V             0x04000046u
+#define IO_WININ             0x04000048u
+#define IO_WINOUT            0x0400004Au
+#define IO_BLENDCNT          0x04000050u
+#define IO_BLENDALPHA        0x04000052u
+#define IO_BLENDY            0x04000054u
+#define IO_DISPCAPCNT        0x04000064u
+#define IO_MASTER_BRIGHT     0x0400006Cu
+
+#define IO_WIN0H_SUB         0x04001040u
+#define IO_BLENDCNT_SUB      0x04001050u
+#define IO_MASTER_BRIGHT_SUB 0x0400106Cu
+
+/* BLENDCNT 位：0-5 第一目标(BG0-3/OBJ/BD)、6-7 模式、8-13 第二目标 */
+#define BLEND_1ST_BG0        (1u << 0)
+#define BLEND_1ST_BG1        (1u << 1)
+#define BLEND_1ST_BG2        (1u << 2)
+#define BLEND_1ST_BG3        (1u << 3)
+#define BLEND_1ST_OBJ        (1u << 4)
+#define BLEND_1ST_BD         (1u << 5)
+#define BLEND_MODE_SHIFT     6
+#define BLEND_MODE_MASK      (3u << 6)
+#define BLEND_2ND_BG0        (1u << 8)
+#define BLEND_2ND_BG1        (1u << 9)
+#define BLEND_2ND_BG2        (1u << 10)
+#define BLEND_2ND_BG3        (1u << 11)
+#define BLEND_2ND_OBJ        (1u << 12)
+#define BLEND_2ND_BD         (1u << 13)
+
+/* MASTER_BRIGHT 位：0-4 因子、14-15 模式(0=关,1=增亮,2=减暗) */
+#define MB_FACTOR_MASK       0x1Fu
+#define MB_MODE_SHIFT        14
+
+/* DISPCAPCNT 位（仅主引擎）：31 使能、16-17 写块、20-21 尺寸、24 源A、29-30 源选择 */
+#define DISPCAP_ENABLE       (1u << 31)
+
 /* ---- DISPCNT 位定义 ---- */
 #define DISPCNT_MODE_MASK        0x00000007u   /* bit0-2 BG 模式 */
 #define DISPCNT_FORCED_BLANK     (1u << 7)     /* 强制消隐 */
@@ -55,6 +104,26 @@ typedef struct disp {
     uint16_t vofs[IO_BG_COUNT];       /* 主 BG0-3 垂直滚动 */
     uint16_t hofs_sub[IO_BG_COUNT];   /* 副 BG0-3 水平滚动 */
     uint16_t vofs_sub[IO_BG_COUNT];   /* 副 BG0-3 垂直滚动 */
+    /* 阶段 20.1：BG2/BG3 仿射参数。PA-PD 为 1.7.8 定点（16 位有符号），
+       X/Y 参考点为 1.19.8 定点（32 位有符号，高 4 位忽略）。 */
+    int16_t bg_pa[2][4];              /* 主 [bg 0=BG2,1=BG3][A,B,C,D] */
+    int32_t bg_ref[2][2];             /* 主 [bg][0=X,1=Y] */
+    int16_t bg_pa_sub[2][4];          /* 副 [bg][A,B,C,D] */
+    int32_t bg_ref_sub[2][2];         /* 副 [bg][0=X,1=Y] */
+    /* 阶段 20.2/20.3：混合 / 亮度 / 窗口 / 显示捕获 */
+    uint16_t blendcnt;                /* BLENDCNT（主） */
+    uint16_t blendcnt_sub;            /* BLENDCNT（副） */
+    uint16_t blendalpha;              /* BLDALPHA：EVA(0-4) EVB(8-12) */
+    uint16_t blendalpha_sub;
+    uint16_t blendy;                  /* BLDY：EVY(0-4) */
+    uint16_t blendy_sub;
+    uint16_t master_bright;           /* MASTER_BRIGHT（主） */
+    uint16_t master_bright_sub;
+    uint32_t dispcapcnt;              /* DISPCAPCNT（仅主引擎） */
+    uint16_t win0h, win1h, win0v, win1v;      /* 主窗口矩形 */
+    uint16_t win0h_sub, win1h_sub, win0v_sub, win1v_sub;
+    uint16_t winin, winout;           /* 主窗口使能 */
+    uint16_t winin_sub, winout_sub;
 } disp_t;
 
 int disp_is_addr(uint32_t addr);

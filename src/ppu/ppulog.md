@@ -144,3 +144,24 @@
   0 像素视作「无几何」背景保留 2D 输出，非 0 像素用其 RGB555 颜色覆盖（最小实现：不分优先级、无 alpha 混合）。
 - `render_frame` 末尾调用（仅顶屏；副引擎无 3D）。`render.c` 引入 `io/io.h` + `gx/gx.h` 以读 `bus->io->gx`。
 - 验收：`test_gx_layer`——3D 未使能时像素露 2D 黑背景、使能后三角形红覆盖到顶屏。
+
+### 20.1 — 旋转/缩放（仿射）背景
+
+- `render.c` 新增 `draw_affine_bg()`：屏幕坐标经**逆仿射变换**映射回纹理坐标
+  （`tx = refx + PA·x + PB·y`，`ty = refy + PC·x + PD·y`，除 256 取整数像素）。
+  PA-PD 为 1.7.8 定点（16 位有符号），X/Y 参考点为 1.19.8 定点（32 位，高 4 位忽略，`affine_ref` 符号扩展）。
+- 纹理恒 8bpp、map 为 1 字节/项；越界行为由 BGxCNT bit13 决定：0=透明、1=环绕（`size-1` 掩码）。
+- `bg_is_affine()`：MODE1 只有 BG2 是仿射，MODE2 的 BG2/BG3 都是仿射。
+- 验收：`test_affine_regs`（PA-PD/X-Y 主副引擎读写 + 符号扩展）+ `test_affine_render`（单位矩阵 + 2× 缩放出图）。
+
+### 20.2/20.3 — 每像素合成器 + 混合/亮度/窗口/显示捕获
+
+- `render.c` 引入合成器：`px_t`（每像素顶层/次层颜色 + 第一/第二混合目标标记）+ `comp_t`（窗口/混合/亮度参数）。
+  所有图层（位图/tile/仿射/OBJ/3D）不再直接写 framebuffer，改经 `comp_put()` 压栈；收尾 `comp_finalize()`
+  统一做 Alpha 混合（模式1）/增亮（模式2）/减暗（模式3）+ 整屏主亮度 MASTER_BRIGHT。
+- 窗口：`comp_winmask()` 按 DISPCNT bit13-15 使能 WIN0/WIN1/OBJ 窗口，`in_win()` 判定矩形
+  （`[X1,X2)×[Y1,Y2)`，X1>X2 非法视为全宽）；WININ/WINOUT 位 0-4 控制图层、位 5 控制特效使能。
+- 显示捕获：`render_capture()` 在 `render_frame` 末尾，DISPCAPCNT bit31 置位时把顶屏出图转 RGB555
+  写进 LCDC VRAM（`0x06800000`，按写块/偏移定位），随后清使能位。`bus.h/.c` 新增 LCDC VRAM 窗口映射到 vram[0]。
+- **踩坑（测试）**：`disp_reg16` 原按基址精确匹配，16 位寄存器写高字节（奇地址）时丢失；改为 `addr & ~1u` 对齐。
+- 验收：`test_blend_regs` + `test_blend_render`（Alpha/增亮/减暗/主亮度像素值精确断言）+ `test_capture_render` + `test_window_render`。

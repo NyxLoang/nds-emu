@@ -77,3 +77,9 @@
 - 该区间与音频寄存器重叠：ARM9 视角是几何命令 FIFO/命令端口，ARM7 视角仍是音频（`active_is_arm7=1`
   时 `bus_write32` 走原拆字节路径 → `io_write8` → `snd_write8`）。
 - 验收：`test_gx_fifo`（GXFIFO 命令流经 `bus_write32` 出图）；原 `test_snd_*` 切 ARM7 视角后全过。
+
+## 20.2 — LCDC 分配 VRAM 窗口（显示捕获目标）
+
+- `bus.h` 增 `BUS_LCDC_VRAM_BASE=0x06800000`、`BUS_LCDC_VRAM_SIZE=512KB`；`bus_resolve` 新增分支映射到
+  `vram[0]`（与 `0x06000000` 主 VRAM 同物理区），供 `render_capture` 把顶屏出图写回 LCDC VRAM。
+- 验收：`test_capture_render` 捕获后从 `0x06800000` 读回顶屏 RGB555。

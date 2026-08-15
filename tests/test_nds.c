@@ -3030,6 +3030,222 @@ static void test_gx_layer(nds_t *nds)
     CHECK_EQ("gx layer on", fb_top[50 * RENDER_SCREEN_W + 50], 0xFFF80000u);
 }
 
+/* ---- 阶段 20.1 用例：仿射背景寄存器读写（PA-PD 1.7.8 / X-Y 1.19.8） ---- */
+static void test_affine_regs(nds_t *nds)
+{
+    /* 主引擎 BG2：PA=PB=PC=PD + X/Y 参考点 */
+    bus_write16(nds->bus, IO_BG_AFFINE_BASE + 0, 0x0100u);  /* PA=1.0 */
+    bus_write16(nds->bus, IO_BG_AFFINE_BASE + 6, 0x0100u);  /* PD=1.0 */
+    bus_write32(nds->bus, IO_BG_AFFINE_BASE + 8, 0x00000100u);   /* X=1.0 */
+    bus_write32(nds->bus, IO_BG_AFFINE_BASE + 12, 0x00000100u);  /* Y=1.0 */
+    CHECK_EQ("aff BG2PA", bus_read16(nds->bus, IO_BG_AFFINE_BASE + 0), 0x0100u);
+    CHECK_EQ("aff BG2PD", bus_read16(nds->bus, IO_BG_AFFINE_BASE + 6), 0x0100u);
+    CHECK_EQ("aff BG2X",  bus_read32(nds->bus, IO_BG_AFFINE_BASE + 8), 0x00000100u);
+    CHECK_EQ("aff BG2Y",  bus_read32(nds->bus, IO_BG_AFFINE_BASE + 12), 0x00000100u);
+
+    /* 负数参考点：bit28-31 被硬件忽略，读回应为 28 位值（0x0FFFFF00） */
+    bus_write32(nds->bus, IO_BG_AFFINE_BASE + 8, 0xFFFFFF00u);
+    CHECK_EQ("aff BG2X sign", bus_read32(nds->bus, IO_BG_AFFINE_BASE + 8), 0x0FFFFF00u);
+
+    /* BG3 参数（块内偏移 +0x10） */
+    bus_write16(nds->bus, IO_BG_AFFINE_BASE + 16, 0x0080u);
+    bus_write32(nds->bus, IO_BG_AFFINE_BASE + 24, 0x00000200u);
+    CHECK_EQ("aff BG3PA", bus_read16(nds->bus, IO_BG_AFFINE_BASE + 16), 0x0080u);
+    CHECK_EQ("aff BG3X",  bus_read32(nds->bus, IO_BG_AFFINE_BASE + 24), 0x00000200u);
+
+    /* 副引擎（偏移 +0x1000） */
+    bus_write16(nds->bus, IO_BG_AFFINE_SUB_BASE + 0, 0x0100u);
+    bus_write32(nds->bus, IO_BG_AFFINE_SUB_BASE + 8, 0x00000100u);
+    CHECK_EQ("aff sub BG2PA", bus_read16(nds->bus, IO_BG_AFFINE_SUB_BASE + 0), 0x0100u);
+    CHECK_EQ("aff sub BG2X",  bus_read32(nds->bus, IO_BG_AFFINE_SUB_BASE + 8), 0x00000100u);
+}
+
+/* ---- 阶段 20.1 用例：MODE2 仿射背景（逆仿射采样 + 1 字节 map + 缩放） ---- */
+static void test_affine_render(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* 调色板：0=黑(背景) 1=红 2=绿 */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0, 0x0000u);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 2, 0x7C00u);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 4, 0x03E0u);
+
+    /* 字符数据（8bpp，字符块0）：tile0=红(索引1)、tile1=绿(索引2) */
+    for (int i = 0; i < 64; i++) bus_write8(nds->bus, BUS_VRAM_BASE + 0u + i, 1u);
+    for (int i = 0; i < 64; i++) bus_write8(nds->bus, BUS_VRAM_BASE + 64u + i, 2u);
+
+    /* 仿射 map（1 字节/项，size1=32×32）：默认 tile2=透明，map(0,0)=tile0(红)、map(1,0)=tile1(绿) */
+    for (int ty = 0; ty < 32; ty++)
+        for (int tx = 0; tx < 32; tx++)
+            bus_write8(nds->bus, BUS_VRAM_BASE + 0x800u + (uint32_t)(ty * 32 + tx), 2u);
+    bus_write8(nds->bus, BUS_VRAM_BASE + 0x800u, 0u);
+    bus_write8(nds->bus, BUS_VRAM_BASE + 0x801u, 1u);
+
+    /* mode 2 + BG2 + 显示模式 1；BG2CNT：8bpp + 屏幕块1 + size1(256×256) */
+    bus_write32(nds->bus, IO_DISPCNT, 2u | DISPCNT_BG2 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+    bus_write16(nds->bus, IO_BGCNT_BASE + 2 * 2,
+                BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT) | (1u << BGCNT_SCREEN_SIZE_SHIFT));
+
+    /* 单位矩阵 + 参考点(0,0)：屏幕坐标=纹理坐标 */
+    bus_write16(nds->bus, IO_BG_AFFINE_BASE + 0, 0x0100u);  /* PA=1.0 */
+    bus_write16(nds->bus, IO_BG_AFFINE_BASE + 6, 0x0100u);  /* PD=1.0 */
+    bus_write32(nds->bus, IO_BG_AFFINE_BASE + 8, 0u);       /* X=0 */
+    bus_write32(nds->bus, IO_BG_AFFINE_BASE + 12, 0u);      /* Y=0 */
+
+    render_frame(nds->bus, fb_top, fb_bot);
+
+    CHECK_EQ("aff id red",      fb_top[0],  0xFFF80000u);  /* (0,0)→tile0 红 */
+    CHECK_EQ("aff id green",    fb_top[8],  0xFF00F800u);  /* (8,0)→tile1 绿 */
+    CHECK_EQ("aff id backdrop", fb_top[16], 0xFF000000u);  /* (16,0)→tile2 透明→黑 */
+
+    /* 2× 缩放：PA=PD=2.0 → 纹理=2×屏幕，红 tile 盖屏幕 0..3、绿盖 4..7、再外透明 */
+    bus_write16(nds->bus, IO_BG_AFFINE_BASE + 0, 0x0200u);
+    bus_write16(nds->bus, IO_BG_AFFINE_BASE + 6, 0x0200u);
+    render_frame(nds->bus, fb_top, fb_bot);
+
+    CHECK_EQ("aff 2x red",      fb_top[0], 0xFFF80000u);
+    CHECK_EQ("aff 2x green",    fb_top[4], 0xFF00F800u);
+    CHECK_EQ("aff 2x backdrop", fb_top[8], 0xFF000000u);
+}
+
+/* ---- 阶段 20.2/20.3 用例：混合/亮度/窗口/显示捕获寄存器读写 ---- */
+static void test_blend_regs(nds_t *nds)
+{
+    /* 主引擎：混合三件套 + 主亮度 + 窗口 + 捕获 */
+    bus_write16(nds->bus, IO_BLENDCNT, 0x1234u);
+    bus_write16(nds->bus, IO_BLENDALPHA, 0x0A05u);   /* EVA=5, EVB=10 */
+    bus_write16(nds->bus, IO_BLENDY, 0x0008u);       /* EVY=8 */
+    CHECK_EQ("blend BLENDCNT",  bus_read16(nds->bus, IO_BLENDCNT),  0x1234u);
+    CHECK_EQ("blend BLDALPHA",  bus_read16(nds->bus, IO_BLENDALPHA), 0x0A05u);
+    CHECK_EQ("blend BLDY",      bus_read16(nds->bus, IO_BLENDY),     0x0008u);
+
+    bus_write16(nds->bus, IO_MASTER_BRIGHT, 0x4008u); /* 增亮 + 因子8 */
+    CHECK_EQ("blend MASTER_BRIGHT", bus_read16(nds->bus, IO_MASTER_BRIGHT), 0x4008u);
+
+    bus_write16(nds->bus, IO_WIN0H, 0x1020u);         /* X1=0x10, X2=0x20 */
+    bus_write16(nds->bus, IO_WININ, 0x1Fu);
+    bus_write16(nds->bus, IO_WINOUT, 0x3Fu);
+    CHECK_EQ("blend WIN0H",  bus_read16(nds->bus, IO_WIN0H),  0x1020u);
+    CHECK_EQ("blend WININ",  bus_read16(nds->bus, IO_WININ),  0x1Fu);
+    CHECK_EQ("blend WINOUT", bus_read16(nds->bus, IO_WINOUT), 0x3Fu);
+
+    bus_write32(nds->bus, IO_DISPCAPCNT, 0x80020000u); /* 使能 + 写块1 */
+    CHECK_EQ("blend DISPCAPCNT", bus_read32(nds->bus, IO_DISPCAPCNT), 0x80020000u);
+
+    /* 副引擎：BLENDCNT_SUB + MASTER_BRIGHT_SUB */
+    bus_write16(nds->bus, IO_BLENDCNT_SUB, 0x0101u);
+    bus_write16(nds->bus, IO_MASTER_BRIGHT_SUB, 0x8004u);
+    CHECK_EQ("blend sub BLENDCNT",       bus_read16(nds->bus, IO_BLENDCNT_SUB),       0x0101u);
+    CHECK_EQ("blend sub MASTER_BRIGHT",  bus_read16(nds->bus, IO_MASTER_BRIGHT_SUB),  0x8004u);
+}
+
+/* ---- 阶段 20.2 用例：Alpha 混合 + 增亮/减暗 + 整屏主亮度 ---- */
+static void test_blend_render(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* 调色板：0=蓝(背景) 1=红 */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0, 0x001Fu);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 2, 0x7C00u);
+
+    /* mode 0 + BG0 + 显示模式1；BG0CNT 8bpp + 屏幕块1（tilemap 与字符数据分离）；
+       tile0 像素(0,0)=索引1，其余透明 */
+    bus_write32(nds->bus, IO_DISPCNT, DISPCNT_BG0 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+    bus_write16(nds->bus, IO_BGCNT_BASE, BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT));
+    bus_write8(nds->bus, BUS_VRAM_BASE, 1u);
+
+    /* 混合关闭：红像素直出、透明像素露蓝背景 */
+    bus_write16(nds->bus, IO_BLENDCNT, 0u);
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("blend off red",      fb_top[0], 0xFFF80000u);
+    CHECK_EQ("blend off backdrop", fb_top[1], 0xFF0000F8u);
+
+    /* 模式1 Alpha：第一目标=BG0、第二目标=BD、EVA=EVB=8 → 红+蓝各半 (R=15,B=15) */
+    bus_write16(nds->bus, IO_BLENDCNT,
+                (1u << BLEND_MODE_SHIFT) | BLEND_1ST_BG0 | BLEND_2ND_BD);
+    bus_write16(nds->bus, IO_BLENDALPHA, 0x0808u);
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("alpha blend red+blue", fb_top[0], 0xFF780078u);
+    CHECK_EQ("alpha blend backdrop", fb_top[1], 0xFF0000F8u);
+
+    /* 模式2 增亮：第一目标=BG0、EVY=8；改测灰 0x4210（R=G=B=16）→ 23 */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 2, 0x4210u);
+    bus_write16(nds->bus, IO_BLENDCNT, (2u << BLEND_MODE_SHIFT) | BLEND_1ST_BG0);
+    bus_write16(nds->bus, IO_BLENDY, 8u);
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("bright up gray", fb_top[0], 0xFFB8B8B8u);
+
+    /* 模式3 减暗：EVY=8；灰 16 → 8 */
+    bus_write16(nds->bus, IO_BLENDCNT, (3u << BLEND_MODE_SHIFT) | BLEND_1ST_BG0);
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("bright down gray", fb_top[0], 0xFF404040u);
+
+    /* 关混合，测 MASTER_BRIGHT 增亮：因子8 → 灰 0x80 升到 0xBC（6bit 通道 32→47） */
+    bus_write16(nds->bus, IO_BLENDCNT, 0u);
+    bus_write16(nds->bus, IO_MASTER_BRIGHT, 0x4008u);
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("master bright gray", fb_top[0], 0xFFBCBCBCu);
+}
+
+/* ---- 阶段 20.2 用例：显示捕获（顶屏出图 → LCDC VRAM RGB555） ---- */
+static void test_capture_render(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* 顶屏：mode 5 + BG2 直色位图，位图前两像素 红/蓝 */
+    bus_write32(nds->bus, IO_DISPCNT, 5u | DISPCNT_BG2 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+    bus_write16(nds->bus, IO_BGCNT_BASE + 2 * 2,
+                BGCNT_COLORS_256 | BGCNT_DIRECT_COLOR | (1u << 14));
+    bus_write16(nds->bus, BUS_VRAM_BASE, 0x7C00u);
+    bus_write16(nds->bus, BUS_VRAM_BASE + 2, 0x001Fu);
+
+    /* DISPCAPCNT：使能 + 写块0 + 偏移0 → 目标 0x06800000 */
+    bus_write32(nds->bus, IO_DISPCAPCNT, DISPCAP_ENABLE);
+    render_frame(nds->bus, fb_top, fb_bot);
+
+    /* 捕获把顶屏 RGB555 写进 LCDC VRAM 窗口（映射到物理 vram[0]） */
+    CHECK_EQ("cap px0 red",  bus_read16(nds->bus, BUS_LCDC_VRAM_BASE),     0x7C00u);
+    CHECK_EQ("cap px1 blue", bus_read16(nds->bus, BUS_LCDC_VRAM_BASE + 2), 0x001Fu);
+    /* 捕获完成后使能位应被清除 */
+    CHECK_EQ("cap done clear", bus_read32(nds->bus, IO_DISPCAPCNT) & DISPCAP_ENABLE, 0u);
+}
+
+/* ---- 阶段 20.3 用例：窗口（WIN0 限定 BG 显示区域） ---- */
+static void test_window_render(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* 调色板：0=黑(背景) 1=红 */
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 0, 0x0000u);
+    bus_write16(nds->bus, BUS_PALETTE_BASE + 2, 0x7C00u);
+
+    /* BG0 8bpp：tile0 全红(索引1)，tilemap 全 tile0 → 满屏红 */
+    for (int i = 0; i < 64; i++) bus_write8(nds->bus, BUS_VRAM_BASE + i, 1u);
+    for (int ty = 0; ty < 32; ty++)
+        for (int tx = 0; tx < 32; tx++)
+            bus_write16(nds->bus, BUS_VRAM_BASE + 0x800u + (uint32_t)(ty * 32 + tx) * 2u, 0u);
+    bus_write16(nds->bus, IO_BGCNT_BASE, BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT));
+
+    /* 窗口：WIN0 = 左上 8×8；窗内只开 BG0，窗外全关 */
+    bus_write16(nds->bus, IO_WIN0H, 0x0008u);   /* X1=0, X2=8 */
+    bus_write16(nds->bus, IO_WIN0V, 0x0008u);   /* Y1=0, Y2=8 */
+    bus_write16(nds->bus, IO_WININ, 0x01u);     /* 窗内: 仅 BG0 */
+    bus_write16(nds->bus, IO_WINOUT, 0x00u);    /* 窗外: 全关 */
+
+    /* DISPCNT：mode0 + BG0 + WIN0 使能(bit13) + 显示模式1 */
+    bus_write32(nds->bus, IO_DISPCNT,
+                DISPCNT_BG0 | (1u << 13) | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
+    render_frame(nds->bus, fb_top, fb_bot);
+
+    CHECK_EQ("win in red",    fb_top[0],        0xFFF80000u); /* (0,0) 窗内 → 红 */
+    CHECK_EQ("win out black", fb_top[8],        0xFF000000u); /* (8,0) 窗外 → 黑 */
+    CHECK_EQ("win out row",   fb_top[8 * 256],  0xFF000000u); /* (0,8) 窗外 → 黑 */
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -3553,6 +3769,48 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_gx_layer(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 20.1] 仿射背景寄存器读写\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_affine_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 20.1] MODE2 仿射背景渲染（缩放）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_affine_render(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 20.2] 混合/亮度/窗口/捕获寄存器读写\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_blend_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 20.2] Alpha 混合 + 增亮/减暗 + 主亮度\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_blend_render(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 20.2] 显示捕获（顶屏 → LCDC VRAM）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_capture_render(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 20.3] 窗口（WIN0 限定 BG 显示区域）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_window_render(nds);
         nds_destroy(nds);
     }
 

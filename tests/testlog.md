@@ -411,3 +411,23 @@
   `active_is_arm7=1` 与改用 `run_cpu7`（ARM7 核），否则音频寄存器写入被几何区整字转发吞掉。
 - 阶段 19 收尾全量 **483 项检查 0 失败**。
 
+## 20.1 — 用例：仿射背景寄存器读写 + MODE2 仿射出图
+
+- `test_affine_regs`：主引擎 BG2 PA-PD（1.7.8）+ X/Y 参考点（1.19.8）写读回；负参考点写
+  `0xFFFFFF00` 读回 `0x0FFFFF00`（bit28-31 无效）；BG3 参数块（+0x10 偏移）+ 副引擎（+0x1000）。
+- `test_affine_render`：MODE2 + BG2 仿射，单位矩阵 + 参考点(0,0) 时屏幕=纹理；2× 缩放（PA=PD=2.0）后
+  红 tile 盖 0..3、绿盖 4..7、外透明；断言像素值精确匹配。
+
+## 20.2/20.3 — 用例：混合/亮度/窗口/捕获
+
+- `test_blend_regs`：混合三件套（BLENDCNT/BLDALPHA/BLDY）+ MASTER_BRIGHT + WIN0H/WININ/WINOUT +
+  DISPCAPCNT + 副引擎镜像，写读回断言。
+- `test_blend_render`：BG0 红像素 + 蓝背景——混合关闭直出；模式1 Alpha（EVA=EVB=8）红+蓝各半 `0xFF780078`；
+  模式2 增亮灰 `0x4210→0xFFB8B8B8`；模式3 减暗 `→0xFF404040`；MASTER_BRIGHT 增亮因子 8 `0xFF808080→0xFFBCBCBC`。
+- `test_capture_render`：顶屏直色位图（红/蓝两像素）+ DISPCAPCNT 使能，渲染后 LCDC VRAM（`0x06800000`）
+  读出 `0x7C00/0x001F`，且使能位自清。
+- `test_window_render`：WIN0 限定左上 8×8，窗内只开 BG0 → 红，窗外全关 → 露黑背景。
+- **踩坑（测试）**：`test_blend_render` 初版 BG0CNT 未设屏幕块1，tilemap 与字符数据同落 `0x06000000`
+  重叠导致红像素不画；改 `BGCNT_COLORS_256 | (1<<SCREEN_BASE_SHIFT)` 后通过。
+- 阶段 20 收尾全量 **521 项检查 0 失败**。
+

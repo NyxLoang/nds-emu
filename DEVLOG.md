@@ -175,3 +175,7 @@
 | 2026-08-15 | 19.4 | 3D 几何/显示 | 三角形软件光栅化（半平面判定）+ render.c 合成 3D 图层进 2D 顶屏（DISP3DCNT 使能位） | [gx](src/gx/gxlog.md) · [ppu](src/ppu/ppulog.md) |
 | 2026-08-15 | 19.5 | 测试 | 综合：顶点变换 + 光栅化 + GXFIFO 命令流出图 + 3D 图层合成；483 项检查 0 失败 | [tests](tests/testlog.md) |
 | 2026-08-15 | 19 完成 | 收尾 | 阶段 19 完成：3D 几何引擎（GXFIFO 命令流 + 矩阵/顶点变换 + 软件光栅化 + 3D 图层合成） | [gx](src/gx/gxlog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 20.1 | 显示 | 仿射（旋转/缩放）背景：BGxPA-PD(1.7.8)/X-Y(1.19.8) 寄存器 + 逆仿射采样 + MODE1/2 出图 | [disp](src/io/iolog.md) · [ppu](src/ppu/ppulog.md) |
+| 2026-08-15 | 20.2 | 显示/IO | 每像素合成器 + 颜色特效：Alpha 混合/增亮/减暗 + MASTER_BRIGHT + 显示捕获（顶屏→LCDC VRAM） | [ppu](src/ppu/ppulog.md) · [disp](src/io/iolog.md) · [bus](src/bus/buslog.md) |
+| 2026-08-15 | 20.3 | 显示 | 窗口（WIN0/WIN1 限定图层显示区域）+ 更多混合效果；修 16 位寄存器高字节写入丢失 bug | [ppu](src/ppu/ppulog.md) · [disp](src/io/iolog.md) |
+| 2026-08-15 | 20 完成 | 收尾 | 阶段 20 完成：2D PPU 补全（旋转/缩放 + 混合/亮度 + 窗口 + 显示捕获）；521 项检查 0 失败 | [ppu](src/ppu/ppulog.md) · [tests](tests/testlog.md) |

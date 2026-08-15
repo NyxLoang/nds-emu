@@ -8,6 +8,7 @@
 #include "dma.h"
 #include "fifo.h"
 #include "disp.h"
+#include "touch.h"
 #include "cart/cartbus.h"
 
 struct bus; /* 前向声明：io 需要 bus 反指，供 DMA 搬运访存 */
@@ -26,6 +27,7 @@ typedef struct io {
     dma_t dma;                        /* DMA：阶段 15 补齐 4 通道 */
     ipc_fifo_t fifo;                  /* IPC FIFO（阶段 8：双核通信） */
     disp_t disp;                      /* 2D 显示控制（阶段 9：DISPCNT/BGxCNT/滚动） */
+    touch_t touch;                    /* 触摸屏 SPI（阶段 17：SPICNT/SPIDATA + TSC） */
     cartbus_t cartbus;                /* 卡带总线（阶段 15：ROMCTRL/命令/数据端口） */
     struct bus *bus;                  /* bus 反指：DMA 搬运需经 bus 访存 */
 } io_t;
@@ -66,6 +68,9 @@ int io_irq_pending(const io_t *io);
 
 /* 按键状态：pressed 位=1 表示按下（6.6，由窗口键事件驱动） */
 void io_set_keyinput(io_t *io, uint16_t pressed);
+
+/* 触摸位置：12 位 ADC 值，down=1 表示笔按下（阶段 17，由窗口鼠标/触摸事件驱动） */
+void io_set_touch(io_t *io, uint16_t adc_x, uint16_t adc_y, int down);
 
 /* 一个周期（一条指令）过去：推进所有使能定时器（6.5，cpu_step 调用） */
 void io_advance_timers(io_t *io);

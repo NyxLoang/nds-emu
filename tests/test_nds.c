@@ -16,6 +16,7 @@
 #include "cpu/thumb.h"
 #include "io/io.h"
 #include "io/disp.h"
+#include "io/touch.h"
 #include "ppu/render.h"
 #include "cart/cart.h"
 #include "cart/key1.h"
@@ -2651,6 +2652,136 @@ static void test_save_program(nds_t *nds)
     CHECK_EQ("save prog chip", io_get_save(nds->io)->data[0x20], 0xABu);
 }
 
+/* ---- 阶段 17.2 用例：TSC 触摸屏 SPI 状态机（12/8 位、未按下、Hold 复位） ---- */
+static void test_touch_unit(nds_t *nds)
+{
+    (void)nds;
+    touch_t t;
+    memset(&t, 0, sizeof t);
+
+    /* 选中设备：enable(bit15) + touch(bit9) + hold(bit11) = 0x8A00 */
+    touch_write8(&t, IO_SPICNT, 0x00);
+    touch_write8(&t, IO_SPICNT + 1, 0x8A);
+    CHECK_EQ("touch spicnt", t.spicnt, 0x8A00u);
+
+    /* 未按下：X 读回 0x000、Y 读回 0xFFF */
+    touch_write8(&t, IO_SPIDATA, TSC_CMD_X);
+    CHECK_EQ("touch rel x b1", touch_read8(&t, IO_SPIDATA), 0x00u);
+    touch_write8(&t, IO_SPIDATA, 0x00);
+    CHECK_EQ("touch rel x b2", touch_read8(&t, IO_SPIDATA), 0x00u);
+
+    touch_write8(&t, IO_SPIDATA, TSC_CMD_Y);
+    CHECK_EQ("touch rel y b1", touch_read8(&t, IO_SPIDATA), 0x7Fu);
+    touch_write8(&t, IO_SPIDATA, 0x00);
+    CHECK_EQ("touch rel y b2", touch_read8(&t, IO_SPIDATA), 0xF8u);
+
+    /* 按下 (adc_x=0x2AB, adc_y=0x2CD)：12 位拼装还原 */
+    touch_set_pos(&t, 0x2AB, 0x2CD, 1);
+    uint16_t x1, x2, y1, y2;
+    touch_write8(&t, IO_SPIDATA, TSC_CMD_X);
+    x1 = touch_read8(&t, IO_SPIDATA);
+    touch_write8(&t, IO_SPIDATA, 0x00);
+    x2 = touch_read8(&t, IO_SPIDATA);
+    CHECK_EQ("touch x b1", x1, 0x15u);
+    CHECK_EQ("touch x b2", x2, 0x58u);
+    CHECK_EQ("touch x rec", ((x1 & 0x7F) << 5) | (x2 >> 3), 0x2ABu);
+
+    touch_write8(&t, IO_SPIDATA, TSC_CMD_Y);
+    y1 = touch_read8(&t, IO_SPIDATA);
+    touch_write8(&t, IO_SPIDATA, 0x00);
+    y2 = touch_read8(&t, IO_SPIDATA);
+    CHECK_EQ("touch y b1", y1, 0x16u);
+    CHECK_EQ("touch y b2", y2, 0x68u);
+    CHECK_EQ("touch y rec", ((y1 & 0x7F) << 5) | (y2 >> 3), 0x2CDu);
+
+    /* 8 位模式：X = 0xD8，取高 8 位 = 0x2AB >> 4 = 0x2A */
+    touch_write8(&t, IO_SPIDATA, 0xD8);
+    CHECK_EQ("touch 8bit b1", touch_read8(&t, IO_SPIDATA), 0x15u);
+    touch_write8(&t, IO_SPIDATA, 0x00);
+    CHECK_EQ("touch 8bit b2", touch_read8(&t, IO_SPIDATA), 0x00u);
+
+    /* 清 Hold：传输后撤片选，后续非命令字节回传 0 */
+    touch_write8(&t, IO_SPICNT + 1, 0x82);   /* enable + touch，无 hold */
+    touch_write8(&t, IO_SPIDATA, TSC_CMD_X);
+    touch_write8(&t, IO_SPIDATA, 0x00);      /* 无命令 → 回 0 */
+    CHECK_EQ("touch nohold reset", touch_read8(&t, IO_SPIDATA), 0x00u);
+}
+
+/* ---- 阶段 17.2 用例：经 SPICNT/SPIDATA 总线读触摸坐标 ---- */
+static void test_touch_spi_regs(nds_t *nds)
+{
+    io_set_touch(nds->io, 0x2AB, 0x2CD, 1);
+    bus_write16(nds->bus, IO_SPICNT, 0x8A00);
+
+    bus_write8(nds->bus, IO_SPIDATA, TSC_CMD_X);
+    uint8_t x1 = bus_read8(nds->bus, IO_SPIDATA);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00);
+    uint8_t x2 = bus_read8(nds->bus, IO_SPIDATA);
+    CHECK_EQ("spi x rec", ((x1 & 0x7F) << 5) | (x2 >> 3), 0x2ABu);
+
+    bus_write8(nds->bus, IO_SPIDATA, TSC_CMD_Y);
+    uint8_t y1 = bus_read8(nds->bus, IO_SPIDATA);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00);
+    uint8_t y2 = bus_read8(nds->bus, IO_SPIDATA);
+    CHECK_EQ("spi y rec", ((y1 & 0x7F) << 5) | (y2 >> 3), 0x2CDu);
+
+    /* 未按下：X=0、Y=0xFFF */
+    io_set_touch(nds->io, 0, 0, 0);
+    bus_write8(nds->bus, IO_SPIDATA, TSC_CMD_Y);
+    uint8_t ry1 = bus_read8(nds->bus, IO_SPIDATA);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00);
+    uint8_t ry2 = bus_read8(nds->bus, IO_SPIDATA);
+    CHECK_EQ("spi y rel", ((ry1 & 0x7F) << 5) | (ry2 >> 3), 0xFFFu);
+}
+
+/* ---- 阶段 17.3 用例：CPU 程序经 SPICNT/SPIDATA 读出 X/Y 坐标 ---- */
+static void test_touch_program(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    io_set_touch(nds->io, 0x2AB, 0x2CD, 1);
+
+    /* 程序：SPICNT=0x8A00 → 读 X（命令+哑元，拼 12 位）到 r6 → 读 Y 到 r7 → 停机。 */
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00404, /* MOV r0, #0x04000000 */
+        /* 0x04 */ 0xE2800C01, /* ADD r0, r0, #0x100       r0=0x04000100 */
+        /* 0x08 */ 0xE28000C0, /* ADD r0, r0, #0xC0        r0=0x040001C0 SPICNT */
+        /* 0x0C */ 0xE2801002, /* ADD r1, r0, #2           r1=0x040001C2 SPIDATA */
+        /* 0x10 */ 0xE3A0208A, /* MOV r2, #0x8A */
+        /* 0x14 */ 0xE5C02001, /* STRB r2, [r0, #1]        SPICNT 高=0x8A */
+        /* 0x18 */ 0xE3A02000, /* MOV r2, #0 */
+        /* 0x1C */ 0xE5C02000, /* STRB r2, [r0]            SPICNT=0x8A00 选片 */
+        /* 0x20 */ 0xE3A020D0, /* MOV r2, #0xD0 */
+        /* 0x24 */ 0xE5C12000, /* STRB r2, [r1]            命令 X */
+        /* 0x28 */ 0xE5D13000, /* LDRB r3, [r1]            b1 */
+        /* 0x2C */ 0xE3A02000, /* MOV r2, #0 */
+        /* 0x30 */ 0xE5C12000, /* STRB r2, [r1]            哑元 */
+        /* 0x34 */ 0xE5D14000, /* LDRB r4, [r1]            b2 */
+        /* 0x38 */ 0xE203307F, /* AND r3, r3, #0x7F */
+        /* 0x3C */ 0xE1A03283, /* MOV r3, r3, LSL #5 */
+        /* 0x40 */ 0xE1A041A4, /* MOV r4, r4, LSR #3 */
+        /* 0x44 */ 0xE1833004, /* ORR r3, r3, r4           r3 = x */
+        /* 0x48 */ 0xE1A06003, /* MOV r6, r3               x -> r6 */
+        /* 0x4C */ 0xE3A02090, /* MOV r2, #0x90 */
+        /* 0x50 */ 0xE5C12000, /* STRB r2, [r1]            命令 Y */
+        /* 0x54 */ 0xE5D13000, /* LDRB r3, [r1]            b1 */
+        /* 0x58 */ 0xE3A02000, /* MOV r2, #0 */
+        /* 0x5C */ 0xE5C12000, /* STRB r2, [r1]            哑元 */
+        /* 0x60 */ 0xE5D14000, /* LDRB r4, [r1]            b2 */
+        /* 0x64 */ 0xE203307F, /* AND r3, r3, #0x7F */
+        /* 0x68 */ 0xE1A03283, /* MOV r3, r3, LSL #5 */
+        /* 0x6C */ 0xE1A041A4, /* MOV r4, r4, LSR #3 */
+        /* 0x70 */ 0xE1833004, /* ORR r3, r3, r4           r3 = y */
+        /* 0x74 */ 0xE1A07003, /* MOV r7, r3               y -> r7 */
+        /* 0x78 */ 0xEAFFFFFE, /* B self 停机 */
+    };
+
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x78, 128);
+    CHECK_EQ("touch prog halt", nds->cpu->r[15], base + 0x78);
+    CHECK_EQ("touch prog x", nds->cpu->r[6], 0x2ABu);
+    CHECK_EQ("touch prog y", nds->cpu->r[7], 0x2CDu);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -3103,6 +3234,27 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_save_program(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 17.2] TSC 触摸屏 SPI 状态机（12/8 位 + 未按下 + Hold 复位）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_touch_unit(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 17.2] 经 SPICNT/SPIDATA 总线读触摸坐标\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_touch_spi_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 17.3] CPU 程序经 SPICNT/SPIDATA 读出 X/Y 坐标\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_touch_program(nds);
         nds_destroy(nds);
     }
 

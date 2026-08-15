@@ -15,7 +15,7 @@
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 | CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9/ARM7 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/arm9.h/.c`、`src/cpu/arm7.h/.c`、`src/cpu/exec.h/.c`） |
 | 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 真 2D PPU：读寄存器出图（`src/ppu/ppu.h/.c` SDL 侧 + 纯渲染 `src/ppu/render.h/.c`） |
-| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA 4 通道、IPC FIFO、显示控制 DISPCNT/BGxCNT、卡带总线/存档接线（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo/disp） |
+| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA 4 通道、IPC FIFO、显示控制 DISPCNT/BGxCNT、触摸屏 SPI、卡带总线/存档接线（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo/disp/touch） |
 | 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO/2D PPU） |
 
 ## 按时间索引
@@ -157,3 +157,7 @@
 | 2026-08-15 | 16.3 | 卡带装载/主循环 | 存档持久化：`save_load_file/save_save_file` + `main.c` 装载/写回 .sav | [cart](src/cart/cartlog.md) · [main](src/mainlog.md) |
 | 2026-08-15 | 16.4 | 测试 | 综合：游戏经 AUXSPICNT/AUXSPIDATA 读写存档（单元 + CPU 程序）；423 项检查 0 失败 | [tests](tests/testlog.md) |
 | 2026-08-15 | 16 完成 | 收尾 | 阶段 16 完成：存档（EEPROM/Flash + .sav 持久化，游戏能保存进度） | [cart](src/cart/cartlog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 17.1 | 预习/IO | 新增 `docs/18-touch-spi.md`：触摸屏 + 主 SPI 总线（SPICNT/SPIDATA + TSC 命令协议） | [18](docs/18-touch-spi.md) · [io](src/io/iolog.md) |
+| 2026-08-15 | 17.2 | IO 寄存器 | 新建 `touch`：SPICNT/SPIDATA + TSC 命令状态机（12/8 位回传、X/Y/Z/电池通道）+ io 接线 | [io](src/io/iolog.md) |
+| 2026-08-15 | 17.3 | 测试 | 综合：CPU 程序经 SPICNT/SPIDATA 读出 X/Y 坐标（单元 + 集成）；443 项检查 0 失败 | [tests](tests/testlog.md) |
+| 2026-08-15 | 17 完成 | 收尾 | 阶段 17 完成：触摸 SPI（SPICNT/SPIDATA + TSC 坐标读取，游戏能读触控输入） | [io](src/io/iolog.md) · [tests](tests/testlog.md) |

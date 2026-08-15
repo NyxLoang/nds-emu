@@ -346,3 +346,23 @@
   （对照阶段 15 的 STR 字编码 `0xE58`/`0xE59` 加 bit22 得字节变体）。
 - 阶段 16 收尾全量 **423 项检查 0 失败**。
 
+## 17.2 — 用例：TSC 触摸屏 SPI 状态机（单元）
+
+- `test_touch_unit`：直接 `touch_write8/touch_read8` 驱动——SPICNT 写 `0x8A00`（使能+触摸+保持片选）读回一致；
+  未按下 X 读回 0x000、Y 读回 0xFFF（首/次字节 0x7F/0xF8）；按下 (0x2AB,0x2CD) 后 12 位拼装
+  `((b1&0x7F)<<5)|(b2>>3)` 还原 X/Y；8 位模式（`0xD8`）回传高 8 位 `0x2AB>>4=0x2A` 的两字节；清 Hold 后
+  非命令字节回传 0（命令状态复位）。
+
+## 17.2 — 用例：经 SPICNT/SPIDATA 总线读触摸坐标（集成）
+
+- `test_touch_spi_regs`：`io_set_touch(0x2AB,0x2CD,1)` → `bus_write16(SPICNT,0x8A00)` → 写命令 0xD0/0x90 +
+  哑元 → `bus_read8(SPIDATA)` 两字节拼装还原 X/Y；未按下（`io_set_touch(...,0)`）Y 读回 0xFFF。
+
+## 17.3 — 用例：CPU 程序经 SPICNT/SPIDATA 读出 X/Y 坐标（综合）
+
+- `test_touch_program`：真实 ARM 指令（MOV/ADD/STRB/LDRB + AND/MOV 移位/ORR）走完整流程——SPICNT=0x8A00 →
+  命令 0xD0 读 X 两字节拼 12 位到 r6 → 命令 0x90 读 Y 到 r7 → 停机；断言 PC=0x02000078、r6=0x2AB、r7=0x2CD。
+- **踩坑（测试）**：12 位拼装需移位指令——`MOV r3,r3,LSL #5` 编码 `0xE1A03283`、`MOV r4,r4,LSR #3` 编码
+  `0xE1A041A4`（数据处理的移位在 bit11-7 立即数 + bit6-5 移位类型）。
+- 阶段 17 收尾全量 **443 项检查 0 失败**。
+

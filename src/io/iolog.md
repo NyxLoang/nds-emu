@@ -142,3 +142,20 @@
 - `io_t` 已含 `cartbus`（内含 `save_t save`），故 io 层只补两个薄接口：`io_attach_save`（配置芯片类型）、
   `io_get_save`（拿芯片指针给 main 做 .sav 持久化）；`io_destroy` 在 `free(io)` 前 `cartbus_destroy` 释放存档缓冲。
 - **怎么验证**：`test_save_spi_regs`（经 AUXSPICNT/AUXSPIDATA 总线读写存档）全过。
+
+## 17.2 — 触摸屏 SPI（touch 功能文件 + io 接线）
+
+- 新建 `src/io/touch.h/.c`：`touch_t` 持 `spicnt`（16 位）、`spidata`（8 位）+ TSC 命令状态机
+  （`cmd/channel/mode8/result/reply_idx`）+ 触摸位置（`adc_x/adc_y/down`）。
+- **寄存器**：`SPICNT=0x040001C0`（16 位：bit0-1 波特率、bit7 Busy 只读恒 0、bit8-9 设备选择=2 触摸、
+  bit11 Hold 保持片选、bit15 使能）、`SPIDATA=0x040001C2`（8 位，写即启动一次传输）。
+- **TSC 协议**：写 SPIDATA 的字节若 bit7=1 则是新命令——解码通道（bit6-4：X=5/Y=1/Z1=3/Z2=4/电池=2/麦克风=6/温度=0,7）
+  与分辨率（bit3：0=12 位 1=8 位），算出 ADC 结果；随后按回复字节序号回传（12 位：`(result>>5)&0x7F`、
+  `(result&0x1F)<<3`；8 位：取高 8 位 `result>>4` 后 `>>1`、`(bit0)<<7`），之后填充 0。
+- **瞬时模型**：写即完成、Busy 恒 0；未保持片选（Hold=0）时传输后复位命令状态。
+- 未按下按协议回 `X=000h`、`Y=FFFh`；电池通道在 NDS 接 GND 恒 0。
+- `io_t` 增 `touch_t touch` 字段；`io_read8/io_write8` 在 `touch_is_addr`（0x040001C0..C3）命中时转
+  `touch_read8/touch_write8`；新增外部信号 `io_set_touch(adc_x, adc_y, down)`（供窗口鼠标/触摸事件驱动）。
+- `CMakeLists.txt` 的 `ndscore` 加入 `touch.c`。
+- **怎么验证**：`test_touch_unit`（12/8 位回传 + 未按下 + Hold 复位）、`test_touch_spi_regs`（经总线读写坐标）、
+  `test_touch_program`（CPU 程序读出 X/Y）全过。

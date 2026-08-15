@@ -70,6 +70,8 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return cartbus_read8((cartbus_t *)&io->cartbus, addr);
     if (disp_is_addr(addr))
         return disp_read8(&io->disp, addr);
+    if (touch_is_addr(addr))
+        return touch_read8((touch_t *)&io->touch, addr);
     return 0;
 }
 
@@ -116,6 +118,10 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     }
     if (disp_is_addr(addr)) {
         disp_write8(&io->disp, addr, val);
+        return;
+    }
+    if (touch_is_addr(addr)) {
+        touch_write8(&io->touch, addr, val);
         return;
     }
     /* 其余 IO 地址：写忽略（沿用阶段 2 的桩语义） */
@@ -174,6 +180,11 @@ int io_irq_pending(const io_t *io)
 void io_set_keyinput(io_t *io, uint16_t pressed)
 {
     key_set_pressed(&io->keypad, pressed);
+}
+
+void io_set_touch(io_t *io, uint16_t adc_x, uint16_t adc_y, int down)
+{
+    touch_set_pos(&io->touch, adc_x, adc_y, down);
 }
 
 void io_advance_timers(io_t *io)

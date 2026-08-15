@@ -320,3 +320,29 @@
   DMA 搬 4 字到 RAM；断言 PC 停机（0x02000044）、word[0..3] 与 ROM 数据一致、使能自清。
 - 阶段 15 收尾全量 **393 项检查 0 失败**。
 
+## 16.2 — 用例：存档芯片 SPI 状态机（EEPROM / Flash）
+
+- `test_save_eeprom`：直接喂 `save_transfer` 序列——WREN 置 WEL、RDSR 读回 `0x02`、WRITE 0x0100 写 4 字节、
+  READ 读回一致；验证状态寄存器 bit1、16 位地址累积。
+- `test_save_flash`：RDID 连回 3 字节 JEDEC ID（`20 20 12`）、PE 页擦除后读 `0xFF`、PP 写 4 字节读回一致、
+  再写 `0x0F` 验证「与」语义（`0x12 & 0x0F = 0x02`）。
+
+## 16.2/16.4 — 用例：经 AUXSPICNT/AUXSPIDATA 总线读写存档
+
+- `test_save_spi_regs`：`io_attach_save(EEPROM_8K)` → 写 AUXSPICNT `0xA040` 选片 → WREN → 撤片选 →
+  再选片 → WRITE 地址 0x20=0xAB → 撤片选 → 再选片 → READ + 哑元 → 读 AUXSPIDATA 得 0xAB；
+  断言芯片缓冲 `data[0x20]=0xAB`、总线读回 0xAB。
+
+## 16.3 — 用例：存档持久化（.sav 写读回）
+
+- `test_save_persist`：写 `test_save_tmp.sav` → `memset` 破坏内存 → `save_load_file` 重载 →
+  断言 3 个字节一致；`remove` 清理临时文件。
+
+## 16.4 — 用例：CPU 程序经 AUXSPICNT/AUXSPIDATA 读写存档（综合）
+
+- `test_save_program`：真实 ARM 指令（STRB/LDRB）走完整存档流程——选片(0xA040) → WREN → WRITE 0x20=0xAB →
+  撤片选 → 选片 → READ 0x20 → LDRB 收数据到 r3 → 停机；断言 PC=0x02000088、r3=0xAB、芯片缓冲一致。
+- **踩坑（测试）**：STRB 编码 = `0xE5C00000 | Rd<<12 | Rn<<16 | offset`、LDRB = `0xE5D00000 | Rd<<12 | Rn<<16 | offset`
+  （对照阶段 15 的 STR 字编码 `0xE58`/`0xE59` 加 bit22 得字节变体）。
+- 阶段 16 收尾全量 **423 项检查 0 失败**。
+

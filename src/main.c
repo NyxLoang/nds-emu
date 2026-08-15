@@ -1,6 +1,9 @@
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <wchar.h>
 #endif
 #include <SDL.h>
 #include <SDL_ttf.h>
@@ -112,6 +115,37 @@ static void setup_2d_demo(nds_t *nds)
     fflush(stdout);
 }
 
+/* 阶段 16：由 ROM 路径派生 .sav 存档路径（替换扩展名为 .sav）。 */
+#ifdef _WIN32
+static wchar_t *make_save_path_w(const wchar_t *rom_path)
+{
+    size_t len = wcslen(rom_path);
+    wchar_t *p = (wchar_t *)malloc((len + 5) * sizeof(wchar_t));
+    if (p == NULL)
+        return NULL;
+    wcscpy(p, rom_path);
+    wchar_t *dot = wcsrchr(p, L'.');
+    if (dot != NULL)
+        *dot = L'\0';
+    wcscat(p, L".sav");
+    return p;
+}
+#else
+static char *make_save_path(const char *rom_path)
+{
+    size_t len = strlen(rom_path);
+    char *p = (char *)malloc(len + 5);
+    if (p == NULL)
+        return NULL;
+    strcpy(p, rom_path);
+    char *dot = strrchr(p, '.');
+    if (dot != NULL)
+        *dot = '\0';
+    strcat(p, ".sav");
+    return p;
+}
+#endif
+
 int main(int argc, char *argv[])
 {
     (void)argc;
@@ -161,6 +195,11 @@ int main(int argc, char *argv[])
     /* 阶段 2：装载 .nds（若有）→ 解析头 → 把 ARM9 镜像写进 bus 的 Main RAM，
        再从 bus 读回验证「装载-读回」闭环成立。 */
     cart_t *cart = NULL;
+#ifdef _WIN32
+    wchar_t *save_path = NULL;
+#else
+    char *save_path = NULL;
+#endif
     if (rom_path != NULL) {
 #ifdef _WIN32
         cart = cart_load_w(rom_path, err, sizeof err);
@@ -242,6 +281,25 @@ int main(int argc, char *argv[])
         /* 阶段 15：把 ROM 缓冲借给卡带总线，让游戏运行时能经 ROMCTRL/CARD_DATA
            按需读卡带数据（真游戏不靠一次性装载，而是流式读）。 */
         io_attach_cart(nds->io, cart->data, cart->size);
+
+        /* 阶段 16：配置存档芯片（默认 EEPROM 8K，最常用），并从 <rom>.sav 读回进度。
+           存档类型自动检测（按游戏芯片 ID/访问模式）留待后续阶段补。 */
+        io_attach_save(nds->io, SAVE_EEPROM_8K);
+#ifdef _WIN32
+        save_path = make_save_path_w(rom_path);
+        if (save_path != NULL) {
+            save_load_file_w(io_get_save(nds->io), save_path);
+            printf("save : loaded %ls (%zu bytes)\n", save_path,
+                   io_get_save(nds->io)->size);
+        }
+#else
+        save_path = make_save_path(rom_path);
+        if (save_path != NULL) {
+            save_load_file(io_get_save(nds->io), save_path);
+            printf("save : loaded %s (%zu bytes)\n", save_path,
+                   io_get_save(nds->io)->size);
+        }
+#endif
 
         fflush(stdout);
 #ifdef _WIN32
@@ -365,6 +423,23 @@ int main(int argc, char *argv[])
         menu_render_dropdown(renderer, scale);
 
         SDL_RenderPresent(renderer);
+    }
+
+    /* 阶段 16：退出前把存档写回 .sav（须在 nds_destroy 释放存档缓冲之前）。 */
+    if (save_path != NULL) {
+#ifdef _WIN32
+        if (save_save_file_w(io_get_save(nds->io), save_path) == 0)
+            printf("save : stored %ls\n", save_path);
+        else
+            printf("save : failed to write %ls\n", save_path);
+        free(save_path);
+#else
+        if (save_save_file(io_get_save(nds->io), save_path) == 0)
+            printf("save : stored %s\n", save_path);
+        else
+            printf("save : failed to write %s\n", save_path);
+        free(save_path);
+#endif
     }
 
     menu_shutdown();

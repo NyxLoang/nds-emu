@@ -20,6 +20,7 @@
 #include "cart/cart.h"
 #include "cart/key1.h"
 #include "cart/cartbus.h"
+#include "cart/save.h"
 
 /* 与 ppu.h 的 framebuffer 约定保持一致（此处不 include SDL 头，故重复定义）：
    顶屏 = VRAM 起始 256×192；底屏 = VRAM + 0x18000（见 docs/05-framebuffer.md）。 */
@@ -2442,6 +2443,214 @@ static void test_card_program(nds_t *nds)
     CHECK_EQ("card prog enable cleared", bus_read16(nds->bus, IO_DMA0_BASE + 10) & DMA_CNT_ENABLE, 0u);
 }
 
+/* ---- 阶段 16.2 用例：存档芯片 SPI 状态机（EEPROM） ---- */
+static void test_save_eeprom(nds_t *nds)
+{
+    (void)nds;
+    save_t s;
+    save_init(&s);
+    CHECK_EQ("save eeprom cfg", save_configure(&s, SAVE_EEPROM_8K), 0);
+    CHECK_EQ("save eeprom size", (uint32_t)s.size, 8192u);
+
+    /* WREN 置写使能锁存 WEL */
+    save_transfer(&s, 0x06);
+    CHECK_EQ("save wen set", (s.status >> 1) & 1, 1u);
+
+    /* RDSR 读回状态（bit1 WEL=1） */
+    save_reset_cmd(&s);
+    CHECK_EQ("save rdsr wel", save_transfer(&s, 0x05), 0x02u);
+
+    /* 写地址 0x0100 4 字节 */
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x06); /* WREN */
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x02); /* WRITE */
+    save_transfer(&s, 0x01); /* addr hi */
+    save_transfer(&s, 0x00); /* addr lo */
+    save_transfer(&s, 0xAA);
+    save_transfer(&s, 0xBB);
+    save_transfer(&s, 0xCC);
+    save_transfer(&s, 0xDD);
+
+    /* 读回 */
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x03); /* READ */
+    save_transfer(&s, 0x01);
+    save_transfer(&s, 0x00);
+    CHECK_EQ("save rd0", save_transfer(&s, 0x00), 0xAAu);
+    CHECK_EQ("save rd1", save_transfer(&s, 0x00), 0xBBu);
+    CHECK_EQ("save rd2", save_transfer(&s, 0x00), 0xCCu);
+    CHECK_EQ("save rd3", save_transfer(&s, 0x00), 0xDDu);
+
+    save_free(&s);
+}
+
+/* ---- 阶段 16.2 用例：Flash 存档（RDID + 擦除 + AND 写语义） ---- */
+static void test_save_flash(nds_t *nds)
+{
+    (void)nds;
+    save_t s;
+    save_init(&s);
+    CHECK_EQ("save flash cfg", save_configure(&s, SAVE_FLASH_256K), 0);
+    CHECK_EQ("save flash size", (uint32_t)s.size, 262144u);
+
+    /* RDID：命令字节后连续回 3 字节 JEDEC ID（0x20 0x20 0x12 = M45PE20） */
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x9F);
+    CHECK_EQ("flash id0", save_transfer(&s, 0x00), 0x20u);
+    CHECK_EQ("flash id1", save_transfer(&s, 0x00), 0x20u);
+    CHECK_EQ("flash id2", save_transfer(&s, 0x00), 0x12u);
+
+    /* 页擦除 0x100（PE），擦后应全 0xFF */
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x06); /* WREN */
+    save_reset_cmd(&s);
+    save_transfer(&s, 0xDB); /* PE */
+    save_transfer(&s, 0x00); save_transfer(&s, 0x01); save_transfer(&s, 0x00);
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x03); /* READ */
+    save_transfer(&s, 0x00); save_transfer(&s, 0x01); save_transfer(&s, 0x00);
+    CHECK_EQ("flash erased ff", save_transfer(&s, 0x00), 0xFFu);
+
+    /* 页写 4 字节（0xFF & v = v） */
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x06); /* WREN */
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x02); /* PP */
+    save_transfer(&s, 0x00); save_transfer(&s, 0x01); save_transfer(&s, 0x00);
+    save_transfer(&s, 0x12);
+    save_transfer(&s, 0x34);
+    save_transfer(&s, 0x56);
+    save_transfer(&s, 0x78);
+
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x03);
+    save_transfer(&s, 0x00); save_transfer(&s, 0x01); save_transfer(&s, 0x00);
+    CHECK_EQ("flash rd0", save_transfer(&s, 0x00), 0x12u);
+    CHECK_EQ("flash rd1", save_transfer(&s, 0x00), 0x34u);
+    CHECK_EQ("flash rd2", save_transfer(&s, 0x00), 0x56u);
+    CHECK_EQ("flash rd3", save_transfer(&s, 0x00), 0x78u);
+
+    /* AND 写语义：再写 0x0F，0x12 & 0x0F = 0x02 */
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x02); /* PP */
+    save_transfer(&s, 0x00); save_transfer(&s, 0x01); save_transfer(&s, 0x00);
+    save_transfer(&s, 0x0F);
+    save_reset_cmd(&s);
+    save_transfer(&s, 0x03);
+    save_transfer(&s, 0x00); save_transfer(&s, 0x01); save_transfer(&s, 0x00);
+    CHECK_EQ("flash and-sem", save_transfer(&s, 0x00), 0x02u);
+
+    save_free(&s);
+}
+
+/* ---- 阶段 16.2/16.4 用例：经 AUXSPICNT/AUXSPIDATA 总线读写存档 ---- */
+static void test_save_spi_regs(nds_t *nds)
+{
+    io_attach_save(nds->io, SAVE_EEPROM_8K);
+
+    /* 选片：enable + SPI 模式 + 保持片选（0xA040），WREN 后撤片选 */
+    bus_write16(nds->bus, CART_AUXSPICNT, 0xA040);
+    bus_write8(nds->bus, CART_AUXSPIDATA, 0x06); /* WREN */
+    bus_write16(nds->bus, CART_AUXSPICNT, 0x0000);
+
+    /* 再选片：WRITE 地址 0x0020 = 0xAB，撤片选 */
+    bus_write16(nds->bus, CART_AUXSPICNT, 0xA040);
+    bus_write8(nds->bus, CART_AUXSPIDATA, 0x02); /* WRITE */
+    bus_write8(nds->bus, CART_AUXSPIDATA, 0x00); /* addr hi */
+    bus_write8(nds->bus, CART_AUXSPIDATA, 0x20); /* addr lo */
+    bus_write8(nds->bus, CART_AUXSPIDATA, 0xAB); /* data */
+    bus_write16(nds->bus, CART_AUXSPICNT, 0x0000);
+
+    CHECK_EQ("spi chip wrote", io_get_save(nds->io)->data[0x20], 0xABu);
+
+    /* 再选片：READ 地址 0x0020，哑元触发接收 */
+    bus_write16(nds->bus, CART_AUXSPICNT, 0xA040);
+    bus_write8(nds->bus, CART_AUXSPIDATA, 0x03); /* READ */
+    bus_write8(nds->bus, CART_AUXSPIDATA, 0x00);
+    bus_write8(nds->bus, CART_AUXSPIDATA, 0x20);
+    bus_write8(nds->bus, CART_AUXSPIDATA, 0x00); /* dummy → 收 data[0x20] */
+    CHECK_EQ("spi chip read", bus_read8(nds->bus, CART_AUXSPIDATA), 0xABu);
+}
+
+/* ---- 阶段 16.3 用例：存档持久化（写 .sav → 重新装载 → 读回一致） ---- */
+static void test_save_persist(nds_t *nds)
+{
+    (void)nds;
+    save_t s;
+    save_init(&s);
+    CHECK_EQ("persist cfg", save_configure(&s, SAVE_EEPROM_8K), 0);
+
+    s.data[0] = 0x11;
+    s.data[1] = 0x22;
+    s.data[0x100] = 0x33;
+
+    const char *path = "test_save_tmp.sav";
+    CHECK_EQ("persist save", save_save_file(&s, path), 0);
+
+    memset(s.data, 0x00, s.size); /* 破坏内存，模拟重新启动 */
+    CHECK_EQ("persist load", save_load_file(&s, path), 0);
+    CHECK_EQ("persist b0", s.data[0], 0x11u);
+    CHECK_EQ("persist b1", s.data[1], 0x22u);
+    CHECK_EQ("persist b100", s.data[0x100], 0x33u);
+
+    remove(path);
+    save_free(&s);
+}
+
+/* ---- 阶段 16.4 用例：CPU 程序经 AUXSPICNT/AUXSPIDATA 读写存档 ---- */
+static void test_save_program(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    io_attach_save(nds->io, SAVE_EEPROM_8K);
+
+    /* 程序：选片(0xA040) → WREN → WRITE 0x20=0xAB → 撤片选 → 选片 →
+       READ 0x20 → 收数据到 r3 → 停机。 */
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00404, /* MOV r0, #0x04000000 */
+        /* 0x04 */ 0xE28000A0, /* ADD r0, r0, #0xA0        r0=0x040000A0 */
+        /* 0x08 */ 0xE2800C01, /* ADD r0, r0, #0x100       r0=0x040001A0 AUXSPICNT */
+        /* 0x0C */ 0xE2801002, /* ADD r1, r0, #2           r1=0x040001A2 AUXSPIDATA */
+        /* 0x10 */ 0xE3A02040, /* MOV r2, #0x40 */
+        /* 0x14 */ 0xE5C02000, /* STRB r2, [r0]            AUXSPICNT 低=0x40 */
+        /* 0x18 */ 0xE3A020A0, /* MOV r2, #0xA0 */
+        /* 0x1C */ 0xE5C02001, /* STRB r2, [r0, #1]        AUXSPICNT=0xA040 选片 */
+        /* 0x20 */ 0xE3A02006, /* MOV r2, #0x06 */
+        /* 0x24 */ 0xE5C12000, /* STRB r2, [r1]            WREN */
+        /* 0x28 */ 0xE3A02002, /* MOV r2, #0x02 */
+        /* 0x2C */ 0xE5C12000, /* STRB r2, [r1]            WRITE */
+        /* 0x30 */ 0xE3A02000, /* MOV r2, #0 */
+        /* 0x34 */ 0xE5C12000, /* STRB r2, [r1]            addr hi=0 */
+        /* 0x38 */ 0xE3A02020, /* MOV r2, #0x20 */
+        /* 0x3C */ 0xE5C12000, /* STRB r2, [r1]            addr lo=0x20 */
+        /* 0x40 */ 0xE3A020AB, /* MOV r2, #0xAB */
+        /* 0x44 */ 0xE5C12000, /* STRB r2, [r1]            data=0xAB */
+        /* 0x48 */ 0xE3A02000, /* MOV r2, #0 */
+        /* 0x4C */ 0xE5C02000, /* STRB r2, [r0]            AUXSPICNT 低=0 */
+        /* 0x50 */ 0xE5C02001, /* STRB r2, [r0, #1]        AUXSPICNT=0 撤片选 */
+        /* 0x54 */ 0xE3A02040, /* MOV r2, #0x40 */
+        /* 0x58 */ 0xE5C02000, /* STRB r2, [r0] */
+        /* 0x5C */ 0xE3A020A0, /* MOV r2, #0xA0 */
+        /* 0x60 */ 0xE5C02001, /* STRB r2, [r0, #1]        再选片 */
+        /* 0x64 */ 0xE3A02003, /* MOV r2, #0x03 */
+        /* 0x68 */ 0xE5C12000, /* STRB r2, [r1]            READ */
+        /* 0x6C */ 0xE3A02000, /* MOV r2, #0 */
+        /* 0x70 */ 0xE5C12000, /* STRB r2, [r1]            addr hi=0 */
+        /* 0x74 */ 0xE3A02020, /* MOV r2, #0x20 */
+        /* 0x78 */ 0xE5C12000, /* STRB r2, [r1]            addr lo=0x20 */
+        /* 0x7C */ 0xE3A02000, /* MOV r2, #0 */
+        /* 0x80 */ 0xE5C12000, /* STRB r2, [r1]            dummy → 收 data[0x20] */
+        /* 0x84 */ 0xE5D13000, /* LDRB r3, [r1]            r3 = AUXSPIDATA */
+        /* 0x88 */ 0xEAFFFFFE, /* B self 停机 */
+    };
+
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x88, 128);
+    CHECK_EQ("save prog halt", nds->cpu->r[15], base + 0x88);
+    CHECK_EQ("save prog r3", nds->cpu->r[3], 0xABu);
+    CHECK_EQ("save prog chip", io_get_save(nds->io)->data[0x20], 0xABu);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -2859,6 +3068,41 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_card_program(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 16.2] 存档芯片 SPI 状态机（EEPROM）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_save_eeprom(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 16.2] Flash 存档（RDID + 擦除 + AND 写语义）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_save_flash(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 16.2] 经 AUXSPICNT/AUXSPIDATA 总线读写存档\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_save_spi_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 16.3] 存档持久化（.sav 写读回）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_save_persist(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 16.4] CPU 程序经 AUXSPICNT/AUXSPIDATA 读写存档\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_save_program(nds);
         nds_destroy(nds);
     }
 

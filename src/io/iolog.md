@@ -134,3 +134,11 @@
 - `bus.c/h`：加 `BUS_CARD_DATA`，`bus_read32/write32` 命中即转发 `io_card_data_read32/write32`。
 - `main.c`：装载 ROM 并解密安全区后 `io_attach_cart(nds->io, cart->data, cart->size)`，借指针给卡带总线。
 - **怎么验证**：`test_card_dma`（卡带 DMA 8 字搬 RAM + DRQ + 使能自清 + IF bit19）全过。
+
+## 16.2 — 存档芯片接线（io_attach_save / io_get_save）
+
+- `cartbus` 阶段 15 的 AUXSPICNT/AUXSPIDATA 本阶段接上真 SPI 语义：写 AUXSPIDATA 低字节触发存档芯片的
+  `save_transfer`（仅当 AUXSPICNT bit13+bit15 选中），bit6=0 传完自动撤片选复位命令（详见 cartlog 16.2）。
+- `io_t` 已含 `cartbus`（内含 `save_t save`），故 io 层只补两个薄接口：`io_attach_save`（配置芯片类型）、
+  `io_get_save`（拿芯片指针给 main 做 .sav 持久化）；`io_destroy` 在 `free(io)` 前 `cartbus_destroy` 释放存档缓冲。
+- **怎么验证**：`test_save_spi_regs`（经 AUXSPICNT/AUXSPIDATA 总线读写存档）全过。

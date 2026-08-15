@@ -50,6 +50,12 @@ void io_card_data_write32(io_t *io, uint32_t val);
 /* 把已装载 ROM 借给卡带总线（只借指针，不拷贝、不释放）。 */
 void io_attach_cart(io_t *io, const uint8_t *rom, size_t rom_size);
 
+/* 阶段 16：配置存档芯片类型（分配缓冲，填 0xFF 擦除态）。 */
+void io_attach_save(io_t *io, save_type_t type);
+
+/* 拿到存档芯片指针（main.c 用于 .sav 文件持久化）。 */
+save_t *io_get_save(io_t *io);
+
 /* ---- 硬件侧信号（主循环 / 测试驱动调用） ---- */
 
 /* 一帧结束：把 VBlank 位挂起（6.3；VBlank 是 ARM9 显示事件，置 ARM9 的 IF） */

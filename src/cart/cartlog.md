@@ -1,7 +1,8 @@
 # cartlog
 
 > 覆盖：卡带模块 `cart`，即 `src/cart/cart.h` / `src/cart/cart.c`（读 `.nds` 文件、解析 ROM 头并拷入内存）、
-> `src/cart/key1.*`（KEY1 安全区解密，阶段 14）、`src/cart/cartbus.*`（卡带总线 ROMCTRL/命令/数据端口，阶段 15）。
+> `src/cart/key1.*`（KEY1 安全区解密，阶段 14）、`src/cart/cartbus.*`（卡带总线 ROMCTRL/命令/数据端口，阶段 15）、
+> `src/cart/save.*`（存档芯片 SPI 状态机 + .sav 持久化，阶段 16）。
 > 按时间从旧到新记录。
 
 ## 2026-08-08 · 阶段 1.2 cart 读整个文件到缓冲区
@@ -130,5 +131,47 @@
 - **做了什么**：`test_card_program` 用真实 ARM 指令设 DMA0（源=CARD_DATA 固定、目的=RAM、32 位、卡带触发、4 字）、
   预写 `B7` 命令、CPU `STR` 激活 ROMCTRL → 卡带就绪 → DMA 搬 4 字到 RAM，断言 PC 停机 + 数据一致 + 使能自清。
 - **怎么验证**：`test_nds.exe` 全量 393 项检查 0 失败；`ctest` 100% 通过。
+- **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 16.1 存档类型短文
+
+- **做了什么**：新增 `docs/17-save-memory.md`：NDS 存档芯片类型（EEPROM 512B/8K/64K/128K、Flash 256K-8M、FRAM 32K）、
+  辅助 SPI 总线寄存器（AUXSPICNT `0x040001A0` / AUXSPIDATA `0x040001A2`）、AUXSPICNT 位定义（bit6 保持片选 / bit13 SPI 模式 /
+  bit15 使能）、EEPROM/Flash 命令集与地址宽度、典型读写流程与 .sav 持久化要点。
+- **怎么验证**：能复述寄存器地址、片选判定、命令流程与地址宽度差异。
+- **结果**：✅ 完成。
+
+## 2026-08-15 · 阶段 16.2 存档芯片 SPI 状态机（save）
+
+- **做了什么**：新建 `src/cart/save.h/.c` 功能文件：
+  - `save_t`：存档缓冲 + 芯片参数（大小/地址字节数/是否 Flash/写页/JEDEC ID）+ SPI 三态状态机（IDLE/收地址/读/写）。
+  - `save_configure` 按类型分配缓冲并填 `0xFF`（擦除态）；`save_transfer(out)->in` 做一次 SPI 字节传输。
+  - 命令：EEPROM/FRAM 的 WREN(06)/WRDI(04)/RDSR(05)/WRSR(01)/READ(03)/WRITE(02)；Flash 的 RDID(9F)/FAST READ(0B)/
+    PP/PW(02/0A)/SE(0D8)/PE(0DB)/CE(C7/60)/DP(B9)/RDP(AB)。
+  - 地址宽度按类型（512B 的 A8 来自 opcode bit3、8K/FRAM 2 字节、64K/128K/Flash 3 字节）；
+    Flash 写用「与」语义（只能 1→0）、擦除填 `0xFF`；EEPROM/Flash 写按页回绕。
+  - `cartbus` 接上 AUXSPI：写 AUXSPIDATA 低字节触发 `save_transfer`（仅当 AUXSPICNT bit13+bit15 选中存档芯片），
+    bit6（保持片选）=0 时传完自动 `save_reset_cmd`；AUXSPICNT 撤片选也复位命令。
+  - `io.c/h`：`io_attach_save`（配置类型）、`io_get_save`（取芯片指针供持久化）；`io_destroy` 释放存档缓冲。
+  - `CMakeLists.txt` 加 `save.c`。
+- **怎么验证**：`test_save_eeprom`（WREN/RDSR/WRITE/READ 往返）、`test_save_flash`（RDID/PE 擦除/PP 写/AND 语义）、
+  `test_save_spi_regs`（经 AUXSPICNT/AUXSPIDATA 总线读写）全过。
+- **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 16.3 存档持久化（.sav）
+
+- **做了什么**：`save_load_file/save_save_file`（及 `_w` 宽字符版）用 `fopen/_wfopen` 读写整块存档；
+  装载时先填 `0xFF` 再读（文件不足保持擦除态）、文件不存在视为全新存档。
+  `main.c` 加 `make_save_path_w`（ROM 路径换 `.sav` 后缀）；启动装载 ROM 后 `io_attach_save(EEPROM_8K)` +
+  `save_load_file_w` 读回进度；退出前 `save_save_file_w` 写回（在 `nds_destroy` 释放缓冲之前）。
+- **怎么验证**：`test_save_persist`（写 .sav → 破坏内存 → 重载 → 读回一致）全过；`ctest` 100% 通过。
+- **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 16.4 综合：CPU 程序读写存档
+
+- **做了什么**：`test_save_program` 用真实 ARM 指令（STRB/LDRB）经 AUXSPICNT/AUXSPIDATA 走完整流程：
+  选片 → WREN → WRITE(0x20)=0xAB → 撤片选 → 选片 → READ(0x20) → LDRB 收数据到 r3 → 停机；
+  断言 PC 停机、r3=0xAB、芯片缓冲 `data[0x20]=0xAB`。
+- **怎么验证**：`test_nds.exe` 全量 423 项检查 0 失败；`ctest` 100% 通过。
 - **结果**：✅ 通过。
 

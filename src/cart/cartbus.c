@@ -4,12 +4,23 @@
 void cartbus_init(cartbus_t *cb)
 {
     memset(cb, 0, sizeof(*cb));
+    save_init(&cb->save);
+}
+
+void cartbus_destroy(cartbus_t *cb)
+{
+    save_free(&cb->save);
 }
 
 void cartbus_attach(cartbus_t *cb, const uint8_t *rom, size_t rom_size)
 {
     cb->rom = rom;
     cb->rom_size = rom_size;
+}
+
+int cartbus_attach_save(cartbus_t *cb, save_type_t type)
+{
+    return save_configure(&cb->save, type);
 }
 
 int cartbus_is_addr(uint32_t addr)
@@ -76,14 +87,33 @@ void cartbus_write8(cartbus_t *cb, uint32_t addr, uint8_t val)
 {
     if (addr >= CART_AUXSPICNT && addr < CART_AUXSPICNT + 2) {
         uint32_t shift = (addr - CART_AUXSPICNT) * 8;
+        uint16_t old = cb->auxspicnt;
         cb->auxspicnt = (uint16_t)((cb->auxspicnt & ~(0xFFu << shift))
                                    | ((uint32_t)val << shift));
+        /* 撤下存档芯片片选（bit13/bit15 任一清零）时复位其命令状态机 */
+        int old_cs = (old & AUXSPICNT_CS) == AUXSPICNT_CS;
+        int new_cs = (cb->auxspicnt & AUXSPICNT_CS) == AUXSPICNT_CS;
+        if (old_cs && !new_cs)
+            save_reset_cmd(&cb->save);
         return;
     }
     if (addr >= CART_AUXSPIDATA && addr < CART_AUXSPIDATA + 2) {
-        uint32_t shift = (addr - CART_AUXSPIDATA) * 8;
-        cb->auxspidata = (uint16_t)((cb->auxspidata & ~(0xFFu << shift))
-                                    | ((uint32_t)val << shift));
+        if (addr == CART_AUXSPIDATA) {
+            /* 写低字节 = 启动一次 SPI 传输（MOSI=val，收 MISO 存回低字节）。
+               仅当片选选中（bit13+bit15）时真正送进存档芯片。 */
+            int cs = (cb->auxspicnt & AUXSPICNT_CS) == AUXSPICNT_CS;
+            if (cs) {
+                uint8_t in = save_transfer(&cb->save, val);
+                cb->auxspidata = (uint16_t)((cb->auxspidata & 0xFF00u) | in);
+                /* 不保持片选（bit6=0）：本字节传完即撤片选 → 命令结束 */
+                if (!(cb->auxspicnt & AUXSPICNT_HOLD))
+                    save_reset_cmd(&cb->save);
+            }
+        } else {
+            /* 高字节（0x040001A3）：AUXSPIDATA 实为 8 位，忽略 */
+            cb->auxspidata = (uint16_t)((cb->auxspidata & 0x00FFu)
+                                        | ((uint32_t)val << 8));
+        }
         return;
     }
     if (addr >= CART_ROMCTRL && addr < CART_ROMCTRL + 4) {

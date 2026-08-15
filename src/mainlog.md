@@ -89,3 +89,12 @@
   把 ROM 缓冲借给卡带总线，让游戏运行时能经 ROMCTRL/CARD_DATA 按需读卡带数据（真游戏流式读，不靠一次性装载）。
 - **怎么验证**：`test_card_program`（CPU 程序设 DMA + 激活卡带命令读 ROM）通过；`ctest` 393 项检查 0 失败。
 - **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 16.3/16.4 存档装载与持久化
+
+- **做了什么**：`main.c` 加 `make_save_path_w`（由 ROM 路径派生 `<rom>.sav`）；装载 ROM 后
+  `io_attach_save(nds->io, SAVE_EEPROM_8K)` 配置默认存档芯片（EEPROM 8K，最常用；类型自动检测后续补），
+  再 `save_load_file_w` 读回进度并打印 `save: loaded <path> (<size> bytes)`；退出循环后、`nds_destroy` 前
+  `save_save_file_w` 写回 `.sav` 并打印 `save: stored <path>`。宽字符路径与 ROM 装载一致（支持中文）。
+- **怎么验证**：`test_save_persist`（.sav 写读回）与 `test_save_program`（CPU 程序读写存档）通过；`ctest` 100% 通过。
+- **结果**：✅ 通过。

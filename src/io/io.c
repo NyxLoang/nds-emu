@@ -12,6 +12,8 @@ io_t *io_create(void)
 
 void io_destroy(io_t *io)
 {
+    if (io != NULL)
+        cartbus_destroy(&io->cartbus);
     free(io);
 }
 
@@ -146,6 +148,16 @@ void io_card_data_write32(io_t *io, uint32_t val)
 void io_attach_cart(io_t *io, const uint8_t *rom, size_t rom_size)
 {
     cartbus_attach(&io->cartbus, rom, rom_size);
+}
+
+void io_attach_save(io_t *io, save_type_t type)
+{
+    cartbus_attach_save(&io->cartbus, type);
+}
+
+save_t *io_get_save(io_t *io)
+{
+    return &io->cartbus.save;
 }
 
 void io_set_vblank(io_t *io)

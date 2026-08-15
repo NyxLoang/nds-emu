@@ -58,6 +58,7 @@ add_library(ndscore STATIC
     src/ppu/render.c
             src/cart/cart.c
             src/cart/cartbus.c
+            src/cart/save.c
             src/cart/arm9.c
             src/cart/arm7.c
             src/cart/key1.c

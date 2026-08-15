@@ -127,6 +127,9 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
     /* IPC FIFO RECV（0x04100000）在 IO 区间外，需整体读（拆字节会破坏队列） */
     if (addr == BUS_IPC_FIFO_RECV)
         return bus->io != NULL ? io_recv32(bus->io, bus->active_is_arm7) : 0;
+    /* 卡带数据端口 CARD_DATA（0x04100010）在 IO 区间外，需整体读（读自动推进地址） */
+    if (addr == BUS_CARD_DATA)
+        return bus->io != NULL ? io_card_data_read32(bus->io) : 0xFFFFFFFFu;
     return (uint32_t)bus_read8(bus, addr)
          | ((uint32_t)bus_read8(bus, addr + 1) << 8)
          | ((uint32_t)bus_read8(bus, addr + 2) << 16)
@@ -140,6 +143,12 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
     if (addr == IO_FIFO_SEND) {
         if (bus->io != NULL)
             io_send32(bus->io, bus->active_is_arm7, val);
+        return;
+    }
+    /* 卡带数据端口 CARD_DATA 写（本阶段占位：读 ROM 用不到） */
+    if (addr == BUS_CARD_DATA) {
+        if (bus->io != NULL)
+            io_card_data_write32(bus->io, val);
         return;
     }
     bus_write8(bus, addr,     (uint8_t)(val & 0xFF));

@@ -82,3 +82,10 @@
   已是明文；打印 `secure: KEY1 area decrypted (encryObj OK)` 或 `secure: not encrypted (homebrew) or decrypt failed`。
 - **怎么验证**：`test_secure_area_load` 走完整装载流程通过；`ctest` 360 项检查 0 失败。
 - **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 15.4 装载后挂载卡带总线
+
+- **做了什么**：`main.c` 装载 ROM 并解析头、解密安全区后，调用 `io_attach_cart(nds->io, cart->data, cart->size)`
+  把 ROM 缓冲借给卡带总线，让游戏运行时能经 ROMCTRL/CARD_DATA 按需读卡带数据（真游戏流式读，不靠一次性装载）。
+- **怎么验证**：`test_card_program`（CPU 程序设 DMA + 激活卡带命令读 ROM）通过；`ctest` 393 项检查 0 失败。
+- **结果**：✅ 通过。

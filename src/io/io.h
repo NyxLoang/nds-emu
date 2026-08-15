@@ -8,22 +8,25 @@
 #include "dma.h"
 #include "fifo.h"
 #include "disp.h"
+#include "cart/cartbus.h"
 
 struct bus; /* 前向声明：io 需要 bus 反指，供 DMA 搬运访存 */
 
-/* 寄存器区（0x04000000 起）的完整状态：中断 + 定时器 + 按键 + DMA + IPC FIFO + 显示。
+/* 寄存器区（0x04000000 起）的完整状态：中断 + 定时器 + 按键 + DMA + IPC FIFO + 显示 + 卡带总线。
    按模块结构规则拆功能文件：irq（中断）、timer（定时器）、key（按键）、
-   dma（DMA）、fifo（IPC FIFO）、disp（2D 显示控制）；本文件是对外接口，bus 在
-   IO 区间调用 io_read8/io_write8，FIFO 的 32 位收发经 io_recv32/io_send32。
+   dma（DMA）、fifo（IPC FIFO）、disp（2D 显示控制）、cartbus（卡带总线，阶段 15）；
+   本文件是对外接口，bus 在 IO 区间调用 io_read8/io_write8，FIFO 的 32 位收发经
+   io_recv32/io_send32，卡带数据端口经 io_card_data_read32/write32。
    中断寄存器按 CPU 分流：irq[0]=ARM9、irq[1]=ARM7（同址、按访问者身份选择）。
-   对外信号：io_set_vblank、io_set_keyinput、io_advance_timers、io_irq_pending。 */
+   对外信号：io_set_vblank、io_set_keyinput、io_advance_timers、io_irq_pending、io_attach_cart。 */
 typedef struct io {
     irq_t irq[2];                     /* 中断：IME/IE/IF 各一套（ARM9/ARM7） */
     nds_timer_t timer[IO_TIMER_COUNT];/* 定时器 0-3 */
     keypad_t keypad;                  /* KEYINPUT */
-    dma_channel_t dma;                /* DMA（阶段 7：只实现 DMA0 一条通道） */
+    dma_t dma;                        /* DMA：阶段 15 补齐 4 通道 */
     ipc_fifo_t fifo;                  /* IPC FIFO（阶段 8：双核通信） */
     disp_t disp;                      /* 2D 显示控制（阶段 9：DISPCNT/BGxCNT/滚动） */
+    cartbus_t cartbus;                /* 卡带总线（阶段 15：ROMCTRL/命令/数据端口） */
     struct bus *bus;                  /* bus 反指：DMA 搬运需经 bus 访存 */
 } io_t;
 
@@ -38,6 +41,14 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7);
 /* FIFO 32 位收发（bus 对 SEND/RECV 地址整体转发，避免拆字节破坏队列） */
 uint32_t io_recv32(io_t *io, int is_arm7);
 void io_send32(io_t *io, int is_arm7, uint32_t val);
+
+/* 卡带数据端口 CARD_DATA（0x04100010）32 位读写（bus 在 IO 区外整体转发）。
+   读会推进卡带内部读地址；写本阶段仅占位（读 ROM 用不到）。 */
+uint32_t io_card_data_read32(io_t *io);
+void io_card_data_write32(io_t *io, uint32_t val);
+
+/* 把已装载 ROM 借给卡带总线（只借指针，不拷贝、不释放）。 */
+void io_attach_cart(io_t *io, const uint8_t *rom, size_t rom_size);
 
 /* ---- 硬件侧信号（主循环 / 测试驱动调用） ---- */
 

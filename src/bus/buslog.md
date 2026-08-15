@@ -61,3 +61,11 @@
     （bank C）、主 OBJ `0x06400000`→`vram[0x20000]`（bank B）、副 OBJ `0x06600000`→`vram[0x60000]`（bank D）。
   - `0x06000000` 仍保持 656KB 全量映射（向后兼容 + 主引擎全量访问）。
 - 验收：`test_disp_regs` 里验证副 BG 窗口写 `0x06200000` 与物理 `vram[0x40000]` 读回一致。
+
+## 15.4 — 卡带数据端口 CARD_DATA 整字路由
+
+- `bus.h` 加 `BUS_CARD_DATA`（`0x04100010`，4 字节数据输入端口）；`bus_read32` 命中即转发
+  `io_card_data_read32`，`bus_write32` 命中即转发 `io_card_data_write32`（写为占位忽略）。
+- 与 8.3 的 FIFO RECV/SEND 同理：`0x04100010` 在 IO 区间外、且是「读一次游标 +4」的有副作用端口，
+  不能拆成 4 字节逐字节读，必须整字路由。
+- 验收：`test_card_dma` / `test_card_program` 经 `bus_read32(CARD_DATA)` 连续读卡带数据正确。

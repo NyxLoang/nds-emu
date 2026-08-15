@@ -298,3 +298,25 @@
   断言 RAM 里魔数 + `cpu_reset(entry)` 后 PC 正确。用 `put_le32` 小端写头字段。
 - 阶段 14 收尾全量 **360 项检查 0 失败**。
 
+## 15.2 — 用例：卡带总线命令读（cartbus）
+
+- `test_cartbus_read`：`io_attach_cart` 挂内存 ROM → 写 `B7` 命令（大端地址）到 CARD_COMMAND →
+  写 ROMCTRL 激活（bit31）→ 断言 DRQ（bit23）置位 → 连续 `bus_read32(CARD_DATA)` 读回 4 字节小端，
+  游标 +4、越界返回 `0xFFFFFFFF`；块读完 DRQ 自清。
+
+## 15.3 — 用例：DMA 4 通道 + 地址控制 + VBlank 触发
+
+- `test_dma_channels`：DMA0/1 独立搬运不串扰（源递增/固定）；源递减模式（`SRC_DEC` 从高地址倒读）；
+  VBlank 触发（先 `io_set_vblank` 再 `dma_fire`）启动延迟 DMA。
+
+## 15.4 — 用例：卡带 DMA 集成（DMA0 从 CARD_DATA 搬 RAM）
+
+- `test_card_dma`：配 DMA0（源=CARD_DATA 固定、目的=RAM、32 位、卡带触发）→ 写 `B7` 命令 + 激活
+  ROMCTRL → 卡带就绪触发 DMA 搬 8 字 → 断言数据一致、DRQ 状态、使能自清、IF bit19（卡带完成）置位。
+
+## 15.5 — 用例：CPU 程序 DMA 读卡带（综合）
+
+- `test_card_program`：真实 ARM 指令设 DMA0 → 预写 `B7` 命令 → `STR` 激活 ROMCTRL → 卡带就绪 →
+  DMA 搬 4 字到 RAM；断言 PC 停机（0x02000044）、word[0..3] 与 ROM 数据一致、使能自清。
+- 阶段 15 收尾全量 **393 项检查 0 失败**。
+

@@ -1,6 +1,7 @@
 # cartlog
 
-> 覆盖：卡带装载模块 `cart`，即 `src/cart/cart.h` / `src/cart/cart.c`。负责读 `.nds` 文件、后续解析 ROM 头并拷入内存。
+> 覆盖：卡带模块 `cart`，即 `src/cart/cart.h` / `src/cart/cart.c`（读 `.nds` 文件、解析 ROM 头并拷入内存）、
+> `src/cart/key1.*`（KEY1 安全区解密，阶段 14）、`src/cart/cartbus.*`（卡带总线 ROMCTRL/命令/数据端口，阶段 15）。
 > 按时间从旧到新记录。
 
 ## 2026-08-08 · 阶段 1.2 cart 读整个文件到缓冲区
@@ -88,5 +89,46 @@
 - **做了什么**：`main.c` 在解析头后、拷贝 ARM9 镜像前调用 `cart_decrypt_secure_area(cart)`，
   就地解密 ROM 缓冲里的安全区，使拷进 Main RAM 的镜像已是明文；打印 `secure: KEY1 area decrypted` 或 `not encrypted`。
 - **怎么验证**：`test_secure_area_load` 走完整流程（造加密 ROM → 解密 → 拷 RAM → 断言魔数 + entry PC）通过；`ctest` 全绿。
+- **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 15.1 卡带命令协议短文
+
+- **做了什么**：新增 `docs/16-cartridge-protocol.md`：NDS 卡带总线寄存器（ROMCTRL/AUXSPICNT/CARD_COMMAND/CARD_DATA）、
+  ROMCTRL bit23 DRQ / bit31 激活、命令 `B7`/`B8`（GetData 读 ROM）、DMA 卡带触发源（start mode=5）。说明真实游戏运行时
+  按需流式读卡带（不靠一次性装载）。
+- **怎么验证**：能复述寄存器地址、命令格式（大端）、读 ROM 的典型流程。
+- **结果**：✅ 完成。
+
+## 2026-08-15 · 阶段 15.2/15.4 卡带总线 cartbus + 接线
+
+- **做了什么**：
+  - 新建 `src/cart/cartbus.h/.c` 功能文件：`cartbus_t`（AUXSPICNT/AUXSPIDATA/ROMCTRL/cmd[8]/传输游标 + 借用 ROM 指针）、
+    `cartbus_attach`（只借指针不拷贝）、`cartbus_is_addr`（`0x040001A0..AF`）、按字节读写控制寄存器、
+    `cartbus_read32`（CARD_DATA 读 4 字节小端并自动 +4，越界返 0xFFFFFFFF）。
+  - 命令解码：ROMCTRL 写 bit31（字节 3 的 bit7）锁存 `cmd[8]` 并激活；`B7`/`B8` 解析大端地址，块大小按 ROMCTRL bit24-26
+    （0=默认 0x200、7=4 字节、其余 0x100<<(n-1)），置 DRQ（bit23）。瞬时传输模型：数据立即就绪。
+  - `bus.c/h`：加 `BUS_CARD_DATA`（`0x04100010`），`bus_read32/write32` 整体转发到 `io_card_data_read32/write32`。
+  - `io.c/h`：加 `cartbus` 字段 + `io_attach_cart`/`io_card_data_read32`；`io_read8/write8` 分发卡带寄存器；
+    卡带刚激活时 `irq_set_card`（两核 IF bit19）+ `io_card_dma_check`（触发卡带 DMA）。
+  - `main.c`：装载后 `io_attach_cart(nds->io, cart->data, cart->size)`，让游戏运行时能读卡带。
+  - `CMakeLists.txt` 加 `cartbus.c`。
+- **怎么验证**：`ctest` 全绿；新增 `test_cartbus_read`（命令读 + 越界返 0xFFFFFFFF）、`test_card_dma`（卡带 DMA 8 字搬 RAM
+  + DRQ + 使能自清 + IF bit19）全过。
+- **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 15.3 DMA 补全：4 通道 + 地址控制 + 触发源
+
+- **做了什么**：`src/io/dma.h/.c` 从单通道扩为 `dma_t`（4 通道 `ch[IO_DMA_COUNT]`）；新增地址控制
+  （源/目的 增/减/固定，`DMA_CNT_SRC_DEC`/`DMA_CNT_DST_DEC` 等）、`DMA_CNT_REPEAT`、`DMA_CNT_IRQ`（暂不接线）、
+  `DMA_CNT_MODE_SHIFT` 与 `DMA_START_VBLANK`/`DMA_START_CARD`；新增 `dma_fire(dma, bus, start_mode)` 供延迟触发源使用。
+  `io_set_vblank` 现在会 `dma_fire(VBlank)`；`io_card_dma_check` 在卡带就绪时 `dma_fire(Card)`。
+- **怎么验证**：新增 `test_dma_channels`（多通道独立 + 源递减 + VBlank 触发）全过。
+- **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 15.5 综合：CPU 程序 DMA 读卡带
+
+- **做了什么**：`test_card_program` 用真实 ARM 指令设 DMA0（源=CARD_DATA 固定、目的=RAM、32 位、卡带触发、4 字）、
+  预写 `B7` 命令、CPU `STR` 激活 ROMCTRL → 卡带就绪 → DMA 搬 4 字到 RAM，断言 PC 停机 + 数据一致 + 使能自清。
+- **怎么验证**：`test_nds.exe` 全量 393 项检查 0 失败；`ctest` 100% 通过。
 - **结果**：✅ 通过。
 

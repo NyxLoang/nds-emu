@@ -54,6 +54,11 @@ void irq_set_vblank(irq_t *irq)
     irq->ifl |= IO_IF_VBLANK;
 }
 
+void irq_set_card(irq_t *irq)
+{
+    irq->ifl |= IO_IF_CARD_DONE;
+}
+
 int irq_pending(const irq_t *irq)
 {
     /* 三者缺一不可：有挂起 + 使能 + 总开关打开 */

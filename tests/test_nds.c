@@ -19,6 +19,7 @@
 #include "ppu/render.h"
 #include "cart/cart.h"
 #include "cart/key1.h"
+#include "cart/cartbus.h"
 
 /* 与 ppu.h 的 framebuffer 约定保持一致（此处不 include SDL 头，故重复定义）：
    顶屏 = VRAM 起始 256×192；底屏 = VRAM + 0x18000（见 docs/05-framebuffer.md）。 */
@@ -2254,6 +2255,193 @@ static void test_secure_area_load(nds_t *nds)
     free(cart.data);
 }
 
+/* ---- 阶段 15.2 卡带命令读：写命令 + 激活 + 从 CARD_DATA 按序读回 ---- */
+static void test_cartbus_read(nds_t *nds)
+{
+    uint8_t rom[0x400];
+    for (uint32_t i = 0; i < sizeof rom; i++)
+        rom[i] = (uint8_t)i;   /* rom[i]=i&0xFF */
+    io_attach_cart(nds->io, rom, sizeof rom);
+
+    /* 未激活命令时读数据端口：无数据 → 0xFFFFFFFF */
+    CHECK_EQ("cart data before cmd", bus_read32(nds->bus, BUS_CARD_DATA), 0xFFFFFFFFu);
+
+    /* 命令 B7 读地址 0x100（命令字节大端：00 00 01 00） */
+    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00};
+    for (int i = 0; i < 8; i++)
+        bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
+
+    /* 激活 ROMCTRL（写 bit31） */
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80);
+
+    /* DRQ 就绪 */
+    CHECK_EQ("cart romctrl DRQ", bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
+             CART_ROMCTRL_DRQ);
+
+    /* 从 0x100 读 4 字：每次读自动 +4 */
+    for (int i = 0; i < 4; i++) {
+        uint32_t want = (uint32_t)rom[0x100 + 4 * i]
+                      | ((uint32_t)rom[0x100 + 4 * i + 1] << 8)
+                      | ((uint32_t)rom[0x100 + 4 * i + 2] << 16)
+                      | ((uint32_t)rom[0x100 + 4 * i + 3] << 24);
+        char nm[32];
+        snprintf(nm, sizeof nm, "cart data word[%d]", i);
+        CHECK_EQ(nm, bus_read32(nds->bus, BUS_CARD_DATA), want);
+    }
+
+    /* 越界读：命令读 0x3FC（rom 只有 0x400），第 2 字越界 → 0xFFFFFFFF */
+    static const uint8_t cmd2[8] = {0xB7, 0x00, 0x00, 0x03, 0xFC, 0x00, 0x00, 0x00};
+    for (int i = 0; i < 8; i++)
+        bus_write8(nds->bus, CART_COMMAND + i, cmd2[i]);
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80);
+    uint32_t w0 = (uint32_t)rom[0x3FC] | ((uint32_t)rom[0x3FD] << 8)
+                | ((uint32_t)rom[0x3FE] << 16) | ((uint32_t)rom[0x3FF] << 24);
+    CHECK_EQ("cart tail word", bus_read32(nds->bus, BUS_CARD_DATA), w0);
+    CHECK_EQ("cart beyond end", bus_read32(nds->bus, BUS_CARD_DATA), 0xFFFFFFFFu);
+}
+
+/* ---- 阶段 15.3 用例：DMA 4 通道 + 地址递减 + VBlank 触发 ---- */
+static void test_dma_channels(nds_t *nds)
+{
+    const uint32_t dma2 = IO_DMA0_BASE + 2 * IO_DMA_STRIDE; /* 0x040000C8 */
+    const uint32_t dma3 = IO_DMA0_BASE + 3 * IO_DMA_STRIDE; /* 0x040000D4 */
+    const uint32_t src  = 0x02001000u;
+    const uint32_t vram = BUS_VRAM_BASE;
+
+    /* a) 多通道独立：第 2/3 通道寄存器读写回 */
+    bus_write32(nds->bus, dma2 + 0, 0x02001234u);
+    CHECK_EQ("dma2 sad", bus_read32(nds->bus, dma2 + 0), 0x02001234u);
+    bus_write32(nds->bus, dma3 + 4, 0x06000100u);
+    CHECK_EQ("dma3 dad", bus_read32(nds->bus, dma3 + 4), 0x06000100u);
+
+    /* b) 源递减：DMA2 源从 src+8 递减拷 3 字到 VRAM */
+    bus_write32(nds->bus, src + 0, 0x11111111u);
+    bus_write32(nds->bus, src + 4, 0x22222222u);
+    bus_write32(nds->bus, src + 8, 0x33333333u);
+    bus_write32(nds->bus, dma2 + 0, src + 8);
+    bus_write32(nds->bus, dma2 + 4, vram + 0x200);
+    bus_write16(nds->bus, dma2 + 8, 3u);
+    bus_write16(nds->bus, dma2 + 10, DMA_CNT_32BIT | DMA_CNT_SRC_DEC | DMA_CNT_ENABLE);
+    CHECK_EQ("dma2 dec [0]", bus_read32(nds->bus, vram + 0x200), 0x33333333u);
+    CHECK_EQ("dma2 dec [1]", bus_read32(nds->bus, vram + 0x204), 0x22222222u);
+    CHECK_EQ("dma2 dec [2]", bus_read32(nds->bus, vram + 0x208), 0x11111111u);
+
+    /* c) VBlank 触发：DMA3 配好后不搬，io_set_vblank 后才搬 */
+    bus_write32(nds->bus, src + 0, 0xDEADBEEFu);
+    bus_write32(nds->bus, dma3 + 0, src);
+    bus_write32(nds->bus, dma3 + 4, vram + 0x300);
+    bus_write16(nds->bus, dma3 + 8, 1u);
+    bus_write16(nds->bus, dma3 + 10,
+                DMA_CNT_32BIT | (DMA_START_VBLANK << DMA_CNT_MODE_SHIFT) | DMA_CNT_ENABLE);
+    CHECK_EQ("dma3 vblank not yet", bus_read32(nds->bus, vram + 0x300), 0x00000000u);
+    io_set_vblank(nds->io);
+    CHECK_EQ("dma3 vblank fired", bus_read32(nds->bus, vram + 0x300), 0xDEADBEEFu);
+}
+
+/* ---- 阶段 15.4 用例：卡带 DMA——DMA 从 ROM（CARD_DATA）搬数据到 RAM ---- */
+static void test_card_dma(nds_t *nds)
+{
+    uint8_t rom[0x400];
+    for (uint32_t i = 0; i < sizeof rom; i++)
+        rom[i] = (uint8_t)i;
+    io_attach_cart(nds->io, rom, sizeof rom);
+
+    const uint32_t dma0 = IO_DMA0_BASE;
+    const uint32_t dst  = 0x02002000u;
+
+    /* DMA0：源=CARD_DATA（固定地址，每次读自动 +4），目的=RAM，32 位，卡带触发，8 字 */
+    bus_write32(nds->bus, dma0 + 0, BUS_CARD_DATA);
+    bus_write32(nds->bus, dma0 + 4, dst);
+    bus_write16(nds->bus, dma0 + 8, 8u);
+    bus_write16(nds->bus, dma0 + 10,
+                DMA_CNT_32BIT | DMA_CNT_SRC_FIX
+                | (DMA_START_CARD << DMA_CNT_MODE_SHIFT) | DMA_CNT_ENABLE);
+
+    /* 卡带命令尚未激活：不该搬 */
+    CHECK_EQ("card dma not yet", bus_read32(nds->bus, dst), 0x00000000u);
+
+    /* 命令 B7 读 0x100 + 激活 ROMCTRL */
+    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00};
+    for (int i = 0; i < 8; i++)
+        bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80);
+
+    /* 8 字应从 CARD_DATA 按序搬进 dest */
+    for (int i = 0; i < 8; i++) {
+        uint32_t want = (uint32_t)rom[0x100 + 4 * i]
+                      | ((uint32_t)rom[0x100 + 4 * i + 1] << 8)
+                      | ((uint32_t)rom[0x100 + 4 * i + 2] << 16)
+                      | ((uint32_t)rom[0x100 + 4 * i + 3] << 24);
+        char nm[32];
+        snprintf(nm, sizeof nm, "card dma word[%d]", i);
+        CHECK_EQ(nm, bus_read32(nds->bus, dst + 4u * i), want);
+    }
+
+    /* 搬完自动清使能 */
+    CHECK_EQ("card dma enable cleared", bus_read16(nds->bus, dma0 + 10) & DMA_CNT_ENABLE, 0u);
+    /* ROMCTRL bit23 DRQ 仍就绪（块未耗尽）+ 卡带完成中断 bit19 */
+    CHECK_EQ("card romctrl DRQ", bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
+             CART_ROMCTRL_DRQ);
+    CHECK_EQ("card irq bit19", bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_CARD_DONE,
+             IO_IF_CARD_DONE);
+}
+
+/* ---- 阶段 15.5 用例：CPU 程序设 DMA + 激活卡带命令，DMA 从 ROM 搬数据到 RAM ---- */
+static void test_card_program(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t dst  = 0x02002000u;
+
+    uint8_t rom[0x200];
+    for (uint32_t i = 0; i < sizeof rom; i++)
+        rom[i] = (uint8_t)i;
+    io_attach_cart(nds->io, rom, sizeof rom);
+
+    /* 预写命令：B7 读地址 0x100（命令字节大端） */
+    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00};
+    for (int i = 0; i < 8; i++)
+        bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
+
+    /* 程序：设 DMA0（源=CARD_DATA 固定、目的=RAM、32 位、卡带触发、4 字）
+       再写 ROMCTRL 激活 → 卡带就绪 → DMA 搬 4 字到 dest。 */
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00404, /* MOV r0, #0x04000000       r0 = IO 基址 */
+        /* 0x04 */ 0xE28000B0, /* ADD r0, r0, #0xB0         r0 = 0x040000B0（DMA0） */
+        /* 0x08 */ 0xE3A01404, /* MOV r1, #0x04000000       r1 = 0x04000000 */
+        /* 0x0C */ 0xE2811810, /* ADD r1, r1, #0x100000     r1 = 0x04100000 */
+        /* 0x10 */ 0xE2811010, /* ADD r1, r1, #0x10         r1 = 0x04100010（CARD_DATA） */
+        /* 0x14 */ 0xE5801000, /* STR r1, [r0]              SAD = CARD_DATA */
+        /* 0x18 */ 0xE3A02402, /* MOV r2, #0x02000000       r2 = Main RAM 基址 */
+        /* 0x1C */ 0xE2822C20, /* ADD r2, r2, #0x2000       r2 = 0x02002000（dest） */
+        /* 0x20 */ 0xE5802004, /* STR r2, [r0, #4]          DAD = dest */
+        /* 0x24 */ 0xE3A034AD, /* MOV r3, #0xAD000000       r3 = CNT_H<<16 */
+        /* 0x28 */ 0xE3833004, /* ORR r3, r3, #0x04         r3 = 0xAD000004（CNT_L=4） */
+        /* 0x2C */ 0xE5803008, /* STR r3, [r0, #8]          CNT=0xAD000004（卡带模式） */
+        /* 0x30 */ 0xE3A01404, /* MOV r1, #0x04000000       r1 = 0x04000000 */
+        /* 0x34 */ 0xE28110A4, /* ADD r1, r1, #0xA4         r1 = 0x040000A4 */
+        /* 0x38 */ 0xE2811C01, /* ADD r1, r1, #0x100        r1 = 0x040001A4（ROMCTRL） */
+        /* 0x3C */ 0xE3A00102, /* MOV r0, #0x80000000       r0 = activate bit31 */
+        /* 0x40 */ 0xE5810000, /* STR r0, [r1]              ROMCTRL=activate → DMA 搬 */
+        /* 0x44 */ 0xEAFFFFFE, /* B self（停机） */
+    };
+
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x44, 64);
+    CHECK_EQ("card prog PC halt", nds->cpu->r[15], base + 0x44);
+
+    /* dest 收到 rom[0x100..0x10F]（4 字） */
+    for (int i = 0; i < 4; i++) {
+        uint32_t want = (uint32_t)rom[0x100 + 4 * i]
+                      | ((uint32_t)rom[0x100 + 4 * i + 1] << 8)
+                      | ((uint32_t)rom[0x100 + 4 * i + 2] << 16)
+                      | ((uint32_t)rom[0x100 + 4 * i + 3] << 24);
+        char nm[32];
+        snprintf(nm, sizeof nm, "card prog word[%d]", i);
+        CHECK_EQ(nm, bus_read32(nds->bus, dst + 4u * i), want);
+    }
+    CHECK_EQ("card prog enable cleared", bus_read16(nds->bus, IO_DMA0_BASE + 10) & DMA_CNT_ENABLE, 0u);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -2643,6 +2831,34 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_secure_area_load(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 15.2] 卡带命令读（B7 命令 + ROMCTRL 激活 + CARD_DATA）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_cartbus_read(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 15.3] DMA 4 通道 + 递减 + VBlank 触发\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_dma_channels(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 15.4] 卡带 DMA：DMA 从 ROM 搬数据到 RAM\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_card_dma(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 15.5] CPU 程序设 DMA + 激活卡带命令，DMA 读 ROM\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_card_program(nds);
         nds_destroy(nds);
     }
 

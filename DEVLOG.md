@@ -11,11 +11,11 @@
 | 窗口 | [`src/window/windowlog.md`](src/window/windowlog.md) | 窗口/渲染器生命周期、缩放、退出事件 |
 | 菜单 | [`src/menu/menulog.md`](src/menu/menulog.md) | 菜单 UI、字体、文本渲染、语言切换 |
 | 整机状态 | [`src/nds/ndslog.md`](src/nds/ndslog.md) | 整机状态容器 `nds_t`（`src/nds/nds.h` / `src/nds/nds.c`） |
-| 卡带装载 | [`src/cart/cartlog.md`](src/cart/cartlog.md) | 读 `.nds` 文件、解析 ROM 头、KEY1 安全区解密（`src/cart/cart.h` / `cart.c` / `key1.c` / `key1.h` / `key1_table.inc`） |
+| 卡带装载 | [`src/cart/cartlog.md`](src/cart/cartlog.md) | 读 `.nds` 文件、解析 ROM 头、KEY1 安全区解密、卡带总线 cartbus（`src/cart/cart.h` / `cart.c` / `key1.c` / `key1.h` / `key1_table.inc` / `cartbus.h/.c`） |
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 | CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9/ARM7 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/arm9.h/.c`、`src/cpu/arm7.h/.c`、`src/cpu/exec.h/.c`） |
 | 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 真 2D PPU：读寄存器出图（`src/ppu/ppu.h/.c` SDL 侧 + 纯渲染 `src/ppu/render.h/.c`） |
-| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA0、IPC FIFO、显示控制 DISPCNT/BGxCNT（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo/disp） |
+| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA 4 通道、IPC FIFO、显示控制 DISPCNT/BGxCNT、卡带总线接线（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo/disp） |
 | 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO/2D PPU） |
 
 ## 按时间索引
@@ -146,3 +146,9 @@
 | 2026-08-15 | 14.4 | 卡带装载/主循环 | 装载时解密安全区后再拷 RAM（`main.c` 接入） | [cart](src/cart/cartlog.md) · [main](src/mainlog.md) |
 | 2026-08-15 | 14.5 | 测试 | 自制含加密安全区 ROM 完整装载；360 项检查 0 失败 | [tests](tests/testlog.md) |
 | 2026-08-15 | 14 完成 | 收尾 | 阶段 14 完成：商业 ROM 装载 + 安全区解密（KEY1/Blowfish） | [cart](src/cart/cartlog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 15.1 | 预习/卡带装载 | 新增 `docs/16-cartridge-protocol.md`：卡带命令协议（ROMCTRL/AUXSPICNT/CARD_COMMAND/CARD_DATA + B7/B8） | [16](docs/16-cartridge-protocol.md) · [cart](src/cart/cartlog.md) |
+| 2026-08-15 | 15.2 | 卡带装载 | 新建 `cartbus`：ROMCTRL/命令解码 + CARD_DATA 数据端口（瞬时传输模型） | [cart](src/cart/cartlog.md) |
+| 2026-08-15 | 15.3 | IO 寄存器 | DMA 补全：4 通道 + 地址控制（增/减/固定）+ repeat + 触发源（立即/VBlank/卡带） | [io](src/io/iolog.md) |
+| 2026-08-15 | 15.4 | 卡带装载/IO/主循环 | io/bus/nds 接线 + `main.c` 挂载卡带 + 卡带 DMA 读路径 + 卡带 IRQ（IF bit19） | [cart](src/cart/cartlog.md) · [io](src/io/iolog.md) · [main](src/mainlog.md) |
+| 2026-08-15 | 15.5 | 测试 | 综合：卡带命令读 + DMA 从 ROM 搬数据到 RAM（单元 + CPU 程序）；393 项检查 0 失败 | [tests](tests/testlog.md) |
+| 2026-08-15 | 15 完成 | 收尾 | 阶段 15 完成：卡带协议 + DMA 补全（流式读卡带，真游戏运行时路径） | [cart](src/cart/cartlog.md) · [io](src/io/iolog.md) · [tests](tests/testlog.md) |

@@ -42,6 +42,9 @@
 /* IPC FIFO RECV 的独占地址（不在 0x0400xxxx IO 区间内，单独映射） */
 #define BUS_IPC_FIFO_RECV 0x04100000u
 
+/* 卡带数据端口 CARD_DATA（不在 0x0400xxxx IO 区间内，单独映射；阶段 15） */
+#define BUS_CARD_DATA 0x04100010u
+
 /* 前向声明：bus 只存指针，IO 寄存器语义在 src/io/ 模块实现（阶段 6） */
 typedef struct io io_t;
 

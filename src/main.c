@@ -238,6 +238,11 @@ int main(int argc, char *argv[])
                 printf("cpu7  : reset PC=%08X\n", hdr.arm7.entry);
             }
         }
+
+        /* 阶段 15：把 ROM 缓冲借给卡带总线，让游戏运行时能经 ROMCTRL/CARD_DATA
+           按需读卡带数据（真游戏不靠一次性装载，而是流式读）。 */
+        io_attach_cart(nds->io, cart->data, cart->size);
+
         fflush(stdout);
 #ifdef _WIN32
         LocalFree(wargv);

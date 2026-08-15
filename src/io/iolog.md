@@ -113,3 +113,24 @@
 - bus 侧配合新增区间（见 buslog 9.2）：调色板 RAM `0x05000000`、OAM `0x07000000`、
   VRAM 固定窗口（副 BG / 主 OBJ / 副 OBJ）。
 - 验收：`test_disp_regs` 11 项全过（主副 DISPCNT/BGxCNT/滚动读写、调色板、VRAM 窗口映射）。
+
+## 15.3 — DMA 补全：4 通道 + 地址控制 + repeat + 触发源
+
+- `src/io/dma.h/.c` 从单通道 `dma_channel_t` 扩为 `dma_t`（`ch[4]`，`IO_DMA_COUNT=4`），
+  SAD/DAD/CNT_L/CNT_H 按 `0x0C` 步进（DMA0 `0x040000B0`、DMA1 `0x040000BC`、DMA2 `0x040000C8`、DMA3 `0x040000D4`）。
+- 新增控制位：源/目的「递增/递减/固定」三态（`DMA_CNT_SRC_DEC`/`DMA_CNT_DST_DEC`、`DMA_CNT_SRC_FIX`/`DMA_CNT_DST_FIX`）、
+  `DMA_CNT_REPEAT`、`DMA_CNT_IRQ`（暂不接线）、`DMA_CNT_MODE_SHIFT` 触发源（立即/VBlank/HBlank/卡带）。
+- `dma_fire(dma, bus, start_mode)` 遍历 4 通道，命中 `start_mode` 且使能者触发；`dma_transfer` 搬完非 repeat 才清使能。
+- `io_set_vblank` 现在会 `dma_fire(VBlank)`；新增 `io_card_dma_check`（卡带就绪时 `dma_fire(Card)`）。
+- **怎么验证**：`test_dma_channels`（多通道独立 + 源递减 + VBlank 触发）全过。
+
+## 15.4 — 卡带总线接线（io/bus/nds + 卡带 IRQ）
+
+- `io_t` 增加 `cartbus_t cartbus` 字段；`io_create` 里 `cartbus_init`，`io_attach_cart` 转发给 `cartbus_attach`。
+- `io_read8/io_write8` 在 `cartbus_is_addr` 命中时转 `cartbus_read8/write8`；新增 `io_card_data_read32/write32`
+  供 bus 的 `BUS_CARD_DATA`（`0x04100010`）整字路由。
+- 卡带命令激活（ROMCTRL bit31 写 1）时：`irq_set_card` 置两核 IF bit19（`IO_IF_CARD_DONE`）+ `io_card_dma_check`
+  触发卡带 DMA。`io_set_vblank` 增 `dma_fire(VBlank)`。
+- `bus.c/h`：加 `BUS_CARD_DATA`，`bus_read32/write32` 命中即转发 `io_card_data_read32/write32`。
+- `main.c`：装载 ROM 并解密安全区后 `io_attach_cart(nds->io, cart->data, cart->size)`，借指针给卡带总线。
+- **怎么验证**：`test_card_dma`（卡带 DMA 8 字搬 RAM + DRQ + 使能自清 + IF bit19）全过。

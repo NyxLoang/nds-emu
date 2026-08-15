@@ -4,7 +4,10 @@
 
 io_t *io_create(void)
 {
-    return calloc(1, sizeof(io_t));
+    io_t *io = calloc(1, sizeof(io_t));
+    if (io != NULL)
+        cartbus_init(&io->cartbus);
+    return io;
 }
 
 void io_destroy(io_t *io)
@@ -40,6 +43,14 @@ static void io_fifo_update_irq_all(io_t *io)
     fifo_update_irq(&io->fifo, 1, &io->irq[1]); /* ARM7 视角 */
 }
 
+/* 卡带就绪时触发等待卡带数据的 DMA（start mode = card）。
+   幂等：dma_fire 只搬已使能且模式匹配的通道，搬完自动清使能。 */
+static void io_card_dma_check(io_t *io)
+{
+    if (cartbus_ready(&io->cartbus))
+        dma_fire(&io->dma, io->bus, DMA_START_CARD);
+}
+
 /* 按地址分发到对应功能文件。未实现的寄存器地址：读 0、写忽略。 */
 uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
 {
@@ -53,6 +64,8 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return key_read8(&io->keypad, addr);
     if (dma_is_addr(addr))
         return dma_read8(&io->dma, addr);
+    if (cartbus_is_addr(addr))
+        return cartbus_read8((cartbus_t *)&io->cartbus, addr);
     if (disp_is_addr(addr))
         return disp_read8(&io->disp, addr);
     return 0;
@@ -82,8 +95,21 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         return;
     }
     if (dma_is_addr(addr)) {
-        /* 写 CNT_H 且使能=1 时在 dma_write8 内同步触发搬运 */
+        /* 写 CNT_H 且使能=1 时在 dma_write8 内同步触发立即搬运；
+           若卡带已就绪且本条是卡带触发源，则在写完后补触发。 */
         dma_write8(&io->dma, addr, val, io->bus);
+        io_card_dma_check(io);
+        return;
+    }
+    if (cartbus_is_addr(addr)) {
+        int was_ready = cartbus_ready(&io->cartbus);
+        cartbus_write8(&io->cartbus, addr, val);
+        /* 命令刚被激活（卡带由 Busy 变 Ready）：置卡带完成中断并触发卡带 DMA */
+        if (!was_ready && cartbus_ready(&io->cartbus)) {
+            irq_set_card(&io->irq[0]);
+            irq_set_card(&io->irq[1]);
+            io_card_dma_check(io);
+        }
         return;
     }
     if (disp_is_addr(addr)) {
@@ -107,9 +133,25 @@ void io_send32(io_t *io, int is_arm7, uint32_t val)
     io_fifo_update_irq_all(io);
 }
 
+uint32_t io_card_data_read32(io_t *io)
+{
+    return cartbus_read32(&io->cartbus);
+}
+
+void io_card_data_write32(io_t *io, uint32_t val)
+{
+    (void)val; /* 读 ROM 用不到写端口；EEPROM 等写路径留待后续阶段 */
+}
+
+void io_attach_cart(io_t *io, const uint8_t *rom, size_t rom_size)
+{
+    cartbus_attach(&io->cartbus, rom, rom_size);
+}
+
 void io_set_vblank(io_t *io)
 {
     irq_set_vblank(&io->irq[0]); /* VBlank 是 ARM9 显示事件 */
+    dma_fire(&io->dma, io->bus, DMA_START_VBLANK); /* 阶段 15：触发 VBlank DMA */
 }
 
 int io_irq_pending(const io_t *io)

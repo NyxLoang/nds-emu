@@ -159,3 +159,10 @@
 - `CMakeLists.txt` 的 `ndscore` 加入 `touch.c`。
 - **怎么验证**：`test_touch_unit`（12/8 位回传 + 未按下 + Hold 复位）、`test_touch_spi_regs`（经总线读写坐标）、
   `test_touch_program`（CPU 程序读出 X/Y）全过。
+
+## 18.2 — 音频寄存器路由（snd 接线）
+
+- `io_t` 增 `snd_t snd` 字段；`io_read8/io_write8` 在 `snd_is_addr`（`0x04000400..0x04000505`）命中时
+  转发到 `snd_read8/snd_write8`（音频寄存器虽在 IO 区，但语义/混音在独立模块 `src/snd/`，详见 sndlog）。
+- `io.h` 引入 `snd/snd.h`；`CMakeLists.txt` 的 `ndscore` 加入 `snd.c`。
+- **怎么验证**：`test_snd_regs`（经总线读写 SOUNDCNT/SOUNDBIAS + 通道寄存器）全过。

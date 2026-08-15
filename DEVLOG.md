@@ -15,8 +15,9 @@
 | 内存总线 | [`src/bus/buslog.md`](src/bus/buslog.md) | Main RAM / VRAM / IO 地址换算与 8/16/32 读写（`src/bus/bus.h` / `src/bus/bus.c`） |
 | CPU | [`src/cpu/cpulog.md`](src/cpu/cpulog.md) | ARM9/ARM7 状态、取指/单步框架、指令执行（`src/cpu/cpu.h/.c` + 功能文件 `src/cpu/arm9.h/.c`、`src/cpu/arm7.h/.c`、`src/cpu/exec.h/.c`） |
 | 显示 | [`src/ppu/ppulog.md`](src/ppu/ppulog.md) | 真 2D PPU：读寄存器出图（`src/ppu/ppu.h/.c` SDL 侧 + 纯渲染 `src/ppu/render.h/.c`） |
-| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA 4 通道、IPC FIFO、显示控制 DISPCNT/BGxCNT、触摸屏 SPI、卡带总线/存档接线（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo/disp/touch） |
-| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO/2D PPU） |
+| IO 寄存器 | [`src/io/iolog.md`](src/io/iolog.md) | 中断 IME/IE/IF（双核两套）、定时器 0-3、KEYINPUT、DMA 4 通道、IPC FIFO、显示控制 DISPCNT/BGxCNT、触摸屏 SPI、音频寄存器路由、卡带总线/存档接线（`src/io/io.h/.c` + 功能文件 irq/timer/key/dma/fifo/disp/touch） |
+| 音频 | [`src/snd/sndlog.md`](src/snd/sndlog.md) | 16 通道音频寄存器 + 混音合成（PCM8/PCM16/IMA-ADPCM/PSG），`snd_render` 输出 32768Hz 立体声（`src/snd/snd.h/.c`） |
+| 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO/2D PPU/触摸/音频） |
 
 ## 按时间索引
 
@@ -161,3 +162,9 @@
 | 2026-08-15 | 17.2 | IO 寄存器 | 新建 `touch`：SPICNT/SPIDATA + TSC 命令状态机（12/8 位回传、X/Y/Z/电池通道）+ io 接线 | [io](src/io/iolog.md) |
 | 2026-08-15 | 17.3 | 测试 | 综合：CPU 程序经 SPICNT/SPIDATA 读出 X/Y 坐标（单元 + 集成）；443 项检查 0 失败 | [tests](tests/testlog.md) |
 | 2026-08-15 | 17 完成 | 收尾 | 阶段 17 完成：触摸 SPI（SPICNT/SPIDATA + TSC 坐标读取，游戏能读触控输入） | [io](src/io/iolog.md) · [tests](tests/testlog.md) |
+| 2026-08-15 | 18.1 | 预习/音频 | 新增 `docs/19-audio.md`：16 通道音频（PCM8/PCM16/IMA-ADPCM/PSG）+ 寄存器/混音 | [19](docs/19-audio.md) · [snd](src/snd/sndlog.md) |
+| 2026-08-15 | 18.2 | 音频 | 新建 `snd`：16 通道寄存器（SOUNDxCNT/SAD/TMR/PNT/LEN + SOUNDCNT/SOUNDBIAS）+ io 路由 | [snd](src/snd/sndlog.md) · [io](src/io/iolog.md) |
+| 2026-08-15 | 18.3 | 音频 | 混音器：PCM8/PCM16/IMA-ADPCM/PSG 合成 + 音量/声相/主音量/偏置 + 单发/循环 | [snd](src/snd/sndlog.md) |
+| 2026-08-15 | 18.4 | 音频/主循环 | SDL 音频回调 + `main.c` 接线 + demo 提示音（~256Hz 方波） | [snd](src/snd/sndlog.md) · [main](src/mainlog.md) |
+| 2026-08-15 | 18.5 | 测试 | 综合：寄存器读写 + 混音样本 + CPU 程序配置通道；467 项检查 0 失败 | [tests](tests/testlog.md) |
+| 2026-08-15 | 18 完成 | 收尾 | 阶段 18 完成：音频（16 通道 PCM/ADPCM/PSG 混音 + SDL 回调发声，游戏能出声音） | [snd](src/snd/sndlog.md) · [tests](tests/testlog.md) |

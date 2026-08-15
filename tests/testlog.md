@@ -366,3 +366,26 @@
   `0xE1A041A4`（数据处理的移位在 bit11-7 立即数 + bit6-5 移位类型）。
 - 阶段 17 收尾全量 **443 项检查 0 失败**。
 
+## 18.2 — 用例：音频寄存器读写（SOUNDCNT/SOUNDBIAS + 16 通道）
+
+- `test_snd_regs`：`bus_write16/read16` SOUNDCNT `0x807F`、SOUNDBIAS `0x0200` 写读回；通道 0 全套
+  CNT/SAD/TMR/PNT/LEN 写读回；通道 1 TMR（16 字节步进）独立；越界地址（主控区上界 `SND_END`）读 0。
+
+## 18.3 — 用例：混音器（PCM8/PCM16/ADPCM/PSG + 静音/主音量/单发停止）
+
+- `test_snd_mix`：SOUNDCNT=0x807F + SOUNDBIAS=0x200 下——
+  - 无通道静音 → 输出 0；PCM8 样本 0x40 → 满偏右声道 out=0x4000；PCM16 样本 0x4000 → 0x4000；
+  - IMA-ADPCM 头 0x20（init=16384）+ 数据 nibble 0 → 0x4000；PSG 方波（duty=0）满幅 → 0x7FC0；
+  - 主音量 0 静音；单发 PCM8（len=1/tmr=1）1 采样后 bit31 自清。
+- **踩坑（测试）**：ADPCM 通道初写 CNT 用了 PCM8 的格式位（0x90），应带格式 ADPCM=2（bit29-30）→
+  `0xD07F007F`；各通道逐个测完要写 CNT=0 停掉，避免下一条混音叠加前通道。
+
+## 18.4 — 用例：CPU 程序配置通道 0 并读回音频寄存器（综合）
+
+- `test_snd_program`：真实 ARM 指令（MOV/ADD/STRB/LDR/STR）——r0=0x04000400，逐字节写 CNT=0x907F007F
+  （STRB 写高字节触发 bit31 启动复位），写 SAD=0x02000000/TMR=0x1000/LEN=4，LDR 读回 r4..r7 → 停机；
+  断言 PC=0x02000050、r4=0x907F007F、r5=0x02000000、r6=0x1000、r7=4。
+- **踩坑（测试）**：32 位常量 `0x907F007F` 非合法立即数，改逐字节 STRB 拼装（触屏测试同法）；
+  `0x02000000`/`0x1000` 可用单条 MOV（`0xE3A02780`/`0xE3A02C10`）。
+- 阶段 18 收尾全量 **467 项检查 0 失败**。
+

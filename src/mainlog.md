@@ -98,3 +98,13 @@
   `save_save_file_w` 写回 `.sav` 并打印 `save: stored <path>`。宽字符路径与 ROM 装载一致（支持中文）。
 - **怎么验证**：`test_save_persist`（.sav 写读回）与 `test_save_program`（CPU 程序读写存档）通过；`ctest` 100% 通过。
 - **结果**：✅ 通过。
+
+## 2026-08-15 · 阶段 18.4 音频 SDL 回调接线
+
+- **做了什么**：`main.c` 增加 `audio_callback`（`snd_render` 合成 32768Hz 立体声 → 交叠成 L/R int16 写 SDL 流）、
+  `audio_init`（`SDL_OpenAudioDevice` S16SYS/2ch + `SDL_PauseAudioDevice(0)` 开播，全局 `g_audio_nds` 让回调读
+  `nds->io->snd` 与 `nds->bus`）、`audio_shutdown`；`setup_audio_demo` 生成 64 采样 PCM8 方波写入 Main RAM 空闲区并
+  配置通道 0 循环播放（tmr=2048 → 约 256Hz），在 `setup_2d_demo` 后调用；退出前 `audio_shutdown`。
+- **简化**：回调线程与主线程访问 snd/bus 未加锁（单机演示可接受，后续补并发保护）。
+- **怎么验证**：构建 + `ctest` 467 项检查 0 失败；运行 `nds-emu.exe` 可听到约 256Hz 提示音。
+- **结果**：✅ 通过。

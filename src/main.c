@@ -14,6 +14,7 @@
 #include "cpu/cpu.h"
 #include "cpu/exec.h"
 #include "io/io.h"
+#include "snd/snd.h"
 #include "ppu/ppu.h"
 #include "cart/cart.h"
 
@@ -21,6 +22,91 @@
    DISPCNT / BGxCNT / tile / tilemap / 调色板 寄存器驱动 2D 引擎出图。
    顶屏（Engine A）：8bpp tile 棋盘格 + 一个 OBJ 白色方块；
    底屏（Engine B）：8bpp tile 竖条纹（副引擎自己的寄存器/调色板/VRAM 窗口）。 */
+
+/* ---- 阶段 18.4：SDL 音频回调，把 snd_render 合成的样本送进声卡 ---- */
+static nds_t *g_audio_nds = NULL;
+static SDL_AudioDeviceID g_audio_dev = 0;
+#define AUDIO_BUF_FRAMES 1024
+static int16_t g_audio_l[AUDIO_BUF_FRAMES];
+static int16_t g_audio_r[AUDIO_BUF_FRAMES];
+
+static void audio_callback(void *userdata, Uint8 *stream, int len)
+{
+    (void)userdata;
+    int frames = len / 4;               /* 2 通道 × 16 位 */
+    if (frames > AUDIO_BUF_FRAMES)
+        frames = AUDIO_BUF_FRAMES;
+
+    nds_t *nds = g_audio_nds;
+    if (nds != NULL) {
+        snd_render(&nds->io->snd, nds->bus, g_audio_l, g_audio_r, frames);
+    } else {
+        for (int i = 0; i < frames; i++) {
+            g_audio_l[i] = 0;
+            g_audio_r[i] = 0;
+        }
+    }
+
+    int16_t *out = (int16_t *)stream;
+    for (int i = 0; i < frames; i++) {
+        out[i * 2 + 0] = g_audio_l[i];
+        out[i * 2 + 1] = g_audio_r[i];
+    }
+}
+
+static int audio_init(nds_t *nds)
+{
+    g_audio_nds = nds;
+    SDL_AudioSpec want, have;
+    SDL_zero(want);
+    want.freq = (int)SND_MIX_RATE;      /* 32768 Hz */
+    want.format = AUDIO_S16SYS;
+    want.channels = 2;
+    want.samples = AUDIO_BUF_FRAMES;
+    want.callback = audio_callback;
+
+    g_audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+    if (g_audio_dev == 0) {
+        fprintf(stderr, "audio: SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
+        return -1;
+    }
+    SDL_PauseAudioDevice(g_audio_dev, 0); /* 开播 */
+    printf("audio: device opened %d Hz, %d ch, format=%d\n",
+           have.freq, have.channels, have.format);
+    fflush(stdout);
+    return 0;
+}
+
+static void audio_shutdown(void)
+{
+    if (g_audio_dev != 0) {
+        SDL_CloseAudioDevice(g_audio_dev);
+        g_audio_dev = 0;
+    }
+    g_audio_nds = NULL;
+}
+
+/* 阶段 18.4：demo 音源——PCM8 方波（64 采样/周期）循环播放，约 256Hz 提示音。
+   写入 Main RAM 空闲区并配置通道 0 循环播放，验证「寄存器→合成→声卡」全链路。 */
+static void setup_audio_demo(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE + 0x2000;
+    const int cycle = 64;
+    for (int i = 0; i < cycle; i++)
+        bus_write8(nds->bus, base + (uint32_t)i, (i < cycle / 2) ? 0x7F : 0x81);
+
+    bus_write16(nds->bus, SND_SOUNDCNT, 0x807F);   /* 主使能 + 主音量 127 */
+    bus_write16(nds->bus, SND_SOUNDBIAS, 0x0200);  /* 中心偏置 0x200 */
+
+    uint32_t ch = SND_BASE;
+    bus_write32(nds->bus, ch + 0x0, 0x8840007Fu);  /* PCM8, loop, pan=64, vol=127, start */
+    bus_write32(nds->bus, ch + 0x4, base);
+    bus_write16(nds->bus, ch + 0x8, 0x0800);       /* tmr=2048 → 约 256Hz */
+    bus_write32(nds->bus, ch + 0xC, cycle / 4);    /* len = 64 字节 = 16 字 */
+
+    printf("18 audio: demo tone configured (PCM8 square wave, ~256 Hz)\n");
+    fflush(stdout);
+}
 
 /* 写 n 个 RGB555 颜色到调色板基址（每项 2 字节） */
 static void write_palette(nds_t *nds, uint32_t base, int n, const uint16_t *colors)
@@ -311,11 +397,15 @@ int main(int argc, char *argv[])
        不再依赖旧的「VRAM 偏移 = 屏幕 framebuffer」约定。 */
     if (nds->cpu != NULL) {
         setup_2d_demo(nds);
+        setup_audio_demo(nds);
 
         /* demo 完毕后恢复 mini.nds 入口，让主循环继续死循环空转 */
         cpu_reset(nds->cpu, 0x02000800);
         fflush(stdout);
     }
+
+    /* 阶段 18.4：打开音频设备，回调线程开始按当前寄存器状态合成输出 */
+    audio_init(nds);
 
     /* 阶段 4.6：默认 2× 缩放启动（菜单下拉可切回 1x/2x） */
     window_set_scale(2);
@@ -443,6 +533,7 @@ int main(int argc, char *argv[])
     }
 
     menu_shutdown();
+    audio_shutdown();
     window_shutdown();
     ppu_destroy(ppu);
     nds_destroy(nds);

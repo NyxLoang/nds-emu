@@ -72,6 +72,8 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return disp_read8(&io->disp, addr);
     if (touch_is_addr(addr))
         return touch_read8((touch_t *)&io->touch, addr);
+    if (snd_is_addr(addr))
+        return snd_read8(&io->snd, addr);
     return 0;
 }
 
@@ -122,6 +124,10 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     }
     if (touch_is_addr(addr)) {
         touch_write8(&io->touch, addr, val);
+        return;
+    }
+    if (snd_is_addr(addr)) {
+        snd_write8(&io->snd, addr, val);
         return;
     }
     /* 其余 IO 地址：写忽略（沿用阶段 2 的桩语义） */

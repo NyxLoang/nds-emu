@@ -17,6 +17,7 @@
 #include "io/io.h"
 #include "io/disp.h"
 #include "io/touch.h"
+#include "snd/snd.h"
 #include "ppu/render.h"
 #include "cart/cart.h"
 #include "cart/key1.h"
@@ -2782,6 +2783,151 @@ static void test_touch_program(nds_t *nds)
     CHECK_EQ("touch prog y", nds->cpu->r[7], 0x2CDu);
 }
 
+/* ---- 阶段 18.2 用例：音频寄存器（SOUNDCNT/SOUNDBIAS + 16 通道）读写 ---- */
+static void test_snd_regs(nds_t *nds)
+{
+    /* 主控寄存器：主使能(bit15) + 主音量 127，bias 0x200 */
+    bus_write16(nds->bus, SND_SOUNDCNT, 0x807F);
+    CHECK_EQ("snd soundcnt", bus_read16(nds->bus, SND_SOUNDCNT), 0x807Fu);
+    bus_write16(nds->bus, SND_SOUNDBIAS, 0x0200);
+    CHECK_EQ("snd soundbias", bus_read16(nds->bus, SND_SOUNDBIAS), 0x0200u);
+
+    /* 通道 0 全套寄存器写读回 */
+    uint32_t b = SND_BASE;
+    bus_write32(nds->bus, b + 0x0, 0x8000007F);   /* CNT: start + vol 127 */
+    bus_write32(nds->bus, b + 0x4, 0x02000000);   /* SAD */
+    bus_write16(nds->bus, b + 0x8, 0x1000);       /* TMR */
+    bus_write16(nds->bus, b + 0xA, 0x0000);       /* PNT */
+    bus_write32(nds->bus, b + 0xC, 0x10);         /* LEN */
+    CHECK_EQ("snd ch0 cnt", bus_read32(nds->bus, b + 0x0), 0x8000007Fu);
+    CHECK_EQ("snd ch0 sad", bus_read32(nds->bus, b + 0x4), 0x02000000u);
+    CHECK_EQ("snd ch0 tmr", bus_read16(nds->bus, b + 0x8), 0x1000u);
+    CHECK_EQ("snd ch0 pnt", bus_read16(nds->bus, b + 0xA), 0x0000u);
+    CHECK_EQ("snd ch0 len", bus_read32(nds->bus, b + 0xC), 0x10u);
+
+    /* 通道 1 独立（16 字节步进） */
+    bus_write16(nds->bus, b + 0x10 + 0x8, 0x2000);
+    CHECK_EQ("snd ch1 tmr", bus_read16(nds->bus, b + 0x10 + 0x8), 0x2000u);
+
+    /* 越界（主控区上界之后，本阶段未实现 capture）读 0 */
+    CHECK_EQ("snd oob", bus_read8(nds->bus, SND_END), 0x00u);
+}
+
+/* ---- 阶段 18.3 用例：混音器（PCM8/PCM16/ADPCM/PSG + 静音 + 主音量 + 单发停止） ---- */
+static void test_snd_mix(nds_t *nds)
+{
+    int16_t L[8], R[8];
+    uint32_t b = SND_BASE;
+
+    /* 主使能 + 主音量 127，bias 0x200 */
+    bus_write16(nds->bus, SND_SOUNDCNT, 0x807F);
+    bus_write16(nds->bus, SND_SOUNDBIAS, 0x0200);
+
+    /* 无通道：静音 → 输出 0 */
+    snd_render(&nds->io->snd, nds->bus, L, R, 8);
+    CHECK_EQ("snd silence L", (uint16_t)L[0], 0x0000u);
+    CHECK_EQ("snd silence R", (uint16_t)R[0], 0x0000u);
+
+    /* PCM8：样本 0x40 → raw=0x100 → 满偏右声道 out=0x4000 */
+    uint32_t sram = BUS_MAIN_RAM_BASE + 0x1000;
+    memset(nds->bus->main_ram + 0x1000, 0, 64);
+    bus_write8(nds->bus, sram, 0x40);
+    bus_write32(nds->bus, b + 0x0, 0x907F007Fu);  /* PCM8, vol127, pan127, oneshot, start */
+    bus_write32(nds->bus, b + 0x4, sram);
+    bus_write16(nds->bus, b + 0x8, 0x1000);
+    bus_write32(nds->bus, b + 0xC, 4);
+    snd_render(&nds->io->snd, nds->bus, L, R, 1);
+    CHECK_EQ("pcm8 L", (uint16_t)L[0], 0x0000u);
+    CHECK_EQ("pcm8 R", (uint16_t)R[0], 0x4000u);
+    bus_write32(nds->bus, b + 0x0, 0);   /* 停掉 ch0，避免污染下一通道 */
+
+    /* PCM16：样本 0x4000 → raw=0x100（通道 1） */
+    uint32_t c1 = b + SND_CH_STRIDE;
+    bus_write16(nds->bus, sram + 0x20, 0x4000);
+    bus_write32(nds->bus, c1 + 0x0, 0xB07F007Fu); /* PCM16, vol127, pan127, oneshot, start */
+    bus_write32(nds->bus, c1 + 0x4, sram + 0x20);
+    bus_write16(nds->bus, c1 + 0x8, 0x1000);
+    bus_write32(nds->bus, c1 + 0xC, 4);
+    snd_render(&nds->io->snd, nds->bus, L, R, 1);
+    CHECK_EQ("pcm16 R", (uint16_t)R[0], 0x4000u);
+    bus_write32(nds->bus, c1 + 0x0, 0);   /* 停掉 ch1 */
+
+    /* IMA-ADPCM：头 0x20（init=16384）+ 数据 nibble 0 → raw=0x100（通道 2） */
+    uint32_t c2 = b + 2 * SND_CH_STRIDE;
+    bus_write32(nds->bus, sram + 0x40, 0x00000020);  /* header: sample=32, index=0 */
+    bus_write32(nds->bus, sram + 0x44, 0x00000000);  /* data: 全 0 nibble */
+    bus_write32(nds->bus, c2 + 0x0, 0xD07F007Fu);    /* ADPCM, vol127, pan127, oneshot, start */
+    bus_write32(nds->bus, c2 + 0x4, sram + 0x40);
+    bus_write16(nds->bus, c2 + 0x8, 0x1000);
+    bus_write32(nds->bus, c2 + 0xC, 2);
+    snd_render(&nds->io->snd, nds->bus, L, R, 1);
+    CHECK_EQ("adpcm R", (uint16_t)R[0], 0x4000u);
+    bus_write32(nds->bus, c2 + 0x0, 0);   /* 停掉 ch2 */
+
+    /* PSG 方波：duty=0 → 首个相位 +0x200 → 满偏 out=0x7FC0（通道 3） */
+    uint32_t c3 = b + 3 * SND_CH_STRIDE;
+    bus_write32(nds->bus, c3 + 0x0, 0xE07F007Fu);   /* PSG, vol127, pan127, start */
+    snd_render(&nds->io->snd, nds->bus, L, R, 1);
+    CHECK_EQ("psg R", (uint16_t)R[0], 0x7FC0u);
+    bus_write32(nds->bus, c3 + 0x0, 0);   /* 停掉 ch3 */
+
+    /* 主音量 0：仍有通道但整体静音 → 输出 0 */
+    bus_write16(nds->bus, SND_SOUNDCNT, 0x8000);
+    snd_render(&nds->io->snd, nds->bus, L, R, 1);
+    CHECK_EQ("snd master0 L", (uint16_t)L[0], 0x0000u);
+    CHECK_EQ("snd master0 R", (uint16_t)R[0], 0x0000u);
+
+    /* 单发停止：PCM8, len=1, tmr=1 → 1 个采样后 pos 越界，bit31 清除（通道 4） */
+    bus_write16(nds->bus, SND_SOUNDCNT, 0x807F);
+    uint32_t c4 = b + 4 * SND_CH_STRIDE;
+    bus_write32(nds->bus, c4 + 0x0, 0x907F007Fu);
+    bus_write32(nds->bus, c4 + 0x4, sram);
+    bus_write16(nds->bus, c4 + 0x8, 0x0001);
+    bus_write32(nds->bus, c4 + 0xC, 1);
+    snd_render(&nds->io->snd, nds->bus, L, R, 1);
+    CHECK_EQ("snd oneshot stop", bus_read32(nds->bus, c4 + 0x0) & 0x80000000u, 0x0u);
+}
+
+/* ---- 阶段 18.4 用例：CPU 程序配置通道 0 并读回寄存器 ---- */
+static void test_snd_program(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+
+    /* 程序：r0=0x04000400（通道0），逐字节写 CNT=0x907F007F，
+       再写 SAD/TMR/LEN，读回 r4..r7，停机。 */
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00404, /* MOV r0, #0x04000000 */
+        /* 0x04 */ 0xE2800B01, /* ADD r0, r0, #0x400      r0=0x04000400 */
+        /* 0x08 */ 0xE3A0207F, /* MOV r2, #0x7F */
+        /* 0x0C */ 0xE5C02000, /* STRB r2, [r0]           CNT[0]=0x7F */
+        /* 0x10 */ 0xE3A02000, /* MOV r2, #0 */
+        /* 0x14 */ 0xE5C02001, /* STRB r2, [r0,#1]        CNT[1]=0x00 */
+        /* 0x18 */ 0xE3A0207F, /* MOV r2, #0x7F */
+        /* 0x1C */ 0xE5C02002, /* STRB r2, [r0,#2]        CNT[2]=0x7F */
+        /* 0x20 */ 0xE3A02090, /* MOV r2, #0x90 */
+        /* 0x24 */ 0xE5C02003, /* STRB r2, [r0,#3]        CNT[3]=0x90 start */
+        /* 0x28 */ 0xE3A02780, /* MOV r2, #0x02000000 */
+        /* 0x2C */ 0xE5802004, /* STR r2, [r0,#4]         SAD */
+        /* 0x30 */ 0xE3A02C10, /* MOV r2, #0x1000 */
+        /* 0x34 */ 0xE5802008, /* STR r2, [r0,#8]         TMR */
+        /* 0x38 */ 0xE3A02004, /* MOV r2, #4 */
+        /* 0x3C */ 0xE580200C, /* STR r2, [r0,#0xC]       LEN */
+        /* 0x40 */ 0xE5904000, /* LDR r4, [r0]            CNT */
+        /* 0x44 */ 0xE5905004, /* LDR r5, [r0,#4]         SAD */
+        /* 0x48 */ 0xE5906008, /* LDR r6, [r0,#8]         TMR(+PNT=0) */
+        /* 0x4C */ 0xE590700C, /* LDR r7, [r0,#0xC]       LEN */
+        /* 0x50 */ 0xEAFFFFFE, /* B self 停机 */
+    };
+
+    run_program(nds, base, prog, sizeof prog / sizeof prog[0],
+                base, base + 0x50, 128);
+    CHECK_EQ("snd prog halt", nds->cpu->r[15], base + 0x50);
+    CHECK_EQ("snd prog cnt", nds->cpu->r[4], 0x907F007Fu);
+    CHECK_EQ("snd prog sad", nds->cpu->r[5], 0x02000000u);
+    CHECK_EQ("snd prog tmr", nds->cpu->r[6], 0x1000u);
+    CHECK_EQ("snd prog len", nds->cpu->r[7], 0x4u);
+}
+
 int main(void)
 {
     printf("=== test_nds: 统一测试入口 ===\n\n");
@@ -3255,6 +3401,27 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_touch_program(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 18.2] 音频寄存器 SOUNDCNT/SOUNDBIAS + 16 通道读写\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_snd_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 18.3] 混音器 PCM8/PCM16/ADPCM/PSG + 静音 + 主音量 + 单发停止\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_snd_mix(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 18.4] CPU 程序配置通道 0 并读回音频寄存器\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_snd_program(nds);
         nds_destroy(nds);
     }
 

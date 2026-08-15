@@ -9,6 +9,7 @@
 #include "fifo.h"
 #include "disp.h"
 #include "touch.h"
+#include "snd/snd.h"
 #include "cart/cartbus.h"
 
 struct bus; /* 前向声明：io 需要 bus 反指，供 DMA 搬运访存 */
@@ -28,6 +29,7 @@ typedef struct io {
     ipc_fifo_t fifo;                  /* IPC FIFO（阶段 8：双核通信） */
     disp_t disp;                      /* 2D 显示控制（阶段 9：DISPCNT/BGxCNT/滚动） */
     touch_t touch;                    /* 触摸屏 SPI（阶段 17：SPICNT/SPIDATA + TSC） */
+    snd_t snd;                        /* 音频（阶段 18：16 通道 + SOUNDCNT/SOUNDBIAS） */
     cartbus_t cartbus;                /* 卡带总线（阶段 15：ROMCTRL/命令/数据端口） */
     struct bus *bus;                  /* bus 反指：DMA 搬运需经 bus 访存 */
 } io_t;

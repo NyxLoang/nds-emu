@@ -69,9 +69,12 @@ add_library(ndscore STATIC
 # PUBLIC：include 路径随链接传递，nds-emu 与 test_nds 都能 #include "nds/..." 等
 target_include_directories(ndscore PUBLIC src)
 
-# 模拟器本体：核心库 + SDL 显示/菜单部分
+# 模拟器本体：核心库 + SDL 显示/菜单/音频宿主/演示/诊断部分
 add_executable(nds-emu
     src/main.c
+    src/audio/audio.c
+    src/demo/demo.c
+    src/runner/runner.c
     src/ppu/ppu.c
     src/window/window.c
     src/menu/menu.c

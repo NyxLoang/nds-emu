@@ -301,3 +301,34 @@ int save_save_file_w(const save_t *s, const wchar_t *path)
     return (n == s->size) ? 0 : -1;
 }
 #endif
+
+/* 由 ROM 路径派生 .sav 存档路径：把扩展名替换为 .sav。返回 malloc 缓冲（调用方 free）。 */
+#ifdef _WIN32
+wchar_t *save_make_path_w(const wchar_t *rom_path)
+{
+    size_t len = wcslen(rom_path);
+    wchar_t *p = (wchar_t *)malloc((len + 5) * sizeof(wchar_t));
+    if (p == NULL)
+        return NULL;
+    wcscpy(p, rom_path);
+    wchar_t *dot = wcsrchr(p, L'.');
+    if (dot != NULL)
+        *dot = L'\0';
+    wcscat(p, L".sav");
+    return p;
+}
+#else
+char *save_make_path(const char *rom_path)
+{
+    size_t len = strlen(rom_path);
+    char *p = (char *)malloc(len + 5);
+    if (p == NULL)
+        return NULL;
+    strcpy(p, rom_path);
+    char *dot = strrchr(p, '.');
+    if (dot != NULL)
+        *dot = '\0';
+    strcat(p, ".sav");
+    return p;
+}
+#endif

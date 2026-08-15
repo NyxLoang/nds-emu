@@ -82,4 +82,11 @@ int save_load_file_w(save_t *s, const wchar_t *path);
 int save_save_file_w(const save_t *s, const wchar_t *path);
 #endif
 
+/* 由 ROM 路径派生 .sav 存档路径（替换扩展名）。返回 malloc 的缓冲，调用方负责 free。 */
+#ifdef _WIN32
+wchar_t *save_make_path_w(const wchar_t *rom_path);
+#else
+char *save_make_path(const char *rom_path);
+#endif
+
 #endif /* NDS_EMU_CART_SAVE_H */

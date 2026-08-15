@@ -12,261 +12,13 @@
 #include "nds/nds.h"
 #include "bus/bus.h"
 #include "cpu/cpu.h"
-#include "cpu/exec.h"
-#include "cpu/thumb.h"
 #include "io/io.h"
-#include "snd/snd.h"
 #include "ppu/ppu.h"
 #include "cart/cart.h"
-
-/* 阶段 9.7：真 2D 演示——不再把 VRAM 当线性 framebuffer，而是用
-   DISPCNT / BGxCNT / tile / tilemap / 调色板 寄存器驱动 2D 引擎出图。
-   顶屏（Engine A）：8bpp tile 棋盘格 + 一个 OBJ 白色方块；
-   底屏（Engine B）：8bpp tile 竖条纹（副引擎自己的寄存器/调色板/VRAM 窗口）。 */
-
-/* ---- 阶段 18.4：SDL 音频回调，把 snd_render 合成的样本送进声卡 ---- */
-static nds_t *g_audio_nds = NULL;
-static SDL_AudioDeviceID g_audio_dev = 0;
-#define AUDIO_BUF_FRAMES 1024
-static int16_t g_audio_l[AUDIO_BUF_FRAMES];
-static int16_t g_audio_r[AUDIO_BUF_FRAMES];
-
-static void audio_callback(void *userdata, Uint8 *stream, int len)
-{
-    (void)userdata;
-    int frames = len / 4;               /* 2 通道 × 16 位 */
-    if (frames > AUDIO_BUF_FRAMES)
-        frames = AUDIO_BUF_FRAMES;
-
-    nds_t *nds = g_audio_nds;
-    if (nds != NULL) {
-        snd_render(&nds->io->snd, nds->bus, g_audio_l, g_audio_r, frames);
-    } else {
-        for (int i = 0; i < frames; i++) {
-            g_audio_l[i] = 0;
-            g_audio_r[i] = 0;
-        }
-    }
-
-    int16_t *out = (int16_t *)stream;
-    for (int i = 0; i < frames; i++) {
-        out[i * 2 + 0] = g_audio_l[i];
-        out[i * 2 + 1] = g_audio_r[i];
-    }
-}
-
-static int audio_init(nds_t *nds)
-{
-    g_audio_nds = nds;
-    SDL_AudioSpec want, have;
-    SDL_zero(want);
-    want.freq = (int)SND_MIX_RATE;      /* 32768 Hz */
-    want.format = AUDIO_S16SYS;
-    want.channels = 2;
-    want.samples = AUDIO_BUF_FRAMES;
-    want.callback = audio_callback;
-
-    g_audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
-    if (g_audio_dev == 0) {
-        fprintf(stderr, "audio: SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
-        return -1;
-    }
-    SDL_PauseAudioDevice(g_audio_dev, 0); /* 开播 */
-    printf("audio: device opened %d Hz, %d ch, format=%d\n",
-           have.freq, have.channels, have.format);
-    fflush(stdout);
-    return 0;
-}
-
-static void audio_shutdown(void)
-{
-    if (g_audio_dev != 0) {
-        SDL_CloseAudioDevice(g_audio_dev);
-        g_audio_dev = 0;
-    }
-    g_audio_nds = NULL;
-}
-
-/* 阶段 18.4：demo 音源——PCM8 方波（64 采样/周期）循环播放，约 256Hz 提示音。
-   写入 Main RAM 空闲区并配置通道 0 循环播放，验证「寄存器→合成→声卡」全链路。 */
-static void setup_audio_demo(nds_t *nds)
-{
-    const uint32_t base = BUS_MAIN_RAM_BASE + 0x2000;
-    const int cycle = 64;
-    for (int i = 0; i < cycle; i++)
-        bus_write8(nds->bus, base + (uint32_t)i, (i < cycle / 2) ? 0x7F : 0x81);
-
-    bus_write16(nds->bus, SND_SOUNDCNT, 0x807F);   /* 主使能 + 主音量 127 */
-    bus_write16(nds->bus, SND_SOUNDBIAS, 0x0200);  /* 中心偏置 0x200 */
-
-    uint32_t ch = SND_BASE;
-    bus_write32(nds->bus, ch + 0x0, 0x8840007Fu);  /* PCM8, loop, pan=64, vol=127, start */
-    bus_write32(nds->bus, ch + 0x4, base);
-    bus_write16(nds->bus, ch + 0x8, 0x0800);       /* tmr=2048 → 约 256Hz */
-    bus_write32(nds->bus, ch + 0xC, cycle / 4);    /* len = 64 字节 = 16 字 */
-
-    printf("18 audio: demo tone configured (PCM8 square wave, ~256 Hz)\n");
-    fflush(stdout);
-}
-
-/* 写 n 个 RGB555 颜色到调色板基址（每项 2 字节） */
-static void write_palette(nds_t *nds, uint32_t base, int n, const uint16_t *colors)
-{
-    for (int i = 0; i < n; i++)
-        bus_write16(nds->bus, base + (uint32_t)i * 2u, colors[i]);
-}
-
-/* 把一个 8×8 的 8bpp tile 填成单一调色板索引（64 字节全 = idx） */
-static void fill_tile_8bpp(nds_t *nds, uint32_t tile_base, int idx)
-{
-    for (int i = 0; i < 64; i++)
-        bus_write8(nds->bus, tile_base + (uint32_t)i, (uint8_t)idx);
-}
-
-static void setup_2d_demo(nds_t *nds)
-{
-    static const uint16_t pal[8] = {
-        0x0000, /* 0 黑（背景/透明露出色） */
-        0x7C00, /* 1 红 */
-        0x03E0, /* 2 绿 */
-        0x001F, /* 3 蓝 */
-        0x7FE0, /* 4 黄 */
-        0x03FF, /* 5 青 */
-        0x7C1F, /* 6 品红 */
-        0x7FFF, /* 7 白 */
-    };
-
-    /* === 顶屏 Engine A：8bpp tile 棋盘格 + OBJ === */
-    /* 主 BG 调色板（0x05000000） */
-    write_palette(nds, BUS_PALETTE_BASE, 8, pal);
-
-    /* 4 个 8bpp tile：tile0=红 tile1=绿 tile2=蓝 tile3=黄，字符块 0（0x06000000） */
-    fill_tile_8bpp(nds, BUS_VRAM_BASE + 0u * 64u, 1);
-    fill_tile_8bpp(nds, BUS_VRAM_BASE + 1u * 64u, 2);
-    fill_tile_8bpp(nds, BUS_VRAM_BASE + 2u * 64u, 3);
-    fill_tile_8bpp(nds, BUS_VRAM_BASE + 3u * 64u, 4);
-
-    /* tilemap（屏幕块 1 → 0x06000800）：32×32 棋盘格，用 (tx+ty)&3 选 tile */
-    for (int ty = 0; ty < 32; ty++)
-        for (int tx = 0; tx < 32; tx++)
-            bus_write16(nds->bus, BUS_VRAM_BASE + 0x800u + (uint32_t)(ty * 32 + tx) * 2u,
-                        (uint16_t)((tx + ty) & 3));
-
-    /* BG0CNT：256 色(bit7) + 屏幕块 1(bit8-12 单位 2KB) */
-    bus_write16(nds->bus, IO_BGCNT_BASE,
-                BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT));
-
-    /* OBJ：一个白色 8×8 方块（16 色），放在 (120,80) */
-    bus_write16(nds->bus, BUS_PALETTE_BASE + 0x200u + 2u, 0x7FFFu); /* OBJ 调色板[1]=白 */
-    for (int r = 0; r < 8; r++) {   /* OBJ tile0（4bpp）：全部像素 = 索引1 */
-        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 0u, 0xFFu);
-        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 1u, 0x00u);
-        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 2u, 0x00u);
-        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 3u, 0x00u);
-    }
-    for (int n = 0; n < 128; n++)   /* 全 0 的 OAM = 原点可见 sprite，先统一禁用 */
-        bus_write16(nds->bus, BUS_OAM_BASE + 8u * n, 0x0200u);
-    bus_write16(nds->bus, BUS_OAM_BASE + 0u, 80u);   /* 属性0：Y=80 方形 16 色 */
-    bus_write16(nds->bus, BUS_OAM_BASE + 2u, 120u);  /* 属性1：X=120 尺寸 8×8 */
-    bus_write16(nds->bus, BUS_OAM_BASE + 4u, 0u);    /* 属性2：tile0 调色板0 */
-
-    /* DISPCNT（主）：mode 0 + BG0 + OBJ + 显示模式 1（正常） */
-    bus_write32(nds->bus, IO_DISPCNT,
-                DISPCNT_BG0 | DISPCNT_OBJ | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
-
-    /* === 底屏 Engine B：8bpp tile 竖条纹（青/品红），副引擎独立资源 === */
-    static const uint16_t pal_sub[8] = {
-        0x0000, 0x03FF, 0x7C1F, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-    };
-    write_palette(nds, BUS_PALETTE_BASE + 0x400u, 8, pal_sub); /* 副 BG 调色板 */
-
-    /* 副 BG 图形窗口 0x06200000（物理 vram[0x40000]）：tile0=青 tile1=品红 */
-    fill_tile_8bpp(nds, BUS_VRAM_SUB_BG_BASE + 0u * 64u, 1);
-    fill_tile_8bpp(nds, BUS_VRAM_SUB_BG_BASE + 1u * 64u, 2);
-
-    /* 副 tilemap（屏幕块 1 → 0x06200800）：按列奇偶选 tile，形成竖条纹 */
-    for (int ty = 0; ty < 32; ty++)
-        for (int tx = 0; tx < 32; tx++)
-            bus_write16(nds->bus, BUS_VRAM_SUB_BG_BASE + 0x800u + (uint32_t)(ty * 32 + tx) * 2u,
-                        (uint16_t)(tx & 1));
-
-    /* 副 BG0CNT：256 色 + 屏幕块 1 */
-    bus_write16(nds->bus, IO_BGCNT_SUB_BASE,
-                BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT));
-
-    /* DISPCNT_SUB：mode 0 + BG0 + 显示模式 1 */
-    bus_write32(nds->bus, IO_DISPCNT_SUB,
-                DISPCNT_BG0 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
-
-    printf("9 display: true 2D demo configured (top=tiled checkerboard+OBJ, bottom=stripes)\n");
-    fflush(stdout);
-}
-
-/* 阶段 16：由 ROM 路径派生 .sav 存档路径（替换扩展名为 .sav）。 */
-#ifdef _WIN32
-static wchar_t *make_save_path_w(const wchar_t *rom_path)
-{
-    size_t len = wcslen(rom_path);
-    wchar_t *p = (wchar_t *)malloc((len + 5) * sizeof(wchar_t));
-    if (p == NULL)
-        return NULL;
-    wcscpy(p, rom_path);
-    wchar_t *dot = wcsrchr(p, L'.');
-    if (dot != NULL)
-        *dot = L'\0';
-    wcscat(p, L".sav");
-    return p;
-}
-#else
-static char *make_save_path(const char *rom_path)
-{
-    size_t len = strlen(rom_path);
-    char *p = (char *)malloc(len + 5);
-    if (p == NULL)
-        return NULL;
-    strcpy(p, rom_path);
-    char *dot = strrchr(p, '.');
-    if (dot != NULL)
-        *dot = '\0';
-    strcat(p, ".sav");
-    return p;
-}
-#endif
-
-/* 阶段 21 bring-up：headless 跑 N 步，只打印诊断事件与周期性进度，最后打印两核状态。
-   用于在不开窗口/音频的情况下定位 ROM 的第一个卡点。 */
-static void run_headless(nds_t *nds, uint64_t steps, int trace)
-{
-    bus_set_diag(nds->bus, 1);      /* 只打异常事件：未知 SWI/未实现指令/未知 IO */
-    exec_set_trace(trace);          /* trace=1 时逐条打印指令，用于追前几十步 */
-    thumb_set_trace(trace);
-
-    printf("headless: running %llu steps (ARM9:ARM7 = 2:1)\n",
-           (unsigned long long)steps);
-    fflush(stdout);
-
-    for (uint64_t i = 0; i < steps; i++) {
-        if (i % 3 == 2)
-            cpu_step(nds->cpu7);
-        else
-            cpu_step(nds->cpu);
-
-        /* 近似一帧（约 100 万步）触发一次 VBlank，模拟显示硬件，让等 VBlank 的游戏能继续 */
-        if ((i & 0xFFFFFu) == 0xFFFFFu)
-            io_set_vblank(nds->io);
-        /* 每 100 万步打一次进度 */
-        if ((i & 0xFFFFFu) == 0xFFFFFu)
-            printf("headless: step=%llu ARM9 PC=%08X cyc=%llu | ARM7 PC=%08X cyc=%llu\n",
-                   (unsigned long long)(i + 1),
-                   nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
-                   nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles);
-    }
-
-    printf("headless: done. ARM9 PC=%08X cyc=%llu | ARM7 PC=%08X cyc=%llu\n",
-           nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
-           nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles);
-    fflush(stdout);
-}
+#include "cart/save.h"
+#include "audio/audio.h"
+#include "demo/demo.h"
+#include "runner/runner.h"
 
 int main(int argc, char *argv[])
 {
@@ -413,14 +165,14 @@ int main(int argc, char *argv[])
            存档类型自动检测（按游戏芯片 ID/访问模式）留待后续阶段补。 */
         io_attach_save(nds->io, SAVE_EEPROM_8K);
 #ifdef _WIN32
-        save_path = make_save_path_w(rom_path);
+        save_path = save_make_path_w(rom_path);
         if (save_path != NULL) {
             save_load_file_w(io_get_save(nds->io), save_path);
             printf("save : loaded %ls (%zu bytes)\n", save_path,
                    io_get_save(nds->io)->size);
         }
 #else
-        save_path = make_save_path(rom_path);
+        save_path = save_make_path(rom_path);
         if (save_path != NULL) {
             save_load_file(io_get_save(nds->io), save_path);
             printf("save : loaded %s (%zu bytes)\n", save_path,
@@ -436,7 +188,7 @@ int main(int argc, char *argv[])
 
     /* 阶段 21 bring-up：headless 模式下跑完 N 步即退出，不开窗口/音频 */
     if (headless_steps > 0) {
-        run_headless(nds, (uint64_t)headless_steps, headless_trace);
+        runner_headless(nds, (uint64_t)headless_steps, headless_trace);
         if (save_path != NULL)
             free(save_path);
         cart_free(cart);
@@ -472,8 +224,7 @@ int main(int argc, char *argv[])
 
     /* 阶段 9.7：真 2D 演示——只在未装载 ROM 时跑；有 ROM 时让 ROM 自己驱动画面。 */
     if (rom_path == NULL && nds->cpu != NULL) {
-        setup_2d_demo(nds);
-        setup_audio_demo(nds);
+        demo_setup(nds);
 
         /* demo 完毕后恢复 mini.nds 入口，让主循环继续死循环空转 */
         cpu_reset(nds->cpu, 0x02000800);

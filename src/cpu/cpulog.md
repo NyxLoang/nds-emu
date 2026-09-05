@@ -254,4 +254,20 @@
   SWI #0x09 Div → B . 保活；验证 VRAM 像素 0x001F + Div 商/余数/|商|。
 - 阶段 13 完成：336 项检查 0 失败。
 
+## 2026-09-05 · 21-B4 — ARM BX 奇地址切 Thumb
+
+- **做了什么**：`exec.c` 的 ARM BX（0x012FFF1x）原来只写 `r15 = r[rm]`，不更新 T 位。
+  真 ROM ARM7 `BX r12 -> 0x038043C9` 后仍按 ARM 模式把 Thumb 区数据当 32 位指令译码，
+  最终 `B 0x049E07B5` 跑进零区。改为：目标 LSB=1 置 `CPSR_T`、LSB=0 清 `CPSR_T`，
+  PC 写 `r[rm] & ~1`，与 Thumb 侧 BX 行为一致；补中文注释说明 ARM↔Thumb 切换规则。
+- **怎么验证**：新增 `test_arm_bx_thumb`——Thumb 区放 `MOVS r1,#5` + 自循环，ARM 驱动
+  载入 0x02001000、ORR #1 后 BX；断言 T=1、r1=5、PC=0x02001002。全量
+  **555 项检查 0 失败**。
+- **真 ROM 效果**：ARM7 不再走“把数据当 ARM 码”的旧跑飞路径（旧终点 0x0626D1xx 消失），
+  能正确进入 0x038043C8 Thumb 区；但随后在 Thumb 段内跳到 IO 区 0x04000182 附近，
+  headless 出现约 65k 行 `io: read unknown addr=0400xxxx (arm7=1)` 逐字节刷屏，
+  20M 步终点 ARM7 PC=0x0178CBD8。此二次跑飞根因留待 B5：需要先补 Thumb 逐条 trace
+  才能定位具体跳转来源。
+- **结果**：✅ 用户验收通过（2026-09-05）。
+
 

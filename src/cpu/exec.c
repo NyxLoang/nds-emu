@@ -505,7 +505,10 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
             printf("cpu: PC=%08X insn=%08X BX r%u -> %08X cycles=%llu\n",
                    cpu->r[15], insn, rm, cpu->r[rm],
                    (unsigned long long)cpu->cycles);
-        cpu->r[15] = cpu->r[rm];
+        /* ARM BX：目标 LSB=1 → 切到 Thumb（置 T），LSB=0 → 回 ARM（清 T）；
+           PC 写目标并清最低位（Thumb 半字对齐、ARM 字对齐都落在同一条基线上）。 */
+        cpu->cpsr = (cpu->r[rm] & 1u) ? (cpu->cpsr | CPSR_T) : (cpu->cpsr & ~CPSR_T);
+        cpu->r[15] = cpu->r[rm] & ~1u;
         return 1;
     }
 

@@ -895,6 +895,40 @@ static void test_main_ram_mirror(nds_t *nds)
              bus_read8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + BUS_MAIN_RAM_SIZE), 0x00u);
 }
 
+/* ---- 阶段 21-B4 用例：ARM BX 奇地址应切 Thumb ---- */
+static void test_arm_bx_thumb(nds_t *nds)
+{
+    const uint32_t arm_base = BUS_MAIN_RAM_BASE;            /* ARM 驱动代码 */
+    const uint32_t thumb_base = BUS_MAIN_RAM_BASE + 0x1000; /* Thumb 目标区 */
+
+    /* Thumb：MOVS r1,#5；B self（停在 thumb_base+2） */
+    bus_write16(nds->bus, thumb_base, 0x2105u);
+    bus_write16(nds->bus, thumb_base + 2, 0xE7FEu);
+
+    /* ARM：PC 相对载入 thumb_base → r0|=1 → BX r0。
+       LDR 偏移按 PC+8 基准：0x02000000 + 8 + 8 = 字面量 0x02000010。 */
+    static const uint32_t prog[] = {
+        0xE59F0008u, /* LDR r0, [pc, #8]  r0 = 0x02001000 */
+        0xE3800001u, /* ORR r0, r0, #1    r0 = 0x02001001（LSB=1） */
+        0xE12FFF10u, /* BX r0             应切 Thumb */
+        0x00000000u, /* 占位 */
+        0x02001000u, /* 字面量：thumb_base */
+    };
+
+    for (size_t i = 0; i < sizeof prog / sizeof prog[0]; i++)
+        bus_write32(nds->bus, arm_base + 4 * i, prog[i]);
+    cpu_reset(nds->cpu, arm_base);
+    exec_set_trace(0);
+    int steps = 0;
+    while (steps++ < 12 && nds->cpu->r[15] != thumb_base + 2)
+        cpu_step(nds->cpu);
+    exec_set_trace(1);
+
+    CHECK_EQ("arm bx odd T=1", nds->cpu->cpsr & CPSR_T, CPSR_T);
+    CHECK_EQ("arm bx thumb r1", nds->cpu->r[1], 5u);
+    CHECK_EQ("arm bx thumb PC", nds->cpu->r[15], thumb_base + 2);
+}
+
 /* ---- 8.4 用例：交错调度 2:1 ---- */
 static void test_interleave(nds_t *nds)
 {
@@ -3552,6 +3586,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_main_ram_mirror(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B4] ARM BX 奇地址切 Thumb\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_arm_bx_thumb(nds);
         nds_destroy(nds);
     }
     printf("\n[case 8.4] 交错调度 2:1\n");

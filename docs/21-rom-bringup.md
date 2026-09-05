@@ -59,7 +59,7 @@ r15 读值 = (当前 PC & ~3) + 8
 |---|-----|------|
 | G1 | ARM r15 读缺 +8，PC 相对字面量池读错 | ✅ 已修 |
 | G2 | Shared WRAM（0x03000000-0x03007FFF）及镜像（0x037F8000 一带）未映射 | ✅ 已修（21-B1，2026-09-05） |
-| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2/B3 已修：IPCSYNC 寄存器 + Main RAM 镜像；ARM9 已能在主存代码区等待，ARM7 仍卡 BX→Thumb，见 B4） |
+| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2/B3/B4 已修：IPCSYNC + Main RAM 镜像 + ARM BX 切 Thumb；ARM9 已能停在主存代码区等待，ARM7 进入 Thumb 后二次跑飞，见 B5） |
 | G4 | 修完 G2/G3 后继续暴露的更多 gap（SWI/PPU/中断/内存等） | ⏳ Phase B 迭代 |
 
 ---
@@ -118,6 +118,15 @@ cpu: PC=020008F8 insn=E8BD8010 LDM r13!, list=8010 n=2 cycles=126634
 逐 4 漂移、终点 0x132612F8）。ARM7 仍按原轨迹跑飞（BX 奇地址未切 Thumb，B4），
 ARM9 的循环疑似在等 ARM7 握手结果——B4 修完 ARM7 后重跑即可验证。
 
+### 21-B4 之后（2026-09-05）：ARM7 进入 Thumb，但段内二次跑飞
+
+ARM BX 切 Thumb 后，ARM7 能正确落到 0x038043C8（旧路径里它把这里当 ARM 数据译码、
+跳到 0x049E07B5 的跑飞消失）。但 headless 随即出现约 65k 行
+`io: read unknown addr=0400xxxx (arm7=1)` 顺序刷屏——ARM7 从 IO 区 0x04000182 附近
+开始逐字节读取/取指漂移，20M 步终点为 0x0178CBD8（仍是跑飞，只是换了一条路径）。
+普通 Thumb 指令当前不打印 trace，无法直接看到跳进 IO 区前的最后几条指令，
+因此 B5 第一步补 Thumb 逐条 trace，再定位根因。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误
@@ -148,8 +157,9 @@ Phase B 的验收口径：**hard_title**——FFXII 能进入标题画面。
 | B1 | 映射 Shared WRAM：0x03000000 起 32KB + 0x037F8000 镜像（✅ 已提交 bf8899b） | 单测 + headless 重跑，确认 ARM7 不再在镜像区逐 0 漂移 |
 | B2 | 实现 IPCSYNC（0x04000180/81）：双核 out 交叉读写、bit13 → 对端 IF16、bit14 门控 | 单测 544 项 0 失败；headless 不再报 IPCSYNC 未知 IO |
 | B3 | 映射 Main RAM 无缓存镜像 0x02400000-0x027FFFFF（FFXII 栈放 0x027E0000 附近） | 单测 552 项 0 失败；headless：ARM9 稳定在 0x0200B9xx 主存代码区，不再弹 PC=0 |
-| B4 | 修 ARM BX 奇地址未切 Thumb（ARM7 0x038043C9 入口） | 单测（ARM BX 奇地址 T=1）+ headless，ARM7 进 Thumb 区不跑飞 |
-| B5… | 继续按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
+| B4 | 修 ARM BX 奇地址未切 Thumb（ARM7 0x038043C9 入口） | 单测 555 项 0 失败；ARM7 不再按 ARM 误译 Thumb 区，旧 0x0626D1xx 终点消失 |
+| B5 | 补 Thumb 逐条 trace，定位 ARM7 从 Thumb 区跳进 IO 区 0x04000182 的根因并修复 | Thumb trace + headless，ARM7 不再刷 IO 区、能继续初始化 |
+| B6… | 继续按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
 
 > 后续步骤只有在真机现象出现后才能精确拆解，这也是本项目“一次一个微步”的原因——
 > bring-up 阶段不预先猜十步，而是一步一个证据地往前走。

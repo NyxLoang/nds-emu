@@ -447,6 +447,14 @@
 - 全量 **544 项检查 0 失败**；真 ROM headless 不再报 `0x04000180/81` 未知 IO。
 - **结果**：✅ 用户验收通过（2026-09-05）。
 
+## 2026-09-05 · 21-B4 — ARM BX 奇地址切 Thumb 用例
+
+- `test_nds.c` 新增 `[case 21-B4]`：`test_arm_bx_thumb`（Thumb 区 MOVS r1,#5 +
+  自循环，ARM 侧 ORR #1 后 BX），断言 T=1、r1=5、PC 进 Thumb 区，共 3 项检查。
+- 全量 **555 项检查 0 失败**；真 ROM：ARM7 不再按 ARM 误译 0x038043C9，旧 0x0626D1xx
+  漂移终点消失，进入 Thumb 区后的二次跑飞另记 B5。
+- **结果**：✅ 用户验收通过（2026-09-05）。
+
 ## 2026-09-05 · 21-B3 — Main RAM 无缓存镜像用例
 
 - `test_nds.c` 新增 `[case 21-B3]`：`test_main_ram_mirror`（双向别名、FFXII 栈区

@@ -186,4 +186,5 @@
 | 2026-09-05 | 21-B1 | 内存总线 | Shared WRAM 映射：0x03000000 主区 + 0x037F8000 镜像区（32KB 同一物理内存）；ARM7 不再卡 0x037F8xxx | [bus](src/bus/buslog.md) |
 | 2026-09-05 | 21-B2 | IO/IPC | IPCSYNC（0x04000180/81）同步寄存器：双核 out 交叉读写 + bit13 请求→对端 IF16 + bit14 门控；真 ROM 不再报未知 IO（544 项检查 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) |
 | 2026-09-05 | 21-B3 | 内存总线 | Main RAM 无缓存镜像 0x02400000-0x027FFFFF（4MB 同一物理别名）；真 ROM ARM9 不再弹 PC=0，稳定停在主存代码区（552 项检查 0 失败） | [bus](src/bus/buslog.md) · [tests](tests/testlog.md) |
+| 2026-09-05 | 21-B4 | CPU | ARM BX 奇地址切换 Thumb（T 位按目标 LSB 置/清 + PC 清 LSB）；真 ROM ARM7 不再按 ARM 误译 Thumb 区（555 项检查 0 失败） | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
 | 2026-09-05 | — | 工程管理 | 程序入口自动切控制台 UTF-8（`SetConsoleOutputCP(CP_UTF8)`），修复中文日志乱码 | [main](src/mainlog.md) · [tests](tests/testlog.md) |

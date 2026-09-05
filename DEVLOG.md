@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9r（分析） | 工程 | trace 定位 IPC 死锁：ARM9 0x0200B8C8 等 IPCSYNC 回应、ARM7 0x03807524 等 FIFO，请求处理器 0x037FEB24 未被触发（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9q | IO/测试 | DMA 控制器按核拆成两套（ARM9/ARM7 各 4 通道），VBlank/卡带触发双核各自点火（718 项 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) |
 | 2026-09-06 | 21-B9p | IO/测试 | DMA 完成中断接线：搬完且 CNT bit14 置位时置 IF bit8-11（718 项 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) |
 | 2026-09-06 | 21-B9o | IO/测试 | 定时器按核拆成两套（ARM9/ARM7 各 4 个，真机 8 个）；中断分流不再用共享定时器（716 项 0 失败） | [io](src/io/iolog.md) · [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |

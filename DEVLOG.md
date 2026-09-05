@@ -191,4 +191,5 @@
 | 2026-09-05 | 21-B6 | 内存总线 | Main RAM 无缓存镜像仅 ARM9 可见（ARM7 写访问落空）；修复 ARM7 块拷贝覆盖 ARM9 栈导致的弹 PC=0xE1C010B0（559 项检查 0 失败） | [bus](src/bus/buslog.md) · [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
 | 2026-09-05 | 21-B7 | IO 寄存器/内存总线 | EXMEMCNT/WRAMCNT 内存控制寄存器 + Shared WRAM 按 WRAMCNT 双核切分；真 ROM 3 条未知 IO 消除（587 项检查 0 失败），ARM7 轮询卡点排入 B8 | [io](src/io/iolog.md) · [bus](src/bus/buslog.md) · [tests](tests/testlog.md) |
 | 2026-09-05 | 21-B8 | 内存总线/CPU/主循环 | 解码 0x027FFxxx 信箱约定；根因是 ARM9 DTCM/ITCM 未实现——新增 CP15 DTCM/固定 ITCM、镜像恢复双核别名、直接启动卡带表（594 项检查 0 失败），真 ROM 越过旧轮询进入 boot 初始化 | [bus](src/bus/buslog.md) · [cpu](src/cpu/cpulog.md) · [main](src/mainlog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-05 | 21-B9 | BIOS | SWI 0x0E GetCRC16（CRC-16/IBM）：新增 `bios_crc16.*`，ARM/Thumb/ARM7 单测（600 项检查 0 失败）；真 ROM unknown SWI 消失，ARM7 前进到 0x037FC89C | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | — | 工程管理 | 程序入口自动切控制台 UTF-8（`SetConsoleOutputCP(CP_UTF8)`），修复中文日志乱码 | [main](src/mainlog.md) · [tests](tests/testlog.md) |

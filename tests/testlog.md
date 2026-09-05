@@ -496,3 +496,12 @@
 - 21-B3 镜像用例同步修正：ARM7 写 0x024-0x027 别名现在落 Main RAM（melonDS 口径）。
 - 全量 **594 项检查 0 失败**；真 ROM headless 越过旧信箱死等，下一卡点排入 B9。
 
+## 2026-09-05 · 21-B9 — BIOS SWI 0x0E GetCRC16 用例
+
+- `test_nds.c` 新增 `[case 21-B9a]`：`test_bios_crc16`——
+  Main RAM 写入 ASCII `"123456789"`；r0=0xFFFF、r1=数据地址、r2=9，ARM 态 SWI 0x0E
+  得 0x4B37 且 PC 前进；r2=0 返回初值 0xFFFF；Thumb 态同参同结果；ARM7 核同样得
+  0x4B37。共 6 项检查。
+- 全量 **600 项检查 0 失败**；真 ROM headless：`unknown SWI 0x0E` 消失，
+  ARM7 终点前进到 0x037FC89C。
+

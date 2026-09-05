@@ -203,6 +203,34 @@ ARM9 等 `0x027FFF88/8C` 事件位）都是**自研信箱协议的正常握手**
 HLE 实现。下一卡点是 **ARM9 高向量 0xFFFF0000 的 BIOS/IRQ 分发 + ARM7 SWI 0x0E**，
 排入 B9。
 
+### 21-B9a 之后（2026-09-05）：GetCRC16 落地，ARM7 越过 SWI 0x0E
+
+**做了什么**：
+
+- 新增 `src/bios/bios_crc16.h/.c` 并登记 SWI 0x0E：`r0=CRC 初值`、`r1=数据地址`、
+  `r2=字节数`，返回 `r0=CRC16`。算法为标准 CRC-16/IBM：初值由调用方给出（FFXII
+  用 0xFFFF），反射多项式 0xA001 逐位右移，末尾不反转，与 GBATEK 伪代码/libnds
+  `swiCRC16` 的用法一致。
+- 测试新增 `[case 21-B9a]`：ASCII `"123456789"` + 初值 0xFFFF → 0x4B37；覆盖
+  ARM、Thumb、ARM7 三条路径与长度 0 返回初值。全量 **600 项检查 0 失败**。
+
+重跑 FFXII `--headless 2000000`：
+
+```text
+headless: step=1048576 ARM9 PC=02009EC0 cyc=699051 | ARM7 PC=037FC89C cyc=349525
+headless: done. ARM9 PC=0025B6C0 cyc=1333334 | ARM7 PC=037FC898 cyc=666666
+```
+
+1. `bios: unknown SWI 0x0E` 消失，ARM7 首次 CRC 调用点通过并进入 0x037FC8xx
+   的后续 boot 代码（旧终点 0x000366A4 不再出现）。
+2. ARM9 仍停在 0x02009EC0 附近被 IRQ 打断后进 0xFFFF0000 高向量区读 0 跑飞
+   （终点 0x0025B6C0），需要查高向量跳板/中断时机。
+3. 日志露出大量 ARM9 未知 IO：0x04000304/305、0x04000240-249、
+   0x04000004/05、0x0400004C-5F、0x04001004-6F，另有 ARM7 读 0x04000300/301；
+   这些是下一 gap 的素材（PowerControl/PostFlag/中断控制/显示控制等）。
+
+结论：B9a 后下一卡点排为 **ARM9 BIOS/IRQ 高向量 + 这批未知 IO 桩**，按 gap 继续。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误
@@ -238,7 +266,11 @@ Phase B 的验收口径：**hard_title**——FFXII 能进入标题画面。
 | B6 | ARM9 栈 LR 污染定位（当时以“镜像仅 ARM9 可见”临时修复；B8 修正为 ARM9 DTCM 未实现） | LDM trace + 写监视：ARM9 过 0x0200B9B4 返回点、不再弹 0xE1C010B0（559 项 0 失败） |
 | B7 | ✅ 排查 ARM9 新未知 IO（0x04000204/205、0x04000247）并实现 EXMEMCNT/WRAMCNT + Shared WRAM 双核切分 | 587 项单测 0 失败；headless 3 条未知 IO 消除 |
 | B8 | ✅ 解码 ARM7 0x027FFFF0 命令口与 ARM9 0x027FFF8C 事件位约定；实现 ARM9 DTCM/ITCM、镜像双核别名、direct-boot 表 | 594 项单测 0 失败；headless 越过旧轮询，ARM9 到 0x02009EC0、ARM7 到 SWI 0x0E |
-| B9… | ARM9 BIOS/IRQ 高向量 + ARM7 SWI 0x0E（GetCRC16）等新 gap | 每个 gap 一次提交 |
+| B9a | ✅ SWI 0x0E GetCRC16（CRC-16/IBM）：新增 `src/bios/bios_crc16.*`，ARM/Thumb/ARM7 单测 | 600 项单测 0 失败；headless 不再报 unknown SWI 0x0E，ARM7 进 0x037FC89C |
+| B9… | ARM9 BIOS/IRQ 高向量 + 批次未知 IO 桩（GetCRC16 已完成） | 每个 gap 一次提交 |
+
+> B9 后续实际按 gap 拆成小步：B9a（本表，GetCRC16）已完成，剩余 ARM9 BIOS/IRQ
+> 高向量与未知 IO 桩继续逐 gap 提交。
 
 > 后续步骤只有在真机现象出现后才能精确拆解，这也是本项目“一次一个微步”的原因——
 > bring-up 阶段不预先猜十步，而是一步一个证据地往前走。

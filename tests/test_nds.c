@@ -1049,6 +1049,60 @@ static void test_arm9_tcm(nds_t *nds)
     bus_set_arm9_dtcm(nds->bus, 0, 0, 0); /* 恢复禁用，避免污染后续用例 */
 }
 
+/* ---- 21-B9a: BIOS SWI 0x0E GetCRC16 (CRC-16/IBM) ---- */
+static void test_bios_crc16(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t data = 0x02001000u;
+    arm_cpu_t *cpu = nds->cpu;
+    static const uint32_t prog_arm[] = {
+        /* 0x00 */ 0xEF0E0000, /* SWI 0x0E (GetCRC16) */
+        /* 0x04 */ 0xEAFFFFFE, /* B self */
+    };
+    static const uint16_t prog_thumb[] = {
+        0xDF0E, /* SWI 0x0E (GetCRC16) */
+        0xE7FE, /* B self */
+    };
+
+    /* ASCII "123456789" 写入 Main RAM 供 SWI 读取 */
+    for (int i = 0; i < 9; i++)
+        bus_write8(nds->bus, data + (uint32_t)i, (uint8_t)('1' + i));
+
+    /* ARM9/ARM 态：r0=0xFFFF 初值、r1=数据地址、r2=9 字节
+       CRC-16/IBM("123456789", init=0xFFFF) = 0x4B37 */
+    cpu->r[0] = 0xFFFFu;
+    cpu->r[1] = data;
+    cpu->r[2] = 9u;
+    run_program(nds, base, prog_arm, 2, base, base + 4, 8);
+    CHECK_EQ("crc16 arm result", cpu->r[0], 0x4B37u);
+    CHECK_EQ("crc16 arm pc", cpu->r[15], base + 4u);
+
+    /* 长度 0 时保持初值不变 */
+    cpu->r[0] = 0xFFFFu;
+    cpu->r[1] = data;
+    cpu->r[2] = 0u;
+    run_program(nds, base, prog_arm, 2, base, base + 4, 8);
+    CHECK_EQ("crc16 arm len0", cpu->r[0], 0xFFFFu);
+
+    /* Thumb 态同一组参数应得到同一结果 */
+    cpu->r[0] = 0xFFFFu;
+    cpu->r[1] = data;
+    cpu->r[2] = 9u;
+    thumb_write(nds, base + 0x200, prog_thumb, 2);
+    thumb_start(nds, base + 0x200);
+    cpu_step(cpu);
+    CHECK_EQ("crc16 thumb result", cpu->r[0], 0x4B37u);
+    CHECK_EQ("crc16 thumb pc", cpu->r[15], base + 0x202u);
+    thumb_stop(nds);
+
+    /* ARM7 核（真机首次调用点就在 ARM7）也应能执行同一 SWI */
+    nds->cpu7->r[0] = 0xFFFFu;
+    nds->cpu7->r[1] = data;
+    nds->cpu7->r[2] = 9u;
+    run_cpu7(nds, base + 0x400, prog_arm, 2, base + 0x400, base + 0x404, 8);
+    CHECK_EQ("crc16 cpu7 result", nds->cpu7->r[0], 0x4B37u);
+}
+
 /* ---- 阶段 21-B4 用例：ARM BX 奇地址应切 Thumb ---- */
 static void test_arm_bx_thumb(nds_t *nds)
 {
@@ -3757,6 +3811,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_arm9_tcm(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bios_crc16(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B4] ARM BX 奇地址切 Thumb\n");

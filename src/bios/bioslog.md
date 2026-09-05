@@ -46,3 +46,19 @@
 - `bios_vblank_intr_wait`（0x05）：等 VBlank 位（IF bit3），返回前清位。
 - 未满足时返回 `BIOS_RET_WAIT` → `exec.c` 不前进 PC，等价低功耗等待（真机此刻视频/定时器继续跑）。
 - `bios_wait_by_loop`（0x03）：本模拟器不建模精确时序，按空操作处理。
+
+## 2026-09-05 · 21-B9 — SWI 0x0E GetCRC16（bios_crc16.c）
+
+- 新建 `bios_crc16.h/.c`：实现 NDS9/NDS7 通用的 GetCRC16。
+- 寄存器约定（与 libnds `swiCRC16` 一致）：`r0=CRC 初值`、`r1=数据地址`、
+  `r2=数据字节数`，返回 `r0=CRC16`。
+- 算法：标准 CRC-16/IBM（输入/结果反射、生成多项式 0x8005，反射多项式 0xA001），
+  每字节先异或进 CRC 低 8 位，再逐位右移 8 次、移出进位时异或 0xA001；末尾不反转。
+  GBATEK 的逐位伪代码与之等价；真机常见初值 0xFFFF。
+- `bios.c` 分发器登记 `BIOS_SWI_GET_CRC16 → bios_crc16`，不再是 unknown SWI；
+  `CMakeLists.txt` 加入新源文件。
+- 单测 `[case 21-B9a]`：ASCII `"123456789"` 以 0xFFFF 为初值得 0x4B37，覆盖
+  ARM/Thumb/ARM7 三种执行路径与长度 0 返回初值；全量 **600 项检查 0 失败**。
+- 真机 headless：`bios: unknown SWI 0x0E` 消失；ARM7 终点由 0x000366A4
+  前进到 0x037FC89C（进入自研 boot 代码轮询区），新卡点为 ARM9 高向量/IRQ
+  与一批未知 IO 桩。

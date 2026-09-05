@@ -27,7 +27,7 @@ struct bus; /* 前向声明：io 需要 bus 反指，供 DMA 搬运访存 */
    对外信号：io_set_vblank、io_set_keyinput、io_advance_timers、io_irq_pending、io_attach_cart。 */
 typedef struct io {
     irq_t irq[2];                     /* 中断：IME/IE/IF 各一套（ARM9/ARM7） */
-    nds_timer_t timer[IO_TIMER_COUNT];/* 定时器 0-3 */
+    nds_timer_t timer[2][IO_TIMER_COUNT]; /* 定时器：ARM9/ARM7 各 0-3（真机两套） */
     keypad_t keypad;                  /* KEYINPUT */
     dma_t dma;                        /* DMA：阶段 15 补齐 4 通道 */
     ipc_fifo_t fifo;                  /* IPC FIFO（阶段 8：双核通信） */
@@ -87,7 +87,7 @@ void io_set_keyinput(io_t *io, uint16_t pressed);
 /* 触摸位置：12 位 ADC 值，down=1 表示笔按下（阶段 17，由窗口鼠标/触摸事件驱动） */
 void io_set_touch(io_t *io, uint16_t adc_x, uint16_t adc_y, int down);
 
-/* 一个周期（一条指令）过去：推进所有使能定时器（6.5，cpu_step 调用） */
-void io_advance_timers(io_t *io);
+/* 一个周期（一条指令）过去：推进当前核的 4 个使能定时器（6.5，cpu_step 调用） */
+void io_advance_timers(io_t *io, int is_arm7);
 
 #endif /* NDS_EMU_IO_H */

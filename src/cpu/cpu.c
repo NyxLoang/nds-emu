@@ -81,7 +81,7 @@ int cpu_step(arm_cpu_t *cpu)
     /* 21-B9f：先检查 IRQ handler 是否刚弹出返回地址（见函数注释） */
     irq_hle_restore(cpu);
     /* 6.5：一条指令 ≈ 一个周期，推进所有使能定时器（分频在 timer.c 内处理） */
-    io_advance_timers(cpu->nds->io);
+    io_advance_timers(cpu->nds->io, cpu->is_arm7);
     /* 12.5：取指前检查 IRQ。条件 = 该核 IF&IE&IME 挂起，且 CPSR 的 I 位未禁止。
        满足则进 IRQ 异常向量（0x18），PC 跳到 handler；被打断指令地址留作返回点。 */
     irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];

@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9o | IO/测试 | 定时器按核拆成两套（ARM9/ARM7 各 4 个，真机 8 个）；中断分流不再用共享定时器（716 项 0 失败） | [io](src/io/iolog.md) · [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) |
 | 2026-09-06 | 21-B9n | IO/CPU/测试 | 电源/启动寄存器 POWCNT1/2+POSTFLG+WIFIWAITCNT 默认值 + ARM9 WFI 等待语义 + `--screenshot` 诊断；FFXII 越过空闲死锁继续启动（716 项 0 失败） | [io](src/io/iolog.md) · [cpu](src/cpu/cpulog.md) · [main](src/mainlog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9l | BIOS/测试 | ARM7 SWI 0x08 SoundBias（仅 NDS7）；FFXII ARM7 不再因 unknown SWI 落入低地址漂移（704 项 0 失败） | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9k | IO/卡带/测试 | ARM9 硬件除法/开方寄存器（DIV/SQRT）+ ROMCTRL bit31 忙位/块结束语义；FFXII 卡带读块循环推进到启动服务（700 项 0 失败） | [io](src/io/iolog.md) · [cart](src/cart/cartlog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |

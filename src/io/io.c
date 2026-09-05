@@ -87,7 +87,8 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
     if (fifo_is_cnt_addr(addr))
         return fifo_cnt_read8((ipc_fifo_t *)&io->fifo, addr, is_arm7);
     if (addr >= IO_TIMER0_BASE && addr < IO_TIMER_END)
-        return timer_read8(&io->timer[(addr - IO_TIMER0_BASE) / IO_TIMER_STRIDE], addr);
+        return timer_read8(&io->timer[is_arm7 ? 1 : 0]
+                           [(addr - IO_TIMER0_BASE) / IO_TIMER_STRIDE], addr);
     if (addr >= IO_KEYINPUT_ADDR && addr < IO_KEYINPUT_END)
         return key_read8(&io->keypad, addr);
     if (dma_is_addr(addr))
@@ -141,7 +142,8 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         return;
     }
     if (addr >= IO_TIMER0_BASE && addr < IO_TIMER_END) {
-        timer_write8(&io->timer[(addr - IO_TIMER0_BASE) / IO_TIMER_STRIDE], addr, val);
+        timer_write8(&io->timer[is_arm7 ? 1 : 0]
+                     [(addr - IO_TIMER0_BASE) / IO_TIMER_STRIDE], addr, val);
         return;
     }
     if (addr >= IO_KEYINPUT_ADDR && addr < IO_KEYINPUT_END) {
@@ -256,13 +258,13 @@ void io_set_touch(io_t *io, uint16_t adc_x, uint16_t adc_y, int down)
     touch_set_pos(&io->touch, adc_x, adc_y, down);
 }
 
-void io_advance_timers(io_t *io)
+void io_advance_timers(io_t *io, int is_arm7)
 {
     /* 21-B9h：TM0-TM3 溢出对应 IF bit3-bit6，仅 cnt_h bit6（IRQ 使能）时置位 */
-    int idx = io->bus && io->bus->active_is_arm7 ? 1 : 0;
+    int idx = is_arm7 ? 1 : 0;
     for (int i = 0; i < IO_TIMER_COUNT; i++) {
-        if (timer_advance(&io->timer[i]) &&
-            (io->timer[i].cnt_h & TIMER_CNT_IRQ))
+        if (timer_advance(&io->timer[is_arm7 ? 1 : 0][i]) &&
+            (io->timer[is_arm7 ? 1 : 0][i].cnt_h & TIMER_CNT_IRQ))
             io->irq[idx].ifl |= (uint32_t)(1u << (3 + i));
     }
 }

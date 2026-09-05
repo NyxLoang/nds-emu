@@ -1423,7 +1423,7 @@ static void test_timer_reload_overflow(nds_t *nds)
     bus_write32(nds->bus, base, 0xEAFFFFFEu); /* ARM7 死循环，让定时器随步进 */
     bus_write16(nds->bus, tm3_l, 0xFFF0u);    /* 先写重载值 */
     bus_write16(nds->bus, tm3_h, 0x00C0u);    /* 使能 + IRQ + 1:1 */
-    CHECK_EQ("tm3 reload loaded", nds->io->timer[3].cnt_l, 0xFFF0u);
+    CHECK_EQ("tm3 reload loaded", nds->io->timer[1][3].cnt_l, 0xFFF0u);
 
     nds->io->irq[1].ifl = 0;
     cpu_reset(cpu, base);
@@ -1433,7 +1433,7 @@ static void test_timer_reload_overflow(nds_t *nds)
     CHECK_EQ("tm3 no overflow yet", nds->io->irq[1].ifl & 0x40u, 0u);
     cpu_step(cpu); /* 第 16 个周期：0xFFF0→0xFFFF 后回绕 */
     CHECK_EQ("tm3 overflow IF bit6", nds->io->irq[1].ifl & 0x40u, 0x40u);
-    CHECK_EQ("tm3 reloaded", nds->io->timer[3].cnt_l, 0xFFF0u);
+    CHECK_EQ("tm3 reloaded", nds->io->timer[1][3].cnt_l, 0xFFF0u);
     exec_set_trace(1);
     nds->bus->active_is_arm7 = 0;
 }

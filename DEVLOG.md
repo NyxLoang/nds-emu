@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9j（后半之二） | CPU | ARM7 IRQ 入口帧预填：0x37FBA10 不再从空 IRQ 栈读 0，3200 万步内 ARM7 不跑飞（665 项 0 失败） | [cpu](src/cpu/cpulog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9j（后半） | IO/测试 | SPI device1（固件 Flash）最小回读 0xFF；ARM9 首次离开忙等推进到 0x0200B838 服务循环（665 项检查 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B9j（前半） | IO/测试 | 定时器 CNT_L reload 语义 + VBlank 双核置 IF；ARM7 能收到帧事件，service6 完成回执仍待追（664 项检查 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B9i | CPU/IO/测试 | FIFO CNT 合并写修复（错误应答不吞使能位）+ ARM7 IRQ 槽跳板（0x0380FFFC）；ARM9 FIFO 命令能送达 ARM7 并完成 handler（659 项检查 0 失败），忙位回执待 B9j | [cpu](src/cpu/cpulog.md) · [io](src/io/iolog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |

@@ -435,4 +435,14 @@
   ARM7 handler 能完整执行并返回（不再从低向量 0x18 跑飞）。ARM9 仍停在
   0x0200EA84 等忙位，下一步 B9j 查 ARM7 回执路径/忙位清除。
 
+## 2026-09-06 · 21-B9j（后半之二）— ARM7 IRQ 入口帧预填
+
+- ARM7 调度器 0x37FBA10 保存旧任务时会用 `ldmib sp!,{...}` 从 IRQ 栈上方
+  （0x380FF80..94）取 r0-r3/r12/lr；该区域本应由真机 IRQ 入口帧预填，但模拟器
+  ARM7 槽跳板此前直接跳到用户 dispatcher，导致读到 0、把调度器上下文 PC 存坏。
+- 修复：ARM7 IRQ 槽跳板在跳用户 handler 前把当前 r0-r3/r12 与
+  `lr=被打断PC+4` 写到 IRQ SP 上方对应 6 个字，再进入 dispatcher。
+- 验证：全量 **665 项检查 0 失败**；headless 3200 万步 ARM7 不再跌进
+  0x0142xxxx/0xFFFFFFxx 跑飞，稳定停留在有效代码区。
+
 

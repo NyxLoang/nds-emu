@@ -166,6 +166,16 @@ int cpu_step(arm_cpu_t *cpu)
         if (cpu->is_arm7) {
             uint32_t slot_fc = bus_read32(cpu->nds->bus, 0x0380FFFCu);
             if (slot_fc != 0) {
+                /* 21-B9j：ARM7 调度器在 0x37FBA10 用 ldmib sp!,{...} 从 IRQ 栈
+                   上方 0x380FF80..0x94 取旧任务 r0-r3/r12/lr。真机该区由 BIOS
+                   入口帧预填；这里在跳用户 handler 前等价预填（lr=被打断PC+4）。 */
+                uint32_t isp = cpu->r[13];
+                bus_write32(cpu->nds->bus, isp + 0x00u, cpu->r[0]);
+                bus_write32(cpu->nds->bus, isp + 0x04u, cpu->r[1]);
+                bus_write32(cpu->nds->bus, isp + 0x08u, cpu->r[2]);
+                bus_write32(cpu->nds->bus, isp + 0x0Cu, cpu->r[3]);
+                bus_write32(cpu->nds->bus, isp + 0x10u, cpu->r[12]);
+                bus_write32(cpu->nds->bus, isp + 0x14u, ret_pc + 4u);
                 cpu->irq_hle.active = 1;
                 cpu->irq_hle.saved_cpsr = saved_cpsr;
                 cpu->irq_hle.ret_pc = ret_pc;

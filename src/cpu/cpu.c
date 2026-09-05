@@ -83,6 +83,24 @@ int cpu_step(arm_cpu_t *cpu)
                    irq->ime, irq->ie, irq->ifl, slot_f8, slot_fc);
         }
         arm_exception(cpu, EXC_IRQ_OFF, ARM_MODE_IRQ, 4);
+        /* 21-B9c：模拟 ARM9 BIOS 高向量跳板——真机 0xFFFF0018 处的 BIOS 代码会从
+           DTCM 末 4 字节（0x3FFC，用户 IRQ handler 指针槽）取地址再跳转。本模拟器
+           没有 BIOS ROM，异常现场建好后直接读槽并改写 PC；FFXII 在复位时把
+           handler 装到 ITCM 0x01FF8000（见 21-B9b 证据）。槽为 0 或 DTCM 未配置
+           时保持旧行为（停在向量区便于诊断）。ARM7 尚未观察到 IRQ 触发，暂不
+           按 0x03FFFFFC 槽跳转，待有真机证据再对称实现。 */
+        if (!cpu->is_arm7 && cpu->nds->bus->arm9_dtcm_on) {
+            uint32_t slot_fc = bus_read32(cpu->nds->bus,
+                                          cpu->nds->bus->arm9_dtcm_base + 0x3FFCu);
+            if (slot_fc != 0) {
+                /* 目标地址 LSB=1 表示 Thumb 入口：按 BX 规则清 PC 最低位并置 T */
+                if (slot_fc & 1u)
+                    cpu->cpsr |= CPSR_T;
+                else
+                    cpu->cpsr &= ~CPSR_T;
+                cpu->r[15] = slot_fc & ~1u;
+            }
+        }
         return 1;
     }
     /* 13.2：按 CPSR.T 位分发——Thumb 取 16 位半字，ARM 取 32 位字。 */

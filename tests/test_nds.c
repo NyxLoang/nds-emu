@@ -1049,6 +1049,52 @@ static void test_arm9_tcm(nds_t *nds)
     bus_set_arm9_dtcm(nds->bus, 0, 0, 0); /* 恢复禁用，避免污染后续用例 */
 }
 
+/* ---- 21-B9c 用例：ARM9 IRQ 从 DTCM 槽取 handler（模拟 BIOS 高向量跳板） ---- */
+static void test_irq_slot_jump(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t handler = BUS_ARM9_ITCM_BASE; /* 0x01FF8000：FFXII 的装法 */
+
+    /* FFXII 复位约定：DTCM 在 0x027E0000，IRQ handler 指针放槽 0x027E3FFC */
+    bus_set_arm9_dtcm(nds->bus, 1, 0x027E0000u, 0x4000u);
+    nds->bus->active_is_arm7 = 0;
+    bus_write32(nds->bus, 0x027E3FFCu, handler);
+    /* handler：SUBS pc, lr, #4 → 返回被打断处并恢复 CPSR */
+    bus_write32(nds->bus, handler, 0xE25EF004u);
+
+    static const uint32_t prog[] = {
+        /* 0x00 */ 0xE3A00005, /* MOV r0, #5 */
+        /* 0x04 */ 0xE3A01007, /* MOV r1, #7 */
+        /* 0x08 */ 0xEAFFFFFE, /* B self */
+    };
+    for (size_t i = 0; i < sizeof prog / sizeof prog[0]; i++)
+        bus_write32(nds->bus, base + 4 * i, prog[i]);
+
+    cpu->cpsr = ARM_MODE_USER;                  /* I=0 允许 IRQ */
+    nds->io->irq[0].ie  = IO_IF_VBLANK;
+    nds->io->irq[0].ifl = IO_IF_VBLANK;
+    nds->io->irq[0].ime = 1;
+    cpu_reset(cpu, base);
+
+    exec_set_trace(0);
+    cpu_step(cpu);   /* IRQ：先建 IRQ 异常现场，再从槽跳用户 handler */
+    CHECK_EQ("slot pc=handler", cpu->r[15], handler);
+    CHECK_EQ("slot mode=IRQ", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_IRQ);
+    CHECK_EQ("slot I set", (cpu->cpsr & CPSR_I) ? 1u : 0u, 1u);
+    CHECK_EQ("slot spsr saved", cpu->spsr[exec_spsr_index(ARM_MODE_IRQ)],
+             ARM_MODE_USER);
+    CHECK_EQ("slot lr=pc+4", cpu->r[14], base + 4);
+
+    cpu_step(cpu);   /* handler 内 SUBS pc, lr, #4 → 返回原程序 */
+    CHECK_EQ("slot return PC", cpu->r[15], base);
+    CHECK_EQ("slot return mode", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_USER);
+    CHECK_EQ("slot return I", (cpu->cpsr & CPSR_I) ? 1u : 0u, 0u);
+    exec_set_trace(1);
+
+    bus_set_arm9_dtcm(nds->bus, 0, 0, 0); /* 恢复禁用，避免污染后续用例 */
+}
+
 /* ---- 21-B9a: BIOS SWI 0x0E GetCRC16 (CRC-16/IBM) ---- */
 static void test_bios_crc16(nds_t *nds)
 {
@@ -3811,6 +3857,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_arm9_tcm(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9c] ARM9 IRQ 槽跳板（DTCM+0x3FFC → handler）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_irq_slot_jump(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");

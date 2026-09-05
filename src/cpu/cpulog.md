@@ -325,4 +325,19 @@
   当前模拟器把 IRQ 直接跳到高向量 0xFFFF0018 读 0 跑飞，根因确认：
   下一步 B9c 让 IRQ 入口按槽取 handler 指针跳转（模拟 BIOS 高向量跳板）。
 
+## 2026-09-05 · 21-B9c — ARM9 IRQ 槽跳板（模拟 BIOS 高向量分发）
+
+- **做了什么**：`cpu.c` 在 IRQ 异常现场建好后，若 ARM9 的 DTCM 已使能且槽
+  `DTCM+0x3FFC` 非 0，就把 PC 改成槽里的用户 handler（目标 LSB=1 置 Thumb），
+  等价于真 BIOS 在 0xFFFF0018 做的事；槽为 0/未配置时保留旧向量路径便于诊断。
+  ARM7 尚无 IRQ 触发证据，未按 0x03FFFFFC 槽对称实现（留待真机出现再补）。
+- **怎么验证**：新增 `[case 21-B9c]`：DTCM 槽指向 ITCM 0x01FF8000，handler 放
+  `SUBS pc, lr, #4`；触发 IRQ 后断言 PC=handler、IRQ 模式/I 位/SPSR/LR 正确，
+  再走一步验证返回原 PC 并恢复 CPSR。全量 **608 项检查 0 失败**。
+- **真 ROM 效果**：FFXII ARM9 不再跳 0xFFFF0018 读 0 漂到 0x000117C0，而是进入
+  ITCM 的 IRQ 分发器（0x01FF8000），随后停在 0x01FF8028。对 ITCM 段做反汇编：
+  这是 FFXII 的中断分发循环——`CLZ r0,r1`（数最高 pending 位）→ `BICS` 逐位
+  清除并分发；模拟器未实现 CLZ（ARMv5），把它误译成别的数据运算，循环永不退出，
+  B9d 修。
+
 

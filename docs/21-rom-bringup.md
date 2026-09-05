@@ -258,6 +258,38 @@ headless: done. ARM9 PC=000117C0 ...
 3. 模拟器没有 BIOS ROM，无法执行 0xFFFF0018 的跳板，于是从高向量读 0 一路漂到
    0x000117C0。B9c 将让 IRQ 入口模拟该跳板：保存异常现场后直接跳槽里的 handler。
 
+### 21-B9c（2026-09-05）：ARM9 IRQ 槽跳板——FFXII 中断分发器被点亮
+
+**做了什么**：
+
+- `cpu.c`：IRQ 异常现场建好后，若 ARM9 DTCM 已使能且 `DTCM+0x3FFC` 槽非 0，
+  直接改 PC 跳槽里的用户 handler（LSB=1 时按 Thumb 入口置 T）。槽为 0 或 DTCM
+  未配置时保留旧的高向量路径便于诊断。ARM7 的 0x03FFFFFC 约定待出现真实 IRQ
+  证据后再对称实现。
+- 测试新增 `[case 21-B9c]`：槽指向 ITCM，handler 为 `SUBS pc,lr,#4`，验证
+  触发后 PC/mode/I/SPSR/LR 与返回恢复，共 8 项检查（全量 **608 项 0 失败**）。
+
+重跑 FFXII：ARM9 终点从 0x000117C0（高向量读 0 漂移）变为 0x01FF8028——
+**成功进入 ITCM 里的 FFXII 中断分发器**。对 ITCM 0x01FF8000 起做反汇编：
+
+```text
+stmdb sp!, {lr}          ; 保存返回
+mov ip, #0x04000000
+add ip, ip, #0x210       ; ip = 中断寄存器区
+ldr r1, [ip, #-8]        ; IME
+cmp r1, #0 / ldmeq ...   ; IME=0 直接返回
+ldm ip, {r1, r2}         ; r1=IE, r2=IF
+ands r1, r1, r2          ; pending = IE & IF
+ldmeq sp!, {pc}          ; 无 pending 返回
+mov r3, #0x80000000
+clz r0, r1               ; ← 模拟器未实现 CLZ，误译导致死循环
+bics r1, r1, r3, lsr r0  ; 清掉当前最高位
+bne 循环                 ; 逐个分发所有挂起中断
+...
+```
+
+结论：跳板已通，下一卡点（B9d）是 **CLZ 指令缺失**——不是 IO/时序问题。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

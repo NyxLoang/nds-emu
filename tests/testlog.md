@@ -505,3 +505,12 @@
 - 全量 **600 项检查 0 失败**；真 ROM headless：`unknown SWI 0x0E` 消失，
   ARM7 终点前进到 0x037FC89C。
 
+## 2026-09-05 · 21-B9c — ARM9 IRQ 槽跳板用例
+
+- `test_nds.c` 新增 `[case 21-B9c]`：`test_irq_slot_jump`——DTCM 配置到
+  0x027E0000、槽 0x027E3FFC 写 0x01FF8000，IRQ 触发后断言 PC 跳到 ITCM
+  handler、IRQ 模式/I/SPSR/LR 正确，再执行 `SUBS pc,lr,#4` 验证返回并恢复
+  CPSR。共 8 项检查。
+- 全量 **608 项检查 0 失败**；真 ROM：ARM9 不再从高向量漂移，进入 ITCM 中断
+  分发器后停在 0x01FF8028（CLZ 未实现，B9d 修）。
+

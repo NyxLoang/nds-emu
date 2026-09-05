@@ -1,5 +1,6 @@
 #include "dma.h"
 #include "bus/bus.h"
+#include "io/io.h"
 
 /* 通道内字节偏移（相对本通道基址）：0-3=SAD、4-7=DAD、8-9=CNT_L、10-11=CNT_H */
 static uint32_t ch_off(uint32_t addr)
@@ -38,10 +39,22 @@ static uint32_t dma_advance(uint32_t a, int mode, uint32_t step)
     }
 }
 
+/* DMA 完成中断（21-B9p）：搬完且 CNT bit14(IRQ) 置位时，把当前核 IF 的
+   bit8+通道 置 1（真机 DMA0-3 完成中断 = IF bit8-11）。 */
+static void dma_irq_done(const dma_channel_t *dma, struct bus *bus, int ch)
+{
+    if (bus == NULL || bus->io == NULL)
+        return;
+    if ((dma->cnt_h & DMA_CNT_IRQ) == 0)
+        return;
+    int idx = bus->active_is_arm7 ? 1 : 0;
+    bus->io->irq[idx].ifl |= (uint32_t)(1u << (8 + ch));
+}
+
 /* 执行一次拷贝：把 N 个字/半字从源搬到目的。
    源/目的地址控制按增/减/固定处理；搬运走 bus_read/write，源可落在卡带 CARD_DATA。
    非重复搬运搬完自动清使能（真机同款行为）；重复模式保持使能，每次触发都重搬同一块。 */
-static void dma_transfer(dma_channel_t *dma, struct bus *bus)
+static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch)
 {
     uint32_t n = dma->cnt_l != 0 ? dma->cnt_l : 0x4000u; /* 0 按 GBA/NDS 惯例=0x4000 */
     int is32 = (dma->cnt_h & DMA_CNT_32BIT) != 0;
@@ -62,6 +75,7 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus)
 
     if ((dma->cnt_h & DMA_CNT_REPEAT) == 0)
         dma->cnt_h &= (uint16_t)~DMA_CNT_ENABLE;
+    dma_irq_done(dma, bus, ch);
 }
 
 void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus)
@@ -83,7 +97,7 @@ void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus)
         /* 触发条件：写 CNT_H 高字节（含使能位）且使能位置位、模式=立即 */
         if (off == 11 && (d->cnt_h & DMA_CNT_ENABLE) != 0 &&
             ((d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT) == DMA_START_IMMED)
-            dma_transfer(d, bus);
+            dma_transfer(d, bus, (int)ch_index(addr));
     }
 }
 
@@ -95,6 +109,6 @@ void dma_fire(dma_t *dma, struct bus *bus, int start_mode)
             continue;
         if (((d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT) != start_mode)
             continue;
-        dma_transfer(d, bus);
+        dma_transfer(d, bus, c);
     }
 }

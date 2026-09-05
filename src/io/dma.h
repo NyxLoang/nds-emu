@@ -15,7 +15,7 @@ struct bus; /* 前向声明：必须在参数列表外声明，否则参数里�
 /* CNT_H 控制位（16 位寄存器，对应真机 32 位 CNT 的高 16 位，
    因此 bit15=CR bit31、bit10=CR bit26 …） */
 #define DMA_CNT_ENABLE   (1u << 15)   /* 写 1 启动，非重复搬完自动清 0（=CR bit31） */
-#define DMA_CNT_IRQ      (1u << 14)   /* 搬完置 IF（本阶段暂不接线）（=CR bit30） */
+#define DMA_CNT_IRQ      (1u << 14)   /* 搬完置 IF（=CR bit30） */
 #define DMA_CNT_REPEAT   (1u << 9)    /* 重复：每个触发周期重搬同一块（=CR bit25） */
 #define DMA_CNT_32BIT    (1u << 10)   /* 0=半字(16 位)  1=字(32 位)（=CR bit26） */
 #define DMA_CNT_SRC_FIX  (1u << 8)    /* 源地址控制=2：固定（填色用）（=CR bit24） */

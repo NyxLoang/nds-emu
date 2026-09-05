@@ -3300,6 +3300,17 @@ static void test_dma_channels(nds_t *nds)
     CHECK_EQ("dma3 vblank not yet", bus_read32(nds->bus, vram + 0x300), 0x00000000u);
     io_set_vblank(nds->io);
     CHECK_EQ("dma3 vblank fired", bus_read32(nds->bus, vram + 0x300), 0xDEADBEEFu);
+
+    /* d) DMA0 搬完置完成中断：IF bit8（21-B9p） */
+    bus_write32(nds->bus, src + 0x100, 0xCAFEBABEu);
+    bus_write32(nds->bus, IO_DMA0_BASE, src + 0x100);
+    bus_write32(nds->bus, IO_DMA0_BASE + 4, vram + 0x400);
+    bus_write16(nds->bus, IO_DMA0_BASE + 8, 1u);
+    nds->io->irq[0].ifl = 0;
+    bus_write16(nds->bus, IO_DMA0_BASE + 10,
+                DMA_CNT_IRQ | DMA_CNT_32BIT | DMA_CNT_ENABLE);
+    CHECK_EQ("dma0 irq mem", bus_read32(nds->bus, vram + 0x400), 0xCAFEBABEu);
+    CHECK_EQ("dma0 irq IF bit8", nds->io->irq[0].ifl & (1u << 8), 1u << 8);
 }
 
 /* ---- 阶段 15.4 用例：卡带 DMA——DMA 从 ROM（CARD_DATA）搬数据到 RAM ---- */

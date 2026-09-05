@@ -1095,6 +1095,31 @@ static void test_irq_slot_jump(nds_t *nds)
     bus_set_arm9_dtcm(nds->bus, 0, 0, 0); /* 恢复禁用，避免污染后续用例 */
 }
 
+/* ---- 21-B9d 用例：CLZ（数前导零）——FFXII IRQ 分发器依赖它找最高挂起位 ---- */
+static void test_clz(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    static const struct { uint32_t val; uint32_t want; const char *name; } cases[] = {
+        { 0x00000000u, 32u, "clz zero"        },
+        { 0x80000000u,  0u, "clz top bit"     },
+        { 0x00000001u, 31u, "clz low bit"     },
+        { 0x00042009u, 13u, "clz ffxii ie"    }, /* 最高位 bit18：前导 13 个零 */
+        { 0x00000008u, 28u, "clz vblank bit3" },
+    };
+
+    bus_write32(nds->bus, base, 0xE16F0F11u); /* CLZ r0, r1 */
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        cpu->r[1] = cases[i].val;
+        cpu_reset(cpu, base);
+        exec_set_trace(0);
+        cpu_step(cpu);
+        CHECK_EQ(cases[i].name, cpu->r[0], cases[i].want);
+        CHECK_EQ("clz pc", cpu->r[15], base + 4);
+    }
+    exec_set_trace(1);
+}
+
 /* ---- 21-B9a: BIOS SWI 0x0E GetCRC16 (CRC-16/IBM) ---- */
 static void test_bios_crc16(nds_t *nds)
 {
@@ -3864,6 +3889,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_irq_slot_jump(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9d] CLZ 前导零计数（FFXII IRQ 分发循环依赖）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_clz(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");

@@ -555,6 +555,24 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         return 1;
     }
 
+    /* CLZ（ARMv5）：bit27-4 固定为 0001 0110 1111 1111 0001（掩码 0x0FFFFFF0），
+       Rd 在 bit15-12、Rm 在 bit3-0。结果 = Rm 的二进制前导零个数（0 的前导零
+       定义为 32）。FFXII 的 IRQ 分发器用它找“最高优先级的挂起中断位”。 */
+    if ((insn & 0x0FFFFFF0u) == 0x016F0F10u) {
+        unsigned rd = (insn >> 12) & 0xFu;
+        unsigned rm = insn & 0xFu;
+        uint32_t v = read_reg(cpu, rm);
+        unsigned n = 0;
+        while (n < 32 && !(v & 0x80000000u)) { v <<= 1; n++; }
+        cpu->r[rd] = n;
+        if (g_trace)
+            printf("cpu: PC=%08X insn=%08X CLZ r%u, r%u = %u cycles=%llu\n",
+                   cpu->r[15], insn, rd, rm, n,
+                   (unsigned long long)cpu->cycles);
+        cpu->r[15] += 4;
+        return 1;
+    }
+
     /* MRS（读 CPSR/SPSR）：bit27-24=0001, bit23-21=00x, bit19-16=1111, bit11-0=0，
        Rd 在 bit15-12（不可固定，需掩掉）。 */
     if ((insn & 0x0FFF0FFFu) == 0x010F0000u) {

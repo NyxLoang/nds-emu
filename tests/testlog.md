@@ -431,3 +431,11 @@
   重叠导致红像素不画；改 `BGCNT_COLORS_256 | (1<<SCREEN_BASE_SHIFT)` 后通过。
 - 阶段 20 收尾全量 **521 项检查 0 失败**。
 
+## 2026-09-05 · 工程：测试入口自动切 UTF-8 控制台
+
+- **做了什么**：`test_nds.c` 顶部增加 Windows 条件包含 `<windows.h>`，`main()` 第一条 `printf` 前调用
+  `SetConsoleOutputCP(CP_UTF8)`，避免测试用例名等中文在 936(GBK) 控制台下乱码。
+- **怎么验证**：`cmake --build build --parallel` 编译通过；直接运行 `build/test_nds.exe`，
+  528 项检查 0 失败（B1 Shared WRAM 用例仍在工作区，未提交）。
+- **结果**：✅ 编译与自动化测试通过（终端中文显示待用户按验收步骤确认）。
+

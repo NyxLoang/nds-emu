@@ -182,3 +182,4 @@
 | 2026-08-15 | 21-A1 | 卡带装载/主循环 | 修 ARM7 镜像装载按目标区判大小（FFXII ARM7 载入 Main RAM 0x02380000，165KB） | [main](src/mainlog.md) |
 | 2026-08-15 | 21-A2 | 诊断 | bring-up 诊断设施：`bus.diag` 开关 + 未知 SWI/未实现指令/未知 IO 只打一次 + `--headless N`/`--trace` 命令行 | [main](src/mainlog.md) · [bus](src/bus/buslog.md) · [io](src/io/iolog.md) · [bios](src/bios/bioslog.md) |
 | 2026-08-15 | 21-A3 | CPU | 修 ARM r15 读缺 +8（`read_reg` 统一修正 PC 相对字面量池）；跑 FFXII 定位首个 gap：Shared WRAM 未映射 | [cpu](src/cpu/cpulog.md) |
+| 2026-09-05 | — | 工程管理 | 程序入口自动切控制台 UTF-8（`SetConsoleOutputCP(CP_UTF8)`），修复中文日志乱码 | [main](src/mainlog.md) · [tests](tests/testlog.md) |

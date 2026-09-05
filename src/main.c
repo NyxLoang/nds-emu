@@ -24,6 +24,10 @@ int main(int argc, char *argv[])
 {
     (void)argc;
     (void)argv;
+#ifdef _WIN32
+    /* Windows 控制台：程序日志按 UTF-8 输出，先切输出代码页，避免 936(GBK) 下中文乱码 */
+    SetConsoleOutputCP(CP_UTF8);
+#endif
     /* Windows：用宽字符命令行拿路径，避免窄 argv 在非 UTF-8 代码页下中文乱码 */
 #ifdef _WIN32
     int wargc = 0;

@@ -8,6 +8,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "nds/nds.h"
 #include "bus/bus.h"
@@ -3248,6 +3251,10 @@ static void test_window_render(nds_t *nds)
 
 int main(void)
 {
+#ifdef _WIN32
+    /* Windows 控制台：程序日志按 UTF-8 输出，先切输出代码页，避免 936(GBK) 下中文乱码 */
+    SetConsoleOutputCP(CP_UTF8);
+#endif
     printf("=== test_nds: 统一测试入口 ===\n\n");
 
     printf("[migrated 2] bus 内存总线读写换算\n");

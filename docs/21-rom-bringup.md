@@ -231,6 +231,33 @@ headless: done. ARM9 PC=0025B6C0 cyc=1333334 | ARM7 PC=037FC898 cyc=666666
 
 结论：B9a 后下一卡点排为 **ARM9 BIOS/IRQ 高向量 + 这批未知 IO 桩**，按 gap 继续。
 
+### 21-B9b（2026-09-05）：首中断现场快照——确认 FFXII 用“DTCM 槽”装 IRQ handler
+
+**做了什么**：
+
+- `cpu.c`：IRQ 真正触发时（`--headless` 诊断模式）只打印一次首中断现场：核名、
+  被打断 PC、CPSR、IME/IE/IF，以及 IRQ 槽末 8 字节（ARM9：DTCM+0x3FF8/FC，
+  基址取 bus 的 CP15 配置；ARM7：0x03FFFFF8/FC）。用于判断游戏把 IRQ handler
+  装到哪个约定槽，避免每步刷屏。
+- `exec.c`：异常 trace 加 `arm9`/`arm7` 前缀，中断后执行流归属一眼可辨。
+
+重跑 FFXII `--headless 1100000` 的关键输出：
+
+```text
+irq: first arm9 IRQ pc=02009EC0 cpsr=8000001F ime=04000001 ie=00042009 ifl=00000008
+     slot+3FF8=00000000 slot+3FFC=01FF8000
+headless: done. ARM9 PC=000117C0 ...
+```
+
+结论：
+
+1. 游戏遵守 BIOS 槽协议：ARM9 的 DTCM 末 4 字节（0x027E3FFC）放着用户 IRQ
+   handler 指针 **0x01FF8000**（ITCM 开头，复位时拷入的系统例程区）；
+   0x3FF8 的等待标志为 0（本次不是等待被唤醒）。
+2. ARM9 使能了 VBlank（bit3）与 FIFO 相关中断（bit17/18），首中断是 VBlank。
+3. 模拟器没有 BIOS ROM，无法执行 0xFFFF0018 的跳板，于是从高向量读 0 一路漂到
+   0x000117C0。B9c 将让 IRQ 入口模拟该跳板：保存异常现场后直接跳槽里的 handler。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

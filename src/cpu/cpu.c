@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include "cpu.h"
 #include "exec.h"
@@ -58,6 +59,29 @@ int cpu_step(arm_cpu_t *cpu)
     irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
     if (irq_pending(irq) && !(cpu->cpsr & CPSR_I)) {
         cpu->cycles++;
+        /* 21-B9b：诊断首中断现场——FFXII 的 ARM9 第一次 IRQ 会跳到高向量 0xFFFF0018，
+           真 BIOS 在那里从“可读写 RAM 的约定槽”取用户 handler。先看游戏把 handler
+           装到哪：ARM9 槽在 DTCM 末 8 字节（0x3FF8=等待标志/0x3FFC=handler 指针），
+           ARM7 槽在 WRAM 高地址 0x03FFFFF8/FC。只打一次，避免轮询刷屏。 */
+        if (cpu->nds->bus->diag && !cpu->irq_dump_done) {
+            cpu->irq_dump_done = 1;
+            uint32_t slot_f8 = 0, slot_fc = 0;
+            if (cpu->is_arm7) {
+                slot_f8 = bus_read32(cpu->nds->bus, 0x03FFFFF8u);
+                slot_fc = bus_read32(cpu->nds->bus, 0x03FFFFFCu);
+            } else {
+                /* 用 bus 保存的 DTCM 基址计算槽位，游戏改配 DTCM 时也跟得上 */
+                uint32_t base = cpu->nds->bus->arm9_dtcm_on
+                                    ? cpu->nds->bus->arm9_dtcm_base
+                                    : 0x027E0000u; /* 未使能时回退 FFXII 的已知配置 */
+                slot_f8 = bus_read32(cpu->nds->bus, base + 0x3FF8u);
+                slot_fc = bus_read32(cpu->nds->bus, base + 0x3FFCu);
+            }
+            printf("irq: first %s IRQ pc=%08X cpsr=%08X ime=%08X ie=%08X ifl=%08X"
+                   " slot+3FF8=%08X slot+3FFC=%08X\n",
+                   cpu->is_arm7 ? "arm7" : "arm9", cpu->r[15], cpu->cpsr,
+                   irq->ime, irq->ie, irq->ifl, slot_f8, slot_fc);
+        }
         arm_exception(cpu, EXC_IRQ_OFF, ARM_MODE_IRQ, 4);
         return 1;
     }

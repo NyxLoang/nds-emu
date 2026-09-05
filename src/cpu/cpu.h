@@ -20,6 +20,7 @@ typedef struct arm_cpu {
     uint32_t vector_base; /* 异常向量基址：ARM9=0xFFFF0000（高）、ARM7=0x00000000（低） */
     uint64_t cycles; /* 已执行指令数（供主循环计数/验证） */
     int deadloop_reported; /* 死循环识别已打印过（避免每步刷屏） */
+    int irq_dump_done;     /* 首中断现场快照已打印过（21-B9b，避免每次 IRQ 刷屏） */
 } arm_cpu_t;
 
 /* 创建 / 销毁 CPU 核。reset_pc：复位后开始执行的地址；is_arm7：实例身份。 */

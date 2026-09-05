@@ -308,4 +308,21 @@
 - **验证**：21-B8 用例覆盖 ARM9 写 DTCM 不落主存、ARM7 同址写主存不碰 DTCM；
   `test_nds.exe` 594 项 0 失败。
 
+## 2026-09-05 · 21-B9b — 首中断现场快照（确认 FFXII 的 ARM9 IRQ 槽协议）
+
+- **做了什么**：
+  - `cpu.c`：IRQ 真正触发时（诊断模式开）只打印一次“首中断现场”：哪颗核、被打断
+    PC、CPSR、IME/IE/IF，以及 IRQ 约定槽末 8 字节——ARM9 取 DTCM+0x3FF8/FC，
+    ARM7 取 0x03FFFFF8/FC。ARM9 槽基址从 bus 的 DTCM 配置读取，未使能时回退
+    FFXII 已知的 0x027E0000，避免写死地址。
+  - `exec.c`：`arm_exception` 的逐条 trace 加 `arm9`/`arm7` 前缀，中断后属于哪颗核
+    的执行流不再靠猜。
+- **怎么验证**：全量 **600 项检查 0 失败**（纯诊断，无新指令语义）。
+- **真 ROM 证据**：FFXII ARM9 第一次 IRQ 发生在 cycles=699052（ARM9 PC=0x02009EC0）：
+  `ie=0x00042009`（VBlank bit3 + FIFO bit17/18）、`ifl=0x00000008`，
+  **槽 +0x3FFC = 0x01FF8000**——游戏确实把用户 IRQ handler 指针装进
+  “DTCM 末 4 字节”约定槽，指向 ITCM 开头（0x01FF8000，复位时拷入的系统例程）。
+  当前模拟器把 IRQ 直接跳到高向量 0xFFFF0018 读 0 跑飞，根因确认：
+  下一步 B9c 让 IRQ 入口按槽取 handler 指针跳转（模拟 BIOS 高向量跳板）。
+
 

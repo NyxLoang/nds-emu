@@ -243,7 +243,8 @@ void arm_exception(arm_cpu_t *cpu, uint32_t vector_offset, unsigned new_mode,
     cpu->r[14] = cpu->r[15] + lr_adjust;
     cpu->r[15] = cpu->vector_base + vector_offset;
     if (g_trace)
-        printf("cpu: PC=%08X exception vec=%08X mode=%02X lr=%08X cycles=%llu\n",
+        printf("cpu: %s exception vec=%08X mode=%02X lr=%08X cycles=%llu\n",
+               cpu->is_arm7 ? "arm7" : "arm9",
                cpu->r[15], cpu->vector_base + vector_offset, new_mode, cpu->r[14],
                (unsigned long long)cpu->cycles);
 }

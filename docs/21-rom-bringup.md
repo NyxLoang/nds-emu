@@ -59,7 +59,7 @@ r15 读值 = (当前 PC & ~3) + 8
 |---|-----|------|
 | G1 | ARM r15 读缺 +8，PC 相对字面量池读错 | ✅ 已修 |
 | G2 | Shared WRAM（0x03000000-0x03007FFF）及镜像（0x037F8000 一带）未映射 | ✅ 已修（21-B1，2026-09-05） |
-| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2 已实现 IPCSYNC，握手仍未通；新卡点见 Phase B 表 B3/B4） |
+| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2/B3 已修：IPCSYNC 寄存器 + Main RAM 镜像；ARM9 已能在主存代码区等待，ARM7 仍卡 BX→Thumb，见 B4） |
 | G4 | 修完 G2/G3 后继续暴露的更多 gap（SWI/PPU/中断/内存等） | ⏳ Phase B 迭代 |
 
 ---
@@ -105,6 +105,19 @@ headless: done. ARM9 PC=132612F8 cyc=13333334 | ARM7 PC=037FFC44 cyc=6666666
 
 这两个点成为 B3/B4 的直接依据；每修一个就重跑一次，直到 hard_title。
 
+### 21-B3 之后（2026-09-05）：ARM9 卡点解除
+
+把 0x02400000-0x027FFFFF 映射为 Main RAM 别名后，ARM9 的栈读写不再丢失。trace 中
+cycle 126,634 的返回点变为：
+
+```c
+cpu: PC=020008F8 insn=E8BD8010 LDM r13!, list=8010 n=2 cycles=126634
+```
+
+`headless 20000000` 全程 ARM9 PC 停在主存代码区 0x0200B9xx 循环（修复前是在 0 区
+逐 4 漂移、终点 0x132612F8）。ARM7 仍按原轨迹跑飞（BX 奇地址未切 Thumb，B4），
+ARM9 的循环疑似在等 ARM7 握手结果——B4 修完 ARM7 后重跑即可验证。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误
@@ -134,7 +147,7 @@ Phase B 的验收口径：**hard_title**——FFXII 能进入标题画面。
 |------|--------|------|
 | B1 | 映射 Shared WRAM：0x03000000 起 32KB + 0x037F8000 镜像（✅ 已提交 bf8899b） | 单测 + headless 重跑，确认 ARM7 不再在镜像区逐 0 漂移 |
 | B2 | 实现 IPCSYNC（0x04000180/81）：双核 out 交叉读写、bit13 → 对端 IF16、bit14 门控 | 单测 544 项 0 失败；headless 不再报 IPCSYNC 未知 IO |
-| B3 | 映射 Main RAM 无缓存镜像 0x02400000-0x027FFFFF（FFXII 栈放 0x027E0000 附近） | 单测 + headless 重跑，ARM9 能过 0x0201A9DC 返回点、不再弹 PC=0 |
+| B3 | 映射 Main RAM 无缓存镜像 0x02400000-0x027FFFFF（FFXII 栈放 0x027E0000 附近） | 单测 552 项 0 失败；headless：ARM9 稳定在 0x0200B9xx 主存代码区，不再弹 PC=0 |
 | B4 | 修 ARM BX 奇地址未切 Thumb（ARM7 0x038043C9 入口） | 单测（ARM BX 奇地址 T=1）+ headless，ARM7 进 Thumb 区不跑飞 |
 | B5… | 继续按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
 

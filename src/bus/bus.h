@@ -4,7 +4,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Main RAM：NDS 主内存，ARM9 镜像装载处，共 4MB。 */
+/* Main RAM：NDS 主内存，ARM9 镜像装载处，共 4MB。
+   真机还有一个无缓存镜像区 0x02400000-0x027FFFFF（同一物理内存、同偏移别名），
+   商业 ROM 常把栈放到该区（如 FFXII 用 0x027E0000 附近）以避开缓存。 */
 #define BUS_MAIN_RAM_SIZE (4 * 1024 * 1024)
 
 /* VRAM：显存，程序往这里写颜色字；本阶段先分配 656KB 区间。 */
@@ -40,6 +42,7 @@
 
 /* 地址区间基址（内存地图见 docs/03-memory-map.md） */
 #define BUS_MAIN_RAM_BASE 0x02000000u
+#define BUS_MAIN_RAM_MIRROR_BASE 0x02400000u /* Main RAM 无缓存镜像基址（别名） */
 #define BUS_SHARED_WRAM_BASE 0x03000000u       /* Shared WRAM 主区基址 */
 #define BUS_SHARED_WRAM_MIRROR 0x037F8000u     /* Shared WRAM 镜像区基址（别名） */
 #define BUS_VRAM_BASE     0x06000000u

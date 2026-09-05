@@ -32,6 +32,14 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - BUS_MAIN_RAM_BASE);
         return 1;
     }
+    /* Main RAM 无缓存镜像：0x02400000 起 4MB，与主区同一物理数组（别名，阶段 21-B3）。
+       换算规则与主区相同：区间内下标 = addr - 镜像基址。 */
+    if (addr >= BUS_MAIN_RAM_MIRROR_BASE &&
+        addr - BUS_MAIN_RAM_MIRROR_BASE < BUS_MAIN_RAM_SIZE) {
+        *region = bus->main_ram;
+        *off = (size_t)(addr - BUS_MAIN_RAM_MIRROR_BASE);
+        return 1;
+    }
     /* VRAM：显存区间，换算方式与 Main RAM 相同（addr - 0x06000000 = VRAM 下标） */
     if (addr >= BUS_VRAM_BASE &&
         addr - BUS_VRAM_BASE < BUS_VRAM_SIZE) {

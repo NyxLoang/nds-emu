@@ -862,6 +862,39 @@ static void test_ipcsync_irq(nds_t *nds)
     nds->bus->active_is_arm7 = 0; /* 恢复默认视角，避免污染后续用例 */
 }
 
+/* ---- 阶段 21-B3 用例：Main RAM 无缓存镜像（0x02400000 起 4MB 别名） ---- */
+static void test_main_ram_mirror(nds_t *nds)
+{
+    /* 主区写 → 镜像区同偏移读到同一数据（别名） */
+    bus_write32(nds->bus, BUS_MAIN_RAM_BASE + 0x1E0000, 0xDEADBEEFu);
+    CHECK_EQ("ram mirror sees main",
+             bus_read32(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x1E0000), 0xDEADBEEFu);
+
+    /* 镜像区写 → 主区同偏移读到同一数据（反向别名） */
+    bus_write16(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x1000, 0xBEEFu);
+    CHECK_EQ("ram main sees mirror",
+             bus_read16(nds->bus, BUS_MAIN_RAM_BASE + 0x1000), 0xBEEFu);
+
+    /* FFXII 栈区往返：0x027E3F80（镜像）与主区 0x021E3F80 是同一物理地址 */
+    bus_write32(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x1E3F80, 0x020008F8u);
+    CHECK_EQ("ffxii stack save",
+             bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x1E3F80), 0x020008F8u);
+    CHECK_EQ("ffxii stack alias",
+             bus_read32(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x1E3F80), 0x020008F8u);
+
+    /* 镜像首字节与末字边界 */
+    bus_write8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE, 0xA5);
+    CHECK_EQ("mirror first byte", bus_read8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE), 0xA5u);
+    CHECK_EQ("mirror first -> main", bus_read8(nds->bus, BUS_MAIN_RAM_BASE), 0xA5u);
+    bus_write32(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + BUS_MAIN_RAM_SIZE - 4, 0x10203040u);
+    CHECK_EQ("mirror last word",
+             bus_read32(nds->bus, BUS_MAIN_RAM_BASE + BUS_MAIN_RAM_SIZE - 4), 0x10203040u);
+
+    /* 越界：镜像上界 0x02800000 读 0 */
+    CHECK_EQ("mirror beyond",
+             bus_read8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + BUS_MAIN_RAM_SIZE), 0x00u);
+}
+
 /* ---- 8.4 用例：交错调度 2:1 ---- */
 static void test_interleave(nds_t *nds)
 {
@@ -3512,6 +3545,13 @@ int main(void)
         if (nds == NULL) return 1;
         test_ipcsync_regs(nds);
         test_ipcsync_irq(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B3] Main RAM 无缓存镜像（0x02400000 起 4MB 别名）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_main_ram_mirror(nds);
         nds_destroy(nds);
     }
     printf("\n[case 8.4] 交错调度 2:1\n");

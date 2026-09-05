@@ -419,4 +419,20 @@
   已能置 IF。当前停在 0x0200EA84 等待对象忙位（0x02078F0A bit1）清 0，
   疑与 Timer0/GX/DMA 完成事件相关，排 B9i。
 
+## 2026-09-05 · 21-B9i — FIFO 送达 ARM7 + ARM7 IRQ 槽跳板
+
+- **做了什么**：
+  - `fifo.c`：修复 CNT 合并写——FFXII 用“高字节 0xC4”一次写完成错误应答（bit14）、
+    使能（bit15）与收非空 IRQ（bit10）；旧实现把含错误位的写入当纯应答，跳过了
+    使能位更新，导致 `cnt9/cnt7` 恒 0、ARM9 的 FIFO 命令全部被静默丢弃。
+  - `cpu.c`：ARM7 首中断现场槽从猜的 0x03FFFFFC 改为实测的 **0x0380FFFC**
+    （ARM7 WRAM 顶，FFXII 装的是 0x037FB8F4），并补 ARM7 IRQ 槽跳板 + HLE
+    现场保存/恢复（与 ARM9 DTCM 槽对称）。
+- **怎么验证**：新增 `[case 21-B9i]` 两项 10 检查：CNT 合并写后 send 能入队并置
+  ARM7 IF18；ARM7 触发 IRQ 能跳到 0x0380FFFC 指定的 handler 并恢复现场。
+  全量 **659 项检查 0 失败**。
+- **真 ROM 效果**：ARM9 的 FIFO 命令（0x04000188）真正进入队列并触发 ARM7 IRQ；
+  ARM7 handler 能完整执行并返回（不再从低向量 0x18 跑飞）。ARM9 仍停在
+  0x0200EA84 等忙位，下一步 B9j 查 ARM7 回执路径/忙位清除。
+
 

@@ -554,3 +554,13 @@
 - 全量 **649 项检查 0 失败**；真 ROM：任务队列不再成环，多帧 VBlank IRQ 正常
   进入/恢复。
 
+## 2026-09-05 · 21-B9i — FIFO CNT 合并写 + ARM7 IRQ 槽用例
+
+- `test_nds.c` 新增 `[case 21-B9i]`：
+  - `test_fifo_cnt_combine`：按 FFXII 的字节序写 CNT（0x08/0xC4），验证使能与收
+    IRQ 位保留、send 入队、ARM7 IF18 置位（4 项）。
+  - `test_arm7_irq_slot`：0x0380FFFC 槽指向 WRAM handler，验证 IRQ 进入/破坏 r1/
+    恢复现场/重执行被打断指令（6 项）。
+- 全量 **659 项检查 0 失败**；真 ROM：ARM9 FIFO 命令能送达 ARM7，ARM7 handler
+  不再跑飞；忙位清除路径待 B9j。
+

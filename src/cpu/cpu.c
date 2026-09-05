@@ -103,8 +103,8 @@ int cpu_step(arm_cpu_t *cpu)
             cpu->irq_dump_done = 1;
             uint32_t slot_f8 = 0, slot_fc = 0;
             if (cpu->is_arm7) {
-                slot_f8 = bus_read32(cpu->nds->bus, 0x03FFFFF8u);
-                slot_fc = bus_read32(cpu->nds->bus, 0x03FFFFFCu);
+                slot_f8 = bus_read32(cpu->nds->bus, 0x0380FFF8u);
+                slot_fc = bus_read32(cpu->nds->bus, 0x0380FFFCu);
             } else {
                 /* 用 bus 保存的 DTCM 基址计算槽位，游戏改配 DTCM 时也跟得上 */
                 uint32_t base = cpu->nds->bus->arm9_dtcm_on
@@ -158,6 +158,28 @@ int cpu_step(arm_cpu_t *cpu)
                 cpu->r[15] = slot_fc & ~1u;
                 /* dispatcher 以 stmdb/pop 成对使用 lr：给它“返回被中断 PC”的
                    地址（真 BIOS 桩会给 stub 地址再 SUBS 回这里，效果等价） */
+                cpu->r[14] = ret_pc;
+            }
+        }
+        /* 21-B9i：ARM7 IRQ 槽在 ARM7 WRAM 顶 0x0380FFFC（FFXII 实测指向
+           0x037FB8F4 的中断分发代码），与 ARM9 同样做 HLE 现场保存/恢复。 */
+        if (cpu->is_arm7) {
+            uint32_t slot_fc = bus_read32(cpu->nds->bus, 0x0380FFFCu);
+            if (slot_fc != 0) {
+                cpu->irq_hle.active = 1;
+                cpu->irq_hle.saved_cpsr = saved_cpsr;
+                cpu->irq_hle.ret_pc = ret_pc;
+                cpu->irq_hle.r[0] = cpu->r[0];
+                cpu->irq_hle.r[1] = cpu->r[1];
+                cpu->irq_hle.r[2] = cpu->r[2];
+                cpu->irq_hle.r[3] = cpu->r[3];
+                cpu->irq_hle.ip = cpu->r[12];
+                cpu->irq_hle.log_count++;
+                if (slot_fc & 1u)
+                    cpu->cpsr |= CPSR_T;
+                else
+                    cpu->cpsr &= ~CPSR_T;
+                cpu->r[15] = slot_fc & ~1u;
                 cpu->r[14] = ret_pc;
             }
         }

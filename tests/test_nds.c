@@ -1305,6 +1305,73 @@ static void test_bios_crc16(nds_t *nds)
     CHECK_EQ("crc16 cpu7 result", nds->cpu7->r[0], 0x4B37u);
 }
 
+/* ---- 21-B9i 用例：FIFO CNT 高字节 0xC4 = 错误应答 + 使能 + 收 IRQ ---- */
+static void test_fifo_cnt_combine(nds_t *nds)
+{
+    /* FFXII 启动代码对两核各写：低字节 0x08（清发送）、高字节 0xC4。
+       旧实现把含错误位的写入当“纯应答”，漏掉使能位导致 CNT 恒 0。 */
+    for (int arm7 = 0; arm7 <= 1; arm7++) {
+        nds->bus->active_is_arm7 = arm7;
+        bus_write8(nds->bus, IO_FIFO_CNT, 0x08u);
+        bus_write8(nds->bus, IO_FIFO_CNT + 1, 0xC4u);
+    }
+    nds->bus->active_is_arm7 = 0;
+    uint16_t c9 = bus_read16(nds->bus, IO_FIFO_CNT);
+    CHECK_EQ("fifo cnt9 enable", c9 & FIFO_CNT_ENABLE, FIFO_CNT_ENABLE);
+    CHECK_EQ("fifo cnt9 recvirq", c9 & FIFO_CNT_RECV_IRQ, FIFO_CNT_RECV_IRQ);
+
+    nds->io->irq[1].ifl = 0;
+    bus_write32(nds->bus, IO_FIFO_SEND, 0x12345678u);
+    CHECK_EQ("fifo from9 count", nds->io->fifo.from9.count, 1);
+    CHECK_EQ("fifo arm7 IF18",
+             nds->io->irq[1].ifl & IO_IF_FIFO_RECV_NOT_EMPTY,
+             IO_IF_FIFO_RECV_NOT_EMPTY);
+    nds->bus->active_is_arm7 = 0;
+}
+
+/* ---- 21-B9i 用例：ARM7 IRQ 槽（0x0380FFFC）跳用户 handler + HLE 恢复 ---- */
+static void test_arm7_irq_slot(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu7;
+    const uint32_t pc = BUS_ARM7_WRAM_BASE + 0x2000;      /* 被打断点 */
+    const uint32_t handler = BUS_ARM7_WRAM_BASE + 0x1000; /* handler 代码 */
+    const uint32_t irq_sp = BUS_ARM7_WRAM_BASE + 0x6000;  /* IRQ 栈 */
+
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, 0x0380FFFCu, handler);           /* ARM7 BIOS 槽 */
+    bus_write32(nds->bus, pc, 0xE1A00000u);                /* NOP 被中断指令 */
+    bus_write32(nds->bus, handler + 0x00, 0xE92D4000u);    /* STMFD sp!,{lr} */
+    bus_write32(nds->bus, handler + 0x04, 0xE3A01011u);    /* MOV r1,#0x11 */
+    bus_write32(nds->bus, handler + 0x08, 0xE8BD8000u);    /* LDMFD sp!,{pc} */
+
+    cpu->cpsr = ARM_MODE_SYS;
+    cpu->r[13] = BUS_ARM7_WRAM_BASE + 0x5000;
+    exec_apply_cpsr(cpu, ARM_MODE_IRQ | CPSR_I);
+    cpu->r[13] = irq_sp;
+    exec_apply_cpsr(cpu, ARM_MODE_USER);
+    cpu->r[1] = 0xABu;
+    nds->io->irq[1].ime = 1;
+    nds->io->irq[1].ie = IO_IF_FIFO_RECV_NOT_EMPTY;
+    nds->io->irq[1].ifl = IO_IF_FIFO_RECV_NOT_EMPTY;
+    cpu_reset(cpu, pc);
+    exec_set_trace(0);
+
+    cpu_step(cpu);
+    CHECK_EQ("arm7 slot pc=handler", cpu->r[15], handler);
+    CHECK_EQ("arm7 slot mode=IRQ", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_IRQ);
+    nds->io->irq[1].ifl = 0;
+    cpu_step(cpu); /* STMFD sp!,{lr} */
+    cpu_step(cpu); /* MOV r1,#0x11 */
+    CHECK_EQ("arm7 slot r1 clobbered", cpu->r[1], 0x11u);
+    cpu_step(cpu); /* LDMFD sp!,{pc} -> 返回被打断点 */
+    cpu_step(cpu); /* cpu_step 恢复现场并重执行 NOP */
+    CHECK_EQ("arm7 slot r1 restored", cpu->r[1], 0xABu);
+    CHECK_EQ("arm7 slot mode restored", cpu->cpsr & CPSR_MODE_MASK,
+             ARM_MODE_USER);
+    CHECK_EQ("arm7 slot pc advanced", cpu->r[15], pc + 4);
+    exec_set_trace(1);
+}
+
 /* ---- 阶段 21-B4 用例：ARM BX 奇地址应切 Thumb ---- */
 static void test_arm_bx_thumb(nds_t *nds)
 {
@@ -4048,6 +4115,14 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_ldm_user_bank(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9i] FIFO CNT 合并写 + ARM7 IRQ 槽跳板\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_fifo_cnt_combine(nds);
+        test_arm7_irq_slot(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");

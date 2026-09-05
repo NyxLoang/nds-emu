@@ -85,13 +85,13 @@ void fifo_cnt_write(ipc_fifo_t *f, int is_arm7, uint16_t val)
     if (val & FIFO_CNT_SEND_CLEAR)
         q_clear(fifo_send_q(f, is_arm7));      /* 清空发送队列 */
 
-    /* 错误位（bit14）写 1 清除（应答）；其余可写位（IRQ 使能 bit2/10、使能 bit15）保留 */
+    /* 21-B9i：可写控制位每次写都更新——FFXII 用“高字节 0xC4”一次写同时做
+       错误应答（bit14 写 1 清错）与使能（bit15）+ 收非空 IRQ（bit10）。
+       旧实现把含错误位的写入当成纯应答，丢掉使能位，导致 CNT 恒为 0。 */
+    *cnt &= (uint16_t)~(FIFO_CNT_SEND_IRQ | FIFO_CNT_RECV_IRQ | FIFO_CNT_ENABLE);
+    *cnt |= (uint16_t)(val & (FIFO_CNT_SEND_IRQ | FIFO_CNT_RECV_IRQ | FIFO_CNT_ENABLE));
     if (val & FIFO_CNT_ERROR)
         *cnt &= (uint16_t)~FIFO_CNT_ERROR;     /* 应答错误 */
-    else {
-        *cnt &= (uint16_t)~(FIFO_CNT_SEND_IRQ | FIFO_CNT_RECV_IRQ | FIFO_CNT_ENABLE);
-        *cnt |= (uint16_t)(val & (FIFO_CNT_SEND_IRQ | FIFO_CNT_RECV_IRQ | FIFO_CNT_ENABLE));
-    }
 }
 
 /* ---- 发送 / 接收 ---- */

@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-05 | 21-B9i | CPU/IO/测试 | FIFO CNT 合并写修复（错误应答不吞使能位）+ ARM7 IRQ 槽跳板（0x0380FFFC）；ARM9 FIFO 命令能送达 ARM7 并完成 handler（659 项检查 0 失败），忙位回执待 B9j | [cpu](src/cpu/cpulog.md) · [io](src/io/iolog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B9h | CPU/IO/测试 | LDM/STM ^ 的 User 槽语义（FFXII 任务队列不再成环）；VBlank 改回 bit0、Timer0-3 溢出置 IF bit3-6；headless 进度带 CPSR/IRQ 状态（649 项检查 0 失败），多帧 VBlank IRQ 可正常进入/恢复，新卡点 0x0200EA84 忙位待 B9i | [cpu](src/cpu/cpulog.md) · [io](src/io/iolog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B9g | CPU | 模式私有 r13/r14（banked registers）：MSR/异常/返回统一走模式同步；FFXII 三栈隔离，ARM9 不再跑飞（643 项 0 失败） | [cpu](src/cpu/cpulog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B9f | CPU | IRQ HLE 桩：跳 handler 前保存 r0-r3/r12/CPSR/返回点，返回后恢复；第一次 VBlank 链执行完，新卡点=模式共用 SP（633 项 0 失败） | [cpu](src/cpu/cpulog.md) · [21](docs/21-rom-bringup.md) |

@@ -251,3 +251,13 @@
   bit6（IRQ 使能）时把溢出置到当前核 IF 的 bit3-bit6。
 - FFXII 启动代码 `0x02008C70` 配置 TM0：CNT_H=0x00C1（1/64 分频 + IRQ 使能），
   headless 跑到约 419 万 ARM9 周期时溢出被正确置 IF，handler 能正常进入/恢复。
+
+## 2026-09-05 · 21-B9i — IPCFIFOCNT 合并写修复（错误应答不吞使能位）
+
+- FFXII 启动代码对两核各写 CNT：低字节 0x08（清发送队列）、高字节 0xC4。
+  0xC4 = bit15 使能 + bit10 收非空 IRQ + bit14 错误应答，一次写完成“清错并配置”。
+- `fifo_cnt_write` 旧实现见 bit14 就只清错误位、不再更新可写控制位，使 `cnt9/cnt7`
+  恒为 0，FIFO 发送被 fifo_send 静默忽略。修复为：控制位每次写都更新，bit14 仅作
+  应答清除。
+- 真 ROM 验证：ARM9 两条 FIFO 命令（0x80004106/0x40402806）能入队，ARM7 IF18
+  置位并触发 IRQ。

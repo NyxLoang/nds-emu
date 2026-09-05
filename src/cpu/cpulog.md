@@ -445,4 +445,14 @@
 - 验证：全量 **665 项检查 0 失败**；headless 3200 万步 ARM7 不再跌进
   0x0142xxxx/0xFFFFFFxx 跑飞，稳定停留在有效代码区。
 
+## 2026-09-06 · 21-B9m — ARM9 CP15 WFI（MCR p15,0,r0,c7,c0,4）
+
+- NDS9 没有 HALTCNT 寄存器，FFXII 的 OS 空闲任务直接执行 CP15 WFI 指令；
+  旧实现把它当普通 CP15 写忽略，空闲任务变成满速空转。
+- `cpu_step` 对 ARM9 的 `0xEE070F90` 特殊处理：中断未挂起 → PC 不动等待；
+  挂起到（IME 门控）→ 清 CPSR.I 后走正常 IRQ 入口。对应 GBATEK “NDS9 的
+  CP15 Halt 只受 IME 门控，IME=0 才锁死”的口径。
+- 验证：全量 704 项后保持 0 失败；headless 空闲任务 CPU 周期不再随 VBlank
+  无界增长，ARM9 每次帧中断被正常唤醒。
+
 

@@ -49,6 +49,7 @@ add_library(ndscore STATIC
     src/bios/bios_decompress.c
     src/bios/bios_wait.c
     src/bios/bios_crc16.c
+    src/bios/bios_snd.c
     src/io/io.c
     src/io/irq.c
     src/io/timer.c
@@ -58,6 +59,8 @@ add_library(ndscore STATIC
     src/io/disp.c
     src/io/touch.c
     src/io/memctl.c
+    src/io/power.c
+    src/io/math.c
     src/snd/snd.c
     src/gx/gx.c
     src/ppu/render.c

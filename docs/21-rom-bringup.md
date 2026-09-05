@@ -404,6 +404,64 @@ ARM9 PC 从 0x0200EA90 推进到 0x0200B838/0xF1BC 服务循环，ARM7 进入 0x
 0x37FBA10 从 IRQ 栈上方读旧任务寄存器帧，而槽跳板没有预填该帧。已在 ARM7 IRQ
 入口把 r0-r3/r12/lr(=PC+4) 写到 IRQ SP 上方，3200 万步内 ARM7 不再跑飞。
 
+### 21-B9j+（2026-09-06）：SPI device1 完整状态机 + 合法固件用户区
+
+**背景**：B9j 后半的最小 HLE 让 ARM9 第一次离开忙等，但 2M 步诊断显示 ARM9 仍
+卡在 0x0200EA88，ARM7 在 0x038043E2 被反复打断。抓 SPI 字节流后发现问题不是
+数据而是**解析错位**：
+
+```text
+8900:03 8900:03 8900:FE 8900:00 ...   ; READ 0x3FE00（地址首字节就是 0x03）
+```
+
+旧状态机把地址里的 0x03 再次当成 READ 命令，地址变成 0xFE0000 起，镜像全错。
+
+**做了什么**：
+- device1 状态机改为按片选（HOLD）分事务：命令只在事务开头解析，READ 收满
+  3 字节大端地址后逐字节回读；`touch.c` 合成最小固件内容：主机型号/MAC/偏移
+  0x7FC0/两个 CRC 合法的用户设置镜像。
+- 验证 675 项 0 失败；FFXII ARM9 推进到 0x02011918 卡带读块循环，新卡点不是
+  固件而是 ROMCTRL 忙位。
+
+### 21-B9k（2026-09-06）：ARM9 硬件除法/开方 + ROMCTRL 块忙位
+
+**背景**：0x04000280-2BF 是 NDS9 硬件 DIV/SQRT（此前被当成“未知 IO”），
+IRQ/调度器要保存这些寄存器；而 0x02011918 循环读 ROMCTRL 的 bit23/bit31，
+旧实现只置 DRQ 不落 bit31，块读完循环不退出。
+
+**做了什么**：
+- 新建 `src/io/math.h/.c`：DIVCNT/SQRTCNT 三模式除法（含除零/溢出钳制）与
+  32/64 位开方，瞬时模型。
+- `cartbus.c`：命令激活置 bit31=1，块内最后一字读完后 DRQ 与 bit31 一起清 0。
+- 验证 700 项 0 失败；FFXII 越过卡带读块循环，继续走 ARM7 SoundBias/启动服务。
+
+### 21-B9l（2026-09-06）：ARM7 SWI 0x08 SoundBias
+
+ARM7 在 0x038043FA 调 SWI 0x08（NDS7 BIOS SoundBias）。此前 unknown SWI 把
+ARM7 弹到 0x00000008 向量，之后在未映射低地址按 Thumb 漂移。新增
+`src/bios/bios_snd.c` 瞬时写 SOUNDBIAS（0x000/0x200），仅 ARM7 登记。
+验证 704 项 0 失败；ARM7 回到 Halt 服务入口。
+
+### 21-B9m（2026-09-06）：ARM9 CP15 WFI
+
+NDS9 无 HALTCNT，FFXII OS 空闲任务用 `MCR p15,0,r0,c7,c0,4` 代替 Halt。
+旧实现当普通 CP15 写忽略，空闲任务满速空转；按 GBATEK 口径实现 WFI：
+IME 门控下等 (IE&IF)，挂起后唤醒并进 IRQ。ARM9 的 CPU 周期不再无界增长。
+
+### 21-B9n（2026-09-06）：POWCNT/POSTFLG 默认值——越过“提前空闲”死锁
+
+**背景**：即使 WFI 正确，ARM9/ARM7 也会双双空闲，屏幕全白、DISPCNT=0。对比
+melonDS 直接启动初值发现缺整组电源寄存器：POWCNT1 读 0 让游戏以为 LCD/3D
+未上电，提前结束启动任务。
+
+**做了什么**：
+- 新建 `src/io/power.h/.c`：POSTFLG 双核=1、POWCNT1=0x820F、POWCNT2=1、
+  WIFIWAITCNT=0x30；写掩码/粘住位按真机。
+- headless 增加 `--screenshot`：跑完用纯渲染器输出双屏 24 位 BMP，便于不开
+  窗口核对画面。
+- 验证 716 项 0 失败；FFXII 离开 0x0200957C 空闲死锁，继续 0x027FFF8C 信箱
+  握手与启动服务（截图仍是白屏，说明画面初始化还在其后）。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

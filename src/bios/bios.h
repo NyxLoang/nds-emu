@@ -14,6 +14,7 @@ typedef struct arm_cpu arm_cpu_t; /* 前向声明：bios 只操作寄存器/总�
 #define BIOS_SWI_INTR_WAIT          0x04u
 #define BIOS_SWI_VBLANK_INTR_WAIT   0x05u
 #define BIOS_SWI_HALT               0x06u
+#define BIOS_SWI_SOUNDBIAS          0x08u   /* 仅 NDS7 */
 #define BIOS_SWI_DIV                0x09u
 #define BIOS_SWI_CPUSET             0x0Bu
 #define BIOS_SWI_CPUFASTSET         0x0Cu

@@ -62,3 +62,13 @@
 - 真机 headless：`bios: unknown SWI 0x0E` 消失；ARM7 终点由 0x000366A4
   前进到 0x037FC89C（进入自研 boot 代码轮询区），新卡点为 ARM9 高向量/IRQ
   与一批未知 IO 桩。
+
+## 2026-09-06 · 21-B9l — SWI 0x08 SoundBias（仅 NDS7）
+
+- FFXII ARM7 在 0x038043FA 调用 `SWI 0x08`；此前 0x08 未登记，unknown SWI 把
+  ARM7 送去 0x00000008 向量，随后在低地址未映射区逐 2 字节漂移。
+- 新增 `bios_snd.h/.c`：SoundBias 把 SOUNDBIAS 电平调到 r0 指定目标
+  （0=000h，其它=200h），保留寄存器高 6 位；r1 延迟在瞬时模型下忽略。
+- `bios.c` 只在 ARM7 核登记 0x08（ARM9 无此函数，仍走未知号异常路径）。
+- 新增 `[case 21-B9l]` Thumb 双参数断言；全量 **704 项检查 0 失败**。真 ROM
+  ARM7 不再漂移，稳定回到 0x038043E2 的 Halt 服务入口。

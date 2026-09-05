@@ -1307,6 +1307,43 @@ static void test_bios_crc16(nds_t *nds)
     CHECK_EQ("crc16 cpu7 result", nds->cpu7->r[0], 0x4B37u);
 }
 
+/* ---- 21-B9l：BIOS SWI 0x08 SoundBias（仅 ARM7；FFXII 启动在此卡住前） ---- */
+static void test_bios_soundbias(nds_t *nds)
+{
+    const uint32_t base = BUS_ARM7_WRAM_BASE + 0x1800u;
+    static const uint16_t prog[] = {
+        0xDF08, /* SWI 0x08 (SoundBias) */
+        0xE7FE, /* B self */
+    };
+
+    nds->bus->active_is_arm7 = 1;
+    thumb_write(nds, base, prog, 2);
+
+    /* r0≠0 → SOUNDBIAS 电平调到 0x200 */
+    bus_write16(nds->bus, SND_SOUNDBIAS, 0x0100u);
+    arm_cpu_t *cpu = nds->cpu7;
+    cpu->r[0] = 0x1234u;
+    cpu->r[1] = 8u;
+    cpu->cpsr |= CPSR_T;
+    cpu_reset(cpu, base);
+    cpu_step(cpu);
+    CHECK_EQ("soundbias arm7 pc", cpu->r[15], base + 2u);
+    CHECK_EQ("soundbias to 0x200",
+             bus_read16(nds->bus, SND_SOUNDBIAS), 0x0200u);
+
+    /* r0=0 → 电平调到 0x000 */
+    cpu->r[0] = 0u;
+    cpu->cpsr |= CPSR_T;
+    cpu_reset(cpu, base);
+    cpu_step(cpu);
+    CHECK_EQ("soundbias arm7 pc2", cpu->r[15], base + 2u);
+    CHECK_EQ("soundbias to 0x000",
+             bus_read16(nds->bus, SND_SOUNDBIAS), 0x0000u);
+
+    cpu->cpsr &= ~CPSR_T;
+    nds->bus->active_is_arm7 = 0;
+}
+
 /* ---- 21-B9i 用例：FIFO CNT 高字节 0xC4 = 错误应答 + 使能 + 收 IRQ ---- */
 static void test_fifo_cnt_combine(nds_t *nds)
 {
@@ -1401,15 +1438,209 @@ static void test_timer_reload_overflow(nds_t *nds)
     nds->bus->active_is_arm7 = 0;
 }
 
-/* ---- 21-B9j 用例：SPI device1（固件 Flash）最小回读 ---- */
+/* ---- 21-B9j+ 用例：SPI device1（固件 Flash）按片选事务解析 + 合法用户区 ---- */
 static void test_spi_fw_hle(nds_t *nds)
 {
+    /* 按 FFXII 实际序列：SPICNT=0x8900（使能+device1+保持片选）。
+       0x03 后跟 3 字节大端地址：首地址字节可以就是 0x03（0x3FE00），
+       不应再被当成新的 READ 命令。 */
     nds->bus->active_is_arm7 = 1;
     bus_write8(nds->bus, IO_SPICNT, 0x00u);
     bus_write8(nds->bus, IO_SPICNT + 1, 0x89u); /* 使能 + device1 */
     bus_write8(nds->bus, IO_SPIDATA, 0x03u);    /* READ 命令 */
-    CHECK_EQ("spi fw read 0xff",
+    CHECK_EQ("fw cmd echo 0xff",
              bus_read8(nds->bus, IO_SPIDATA), 0xFFu);
+    bus_write8(nds->bus, IO_SPIDATA, 0x03u);    /* 地址 0x3FE00 首字节 */
+    bus_write8(nds->bus, IO_SPIDATA, 0xFEu);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);    /* 读 0x3FE00：version=5 */
+    CHECK_EQ("fw mirror0 version lo",
+             bus_read8(nds->bus, IO_SPIDATA), 0x05u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);    /* 0x3FE01 */
+    CHECK_EQ("fw mirror0 version hi",
+             bus_read8(nds->bus, IO_SPIDATA), 0x00u);
+    bus_write8(nds->bus, IO_SPICNT + 1, 0x81u); /* 本字节传完撤片选 */
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);    /* 0x3FE02：favoriteColor */
+    CHECK_EQ("fw mirror0 favorite color",
+             bus_read8(nds->bus, IO_SPIDATA), 0x07u);
+
+    /* 新事务：读固件头 0x20 的用户设置偏移（C0 7F = 0x7FC0<<3） */
+    bus_write8(nds->bus, IO_SPICNT + 1, 0x89u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x03u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x20u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);
+    CHECK_EQ("fw header offset lo",
+             bus_read8(nds->bus, IO_SPIDATA), 0xC0u);
+    bus_write8(nds->bus, IO_SPICNT + 1, 0x81u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);
+    CHECK_EQ("fw header offset hi",
+             bus_read8(nds->bus, IO_SPIDATA), 0x7Fu);
+
+    /* RDSR：命令后下一字节回状态 0（就绪） */
+    bus_write8(nds->bus, IO_SPICNT + 1, 0x89u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x05u);
+    bus_write8(nds->bus, IO_SPICNT + 1, 0x81u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);
+    CHECK_EQ("fw rdsr 0x00",
+             bus_read8(nds->bus, IO_SPIDATA), 0x00u);
+
+    /* 读 0x3FF70 起的镜像 1 尾部：Update Counter=1、CRC=0xBAFD（小端） */
+    bus_write8(nds->bus, IO_SPICNT + 1, 0x89u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x03u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x03u);
+    bus_write8(nds->bus, IO_SPIDATA, 0xFFu);
+    bus_write8(nds->bus, IO_SPIDATA, 0x70u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);    /* 读 0x3FF70：counter=1 */
+    CHECK_EQ("fw mirror1 counter",
+             bus_read8(nds->bus, IO_SPIDATA), 0x01u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);    /* 读 0x3FF71：保留 0 */
+    CHECK_EQ("fw mirror1 reserved",
+             bus_read8(nds->bus, IO_SPIDATA), 0x00u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);    /* 读 0x3FF72：CRC 低字节 */
+    CHECK_EQ("fw mirror1 crc lo",
+             bus_read8(nds->bus, IO_SPIDATA), 0xFDu);
+    bus_write8(nds->bus, IO_SPICNT + 1, 0x81u);
+    bus_write8(nds->bus, IO_SPIDATA, 0x00u);    /* 读 0x3FF73：CRC 高字节 */
+    CHECK_EQ("fw mirror1 crc hi",
+             bus_read8(nds->bus, IO_SPIDATA), 0xBAu);
+    nds->bus->active_is_arm7 = 0;
+}
+
+/* ---- 21-B9k 用例：ARM9 硬件除法/开方寄存器（FFXII 启动早期访问 0x04000280-2BF） ---- */
+static void test_math_div_sqrt(nds_t *nds)
+{
+    /* 模式 0（32/32）：100000 / 7 = 14285 余 5 */
+    nds->bus->active_is_arm7 = 0;
+    bus_write8(nds->bus, MATH_DIVCNT, 0x00u);
+    bus_write32(nds->bus, MATH_DIV_NUMER, 100000u);
+    bus_write32(nds->bus, MATH_DIV_DENOM, 7u);
+    CHECK_EQ("math mode0 quot lo",
+             bus_read32(nds->bus, MATH_DIV_RESULT), 14285u);
+    CHECK_EQ("math mode0 quot hi",
+             bus_read32(nds->bus, MATH_DIV_RESULT + 4), 0u);
+    CHECK_EQ("math mode0 rem lo",
+             bus_read32(nds->bus, MATH_DIV_REM), 5u);
+    CHECK_EQ("math mode0 rem hi",
+             bus_read32(nds->bus, MATH_DIV_REM + 4), 0u);
+    CHECK_EQ("math mode0 busy bit clear",
+             bus_read16(nds->bus, MATH_DIVCNT) & 0x8000u, 0u);
+
+    /* 除零：-5/0 → DIV0 置位；32 位模式商低字=1、高字=-1，余数=-5 */
+    bus_write32(nds->bus, MATH_DIV_NUMER, 0xFFFFFFFBu);
+    bus_write32(nds->bus, MATH_DIV_DENOM, 0u);
+    CHECK_EQ("math div0 flag",
+             bus_read16(nds->bus, MATH_DIVCNT) & 0x4000u, 0x4000u);
+    CHECK_EQ("math div0 quot lo",
+             bus_read32(nds->bus, MATH_DIV_RESULT), 1u);
+    CHECK_EQ("math div0 quot hi",
+             bus_read32(nds->bus, MATH_DIV_RESULT + 4), 0xFFFFFFFFu);
+    CHECK_EQ("math div0 rem lo",
+             bus_read32(nds->bus, MATH_DIV_REM), 0xFFFFFFFBu);
+    CHECK_EQ("math div0 rem hi",
+             bus_read32(nds->bus, MATH_DIV_REM + 4), 0xFFFFFFFFu);
+
+    /* 只读位写不进去：写 busy/div0 后仍保留除零状态 */
+    bus_write16(nds->bus, MATH_DIVCNT, 0xC000u);
+    CHECK_EQ("math div flags readonly",
+             bus_read16(nds->bus, MATH_DIVCNT) & 0xC000u, 0x4000u);
+
+    /* 模式 1（64/32）：0x123456789ABCDEF0 / 16 = 0x0123456789ABCDEF */
+    bus_write8(nds->bus, MATH_DIVCNT, 0x01u);
+    bus_write32(nds->bus, MATH_DIV_NUMER, 0x9ABCDEF0u);
+    bus_write32(nds->bus, MATH_DIV_NUMER + 4, 0x12345678u);
+    bus_write32(nds->bus, MATH_DIV_DENOM + 4, 0u);
+    bus_write32(nds->bus, MATH_DIV_DENOM, 16u);
+    CHECK_EQ("math mode1 quot lo",
+             bus_read32(nds->bus, MATH_DIV_RESULT), 0x89ABCDEFu);
+    CHECK_EQ("math mode1 quot hi",
+             bus_read32(nds->bus, MATH_DIV_RESULT + 4), 0x01234567u);
+    CHECK_EQ("math mode1 rem",
+             bus_read32(nds->bus, MATH_DIV_REM), 0u);
+
+    /* 模式 2（64/64）：2^32 / 2^32 = 1 */
+    bus_write8(nds->bus, MATH_DIVCNT, 0x02u);
+    bus_write32(nds->bus, MATH_DIV_NUMER, 0u);
+    bus_write32(nds->bus, MATH_DIV_NUMER + 4, 1u);
+    bus_write32(nds->bus, MATH_DIV_DENOM + 4, 1u);
+    bus_write32(nds->bus, MATH_DIV_DENOM, 0u);
+    CHECK_EQ("math mode2 quot lo",
+             bus_read32(nds->bus, MATH_DIV_RESULT), 1u);
+    CHECK_EQ("math mode2 quot hi",
+             bus_read32(nds->bus, MATH_DIV_RESULT + 4), 0u);
+
+    /* 32 位溢出：-0x80000000 / -1 → 商 0x80000000，高字 0 */
+    bus_write8(nds->bus, MATH_DIVCNT, 0x00u);
+    bus_write32(nds->bus, MATH_DIV_NUMER, 0x80000000u);
+    bus_write32(nds->bus, MATH_DIV_NUMER + 4, 0u);
+    bus_write32(nds->bus, MATH_DIV_DENOM + 4, 0u);
+    bus_write32(nds->bus, MATH_DIV_DENOM, 0xFFFFFFFFu);
+    CHECK_EQ("math min/-1 quot lo",
+             bus_read32(nds->bus, MATH_DIV_RESULT), 0x80000000u);
+    CHECK_EQ("math min/-1 quot hi",
+             bus_read32(nds->bus, MATH_DIV_RESULT + 4), 0u);
+
+    /* 开方 32 位输入：sqrt(2500)=50 */
+    bus_write8(nds->bus, MATH_SQRTCNT, 0x00u);
+    bus_write32(nds->bus, MATH_SQRT_PARAM, 2500u);
+    CHECK_EQ("math sqrt32",
+             bus_read32(nds->bus, MATH_SQRT_RESULT), 50u);
+    CHECK_EQ("math sqrt busy clear",
+             bus_read16(nds->bus, MATH_SQRTCNT) & 0x8000u, 0u);
+
+    /* 开方 64 位输入：sqrt(2^32)=65536 */
+    bus_write8(nds->bus, MATH_SQRTCNT, 0x01u);
+    bus_write32(nds->bus, MATH_SQRT_PARAM, 0u);
+    bus_write32(nds->bus, MATH_SQRT_PARAM + 4, 1u);
+    CHECK_EQ("math sqrt64",
+             bus_read32(nds->bus, MATH_SQRT_RESULT), 65536u);
+}
+
+/* ---- 21-B9n 用例：电源/启动标志（POSTFLG/POWCNT1/2/WIFIWAITCNT） ---- */
+static void test_power_regs(nds_t *nds)
+{
+    nds->bus->active_is_arm7 = 0;
+
+    /* 直接启动默认值：两核 POSTFLG=1、ARM9 POWCNT1=0x820F */
+    CHECK_EQ("power post9 init",
+             bus_read8(nds->bus, IO_POWER_POSTFLG), 0x01u);
+    CHECK_EQ("power powcnt1 init",
+             bus_read16(nds->bus, IO_POWER_POWCNT), 0x820Fu);
+
+    /* bit0 粘住清不掉；bit1（ARM9 可写）能写 */
+    bus_write8(nds->bus, IO_POWER_POSTFLG, 0x00u);
+    CHECK_EQ("power post9 sticky",
+             bus_read8(nds->bus, IO_POWER_POSTFLG), 0x01u);
+    bus_write8(nds->bus, IO_POWER_POSTFLG, 0x02u);
+    CHECK_EQ("power post9 bit1",
+             bus_read8(nds->bus, IO_POWER_POSTFLG), 0x03u);
+
+    /* POWCNT1 只允许 0x820F 内可写位 */
+    bus_write16(nds->bus, IO_POWER_POWCNT, 0xFFFFu);
+    CHECK_EQ("power powcnt1 mask",
+             bus_read16(nds->bus, IO_POWER_POWCNT), 0x820Fu);
+    bus_write16(nds->bus, IO_POWER_POWCNT, 0x0003u);
+    CHECK_EQ("power powcnt1 off bits",
+             bus_read16(nds->bus, IO_POWER_POWCNT), 0x0003u);
+
+    /* ARM7 侧：POSTFLG bit1 恒 0、POWCNT2 默认喇叭开、WIFIWAITCNT=0x30 */
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("power post7 init",
+             bus_read8(nds->bus, IO_POWER_POSTFLG), 0x01u);
+    bus_write8(nds->bus, IO_POWER_POSTFLG, 0x03u);
+    CHECK_EQ("power post7 bit1 zero",
+             bus_read8(nds->bus, IO_POWER_POSTFLG), 0x01u);
+    CHECK_EQ("power powcnt2 init",
+             bus_read16(nds->bus, IO_POWER_POWCNT), 0x0001u);
+    bus_write16(nds->bus, IO_POWER_POWCNT, 0xFFFFu);
+    CHECK_EQ("power powcnt2 mask",
+             bus_read16(nds->bus, IO_POWER_POWCNT), 0x0003u);
+    CHECK_EQ("power wifiwait init",
+             bus_read16(nds->bus, IO_POWER_WIFIWAIT), 0x0030u);
+    bus_write8(nds->bus, IO_POWER_WIFIWAIT, 0x21u);
+    CHECK_EQ("power wifiwait write",
+             bus_read16(nds->bus, IO_POWER_WIFIWAIT), 0x0021u);
     nds->bus->active_is_arm7 = 0;
 }
 
@@ -2995,6 +3226,10 @@ static void test_cartbus_read(nds_t *nds)
     /* DRQ 就绪 */
     CHECK_EQ("cart romctrl DRQ", bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
              CART_ROMCTRL_DRQ);
+    /* 21-B9k：bit31 = 块传输忙，块读完前保持 1（FFXII 手动轮询该位） */
+    CHECK_EQ("cart romctrl busy",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_ACTIVATE,
+             CART_ROMCTRL_ACTIVATE);
 
     /* 从 0x100 读 4 字：每次读自动 +4 */
     for (int i = 0; i < 4; i++) {
@@ -3006,6 +3241,17 @@ static void test_cartbus_read(nds_t *nds)
         snprintf(nm, sizeof nm, "cart data word[%d]", i);
         CHECK_EQ(nm, bus_read32(nds->bus, BUS_CARD_DATA), want);
     }
+
+    /* 块大小=4（ROMCTRL bit24-26=7）：读完 1 字后 DRQ 与 busy 同时回落 */
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x87u);
+    CHECK_EQ("cart 4B busy",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_ACTIVATE,
+             CART_ROMCTRL_ACTIVATE);
+    bus_read32(nds->bus, BUS_CARD_DATA);
+    CHECK_EQ("cart 4B done busy",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_ACTIVATE, 0u);
+    CHECK_EQ("cart 4B done DRQ",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ, 0u);
 
     /* 越界读：命令读 0x3FC（rom 只有 0x400），第 2 字越界 → 0xFFFFFFFF */
     static const uint8_t cmd2[8] = {0xB7, 0x00, 0x00, 0x03, 0xFC, 0x00, 0x00, 0x00};
@@ -4180,11 +4426,32 @@ int main(void)
         test_spi_fw_hle(nds);
         nds_destroy(nds);
     }
+    printf("\n[case 21-B9k] ARM9 硬件除法/开方寄存器（DIVCNT/SQRT）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_math_div_sqrt(nds);
+        nds_destroy(nds);
+    }
     printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");
     {
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_bios_crc16(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9l] ARM7 BIOS SWI 0x08 SoundBias\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bios_soundbias(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9n] 电源/启动寄存器（POWCNT1/2 + POSTFLG）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_power_regs(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B4] ARM BX 奇地址切 Thumb\n");

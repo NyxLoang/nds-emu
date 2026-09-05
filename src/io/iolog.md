@@ -284,3 +284,40 @@
   回 0xFF（1 项）。
 - 全量 **665 项检查 0 失败**。真 ROM 效果：ARM9 首次真正离开 0x0200EA90 忙等，
   推进到 0x0200B838/0x0200F1BC 的后续服务循环；ARM7 也进入 0x027F6xxx 继续处理。
+
+## 2026-09-06 · 21-B9j+ — SPI device1 固件完整状态机 + 合法用户区
+
+- 诊断日志确认 FFXII 的真实 SPI 流：READ=0x03 后跟 3 字节大端地址；首字节地址
+  本身就是 0x03（读 0x3FE00），旧状态机把它误判成新命令，导致镜像全部错位。
+- `touch.h` 状态改为“片选保持 + 事务字节位”模型：`fw_cs/fw_cmd/fw_addr/
+  fw_addr_n`；每次 SPIDATA 写按 HOLD 位决定事务是否续接，命令字节只在事务开头
+  解析，READ 收满 3 字节地址后逐字节回读并自增地址。
+- 模拟器没有 firmware.bin，按 DS 出厂语义合成最小固件：0x1D=主机型号、
+  0x20/21=用户设置偏移 0x7FC0、0x2C/2D=Wi-Fi 长度、0x36-3B=MAC、
+  0x3C/3D=频道；0x3FE00/0x3FF00 两个用户设置镜像带 version/语言/触摸校准/
+  Update Counter，0x72 处 CRC-16/IBM 与内容一致，其余按擦除态 0xFF。
+- 新增 `[case 21-B9j+]`：按 FFXII 真实序列验证镜像 0 首字节、0x20 偏移、
+  RDSR、镜像 1 尾部 counter+CRC 等 11 项；全量 **675 项检查 0 失败**。
+- 真 ROM：ARM9 从 0x0200EA88 继续推进，卡带数据装载循环可读完整块。
+
+## 2026-09-06 · 21-B9k — ARM9 硬件除法/开方 + ROMCTRL 忙位
+
+- 新增 `math.h/.c`（0x04000280-2BF，仅 ARM9）：DIVCNT/DIV_NUMER/DENOM/
+  RESULT/REM（64 位）与 SQRTCNT/SQRT_RESULT/PARAM；写控制或操作数即触发计算，
+  瞬时模型 busy 恒 0，除零/溢出按真机钳制，DIV0 标志看完整 64 位除数。
+- `cartbus.c`：ROMCTRL bit31 是“块传输忙”——命令激活后置 1，块内 CARD_DATA
+  读完最后一字才回落 0；FFXII 用 CPU 循环同时轮询 bit23(DRQ) 与 bit31。
+- 新增 `[case 21-B9k]`（除法三模式/除零/溢出/开方）与 15.2 的 4 字节块忙位
+  用例；全量 **700 项检查 0 失败**。真 ROM：卡带读块循环结束，ARM9 继续进入
+  后续启动服务。
+
+## 2026-09-06 · 21-B9n — POWCNT1/2、POSTFLG、WIFIWAITCNT 默认值
+
+- 新增 `power.h/.c`：ARM9 POWCNT1（0x04000304）默认 0x820F（LCD/2D/3D/
+  EngineB/换屏全开）、ARM7 POWCNT2 默认 0x0001（喇叭开）、两核 POSTFLG
+  默认 1、ARM7 WIFIWAITCNT 默认 0x0030；写掩码与 bit0 粘住语义按真机。
+- 直接启动语义对齐 melonDS：此前这些寄存器读 0，FFXII 的启动服务把 LCD/3D
+  状态误判为“未上电”，提前进了空闲任务。
+- 新增 `[case 21-B9n]`（默认值/掩码/粘位，12 项）；全量 **716 项检查 0 失败**。
+- 真 ROM：ARM9 不再停在 0x0200957C 空闲死锁，继续跑 ARM7 启动服务与
+  0x027FFF8C 信箱握手。

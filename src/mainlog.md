@@ -117,6 +117,14 @@
 - **怎么验证**：`cmake --build build --parallel` 编译通过；`test_nds.exe` 528 项检查 0 失败。
 - **结果**：✅ 编译与自动化测试通过（终端中文显示待用户按验收步骤确认）。
 
+## 2026-09-06 · 21-B9n — headless 双屏 BMP 截图诊断（`--screenshot`）
+
+- bring-up 阶段需要“不开窗口也能看到 FFXII 画面进展”：`--headless N
+  --screenshot` 在跑完后调用纯渲染器 `render_frame`，把顶屏/底屏各 256×192
+  纵向拼成 24 位 BMP 存为 `headless_shot.bmp`（不依赖 SDL 纹理）。
+- `runner.c` 增加 BMP 编码（BGR、行自下而上、4 字节对齐）；`main.c` 解析
+  `--screenshot` 开关。无参数时行为与原来完全一致。
+
 ## 2026-09-05 · 21-B8 — 直接启动 0x027FFxxx 卡带信息表
 
 - `main.c` 装载 ROM 后、写镜像前，按 melonDS `SetupDirectBoot` 口径把卡带头信息写进

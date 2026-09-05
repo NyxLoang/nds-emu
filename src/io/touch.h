@@ -46,6 +46,10 @@
 typedef struct touch {
     uint16_t spicnt;     /* SPICNT（busy 位只读，恒 0） */
     uint8_t  spidata;    /* SPIDATA（最近一次传输收到的字节） */
+    int      fw_cs;      /* 21-B9j+：device1 片选是否仍保持（0=事务已结束） */
+    uint8_t  fw_cmd;     /* 21-B9j+：当前事务命令：0x03=READ、0x05=RDSR */
+    uint32_t fw_addr;    /* 21-B9j+：READ 地址（3 字节大端；数据阶段逐字节自增） */
+    int      fw_addr_n;  /* 21-B9j+：已收到的 READ 地址字节数（0..3） */
     /* TSC 内部状态机 */
     uint8_t  cmd;        /* 最近一条命令字节 */
     uint8_t  channel;    /* 解码出的通道（0-7） */

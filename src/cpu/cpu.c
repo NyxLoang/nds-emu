@@ -85,6 +85,15 @@ int cpu_step(arm_cpu_t *cpu)
     /* 12.5：取指前检查 IRQ。条件 = 该核 IF&IE&IME 挂起，且 CPSR 的 I 位未禁止。
        满足则进 IRQ 异常向量（0x18），PC 跳到 handler；被打断指令地址留作返回点。 */
     irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
+    /* 21-B9m：ARM9 的 CP15 WFI（MCR p15,0,r0,c7,c0,4）等价于 NDS7 的 HALTCNT
+       ——NDS9 没有 HALTCNT 寄存器，游戏/OS 空闲任务直接执行 WFI 指令。
+       NDS9 的 CP15 Halt 只受 IME 门控（IME=0 会永久锁死），不会因 CPSR.I 屏蔽
+       而卡住；挂起未到 → PC 不动等待，挂起到 → 清 I 后走正常 IRQ 入口。 */
+    if (!cpu->is_arm7 && cpu_fetch(cpu) == 0xEE070F90u) {
+        if (!irq_pending(irq))
+            return 1;
+        cpu->cpsr &= ~CPSR_I;
+    }
     /* 21-B9h：IF&IE 已挂起却被 CPSR.I 屏蔽时只提示一次 */
     if (irq_pending(irq) && (cpu->cpsr & CPSR_I) && !cpu->irq_mask_logged) {
         cpu->irq_mask_logged = 1;

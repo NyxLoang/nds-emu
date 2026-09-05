@@ -10,6 +10,8 @@
 #include "disp.h"
 #include "touch.h"
 #include "memctl.h"
+#include "power.h"
+#include "math.h"
 #include "snd/snd.h"
 #include "gx/gx.h"
 #include "cart/cartbus.h"
@@ -33,6 +35,8 @@ typedef struct io {
     disp_t disp;                      /* 2D 显示控制（阶段 9：DISPCNT/BGxCNT/滚动） */
     touch_t touch;                    /* 触摸屏 SPI（阶段 17：SPICNT/SPIDATA + TSC） */
     memctl_t memctl;                  /* 内存控制（阶段 21-B7：EXMEMCNT/WRAMCNT） */
+    power_t power;                    /* 电源/调试（阶段 21-B9n：POWCNT/POSTFLG） */
+    math_t math;                      /* 硬件除法/开方（阶段 21-B9k：DIV/SQRT） */
     snd_t snd;                        /* 音频（阶段 18：16 通道 + SOUNDCNT/SOUNDBIAS） */
     gx_t gx;                          /* 3D 几何引擎（阶段 19：DISP3DCNT/GXSTAT/GXFIFO） */
     cartbus_t cartbus;                /* 卡带总线（阶段 15：ROMCTRL/命令/数据端口） */

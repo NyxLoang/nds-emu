@@ -24,6 +24,10 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9n | IO/CPU/测试 | 电源/启动寄存器 POWCNT1/2+POSTFLG+WIFIWAITCNT 默认值 + ARM9 WFI 等待语义 + `--screenshot` 诊断；FFXII 越过空闲死锁继续启动（716 项 0 失败） | [io](src/io/iolog.md) · [cpu](src/cpu/cpulog.md) · [main](src/mainlog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-06 | 21-B9l | BIOS/测试 | ARM7 SWI 0x08 SoundBias（仅 NDS7）；FFXII ARM7 不再因 unknown SWI 落入低地址漂移（704 项 0 失败） | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-06 | 21-B9k | IO/卡带/测试 | ARM9 硬件除法/开方寄存器（DIV/SQRT）+ ROMCTRL bit31 忙位/块结束语义；FFXII 卡带读块循环推进到启动服务（700 项 0 失败） | [io](src/io/iolog.md) · [cart](src/cart/cartlog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-06 | 21-B9j+ | IO/测试 | SPI device1 固件 Flash 完整事务状态机 + CRC 合法用户设置镜像；FFXII 固件序列错位修复，ARM9 离开忙等进入 ROM 装载（675 项 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9j（后半之二） | CPU | ARM7 IRQ 入口帧预填：0x37FBA10 不再从空 IRQ 栈读 0，3200 万步内 ARM7 不跑飞（665 项 0 失败） | [cpu](src/cpu/cpulog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9j（后半） | IO/测试 | SPI device1（固件 Flash）最小回读 0xFF；ARM9 首次离开忙等推进到 0x0200B838 服务循环（665 项检查 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B9j（前半） | IO/测试 | 定时器 CNT_L reload 语义 + VBlank 双核置 IF；ARM7 能收到帧事件，service6 完成回执仍待追（664 项检查 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |

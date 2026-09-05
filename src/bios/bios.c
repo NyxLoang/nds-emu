@@ -6,6 +6,7 @@
 #include "bios_decompress.h"
 #include "bios_wait.h"
 #include "bios_crc16.h"
+#include "bios_snd.h"
 
 /* HLE 分发：把 SWI 函数号路由到对应功能文件。
    返回 BIOS_RET_* 之一，exec_step 据返回值决定 SWI 之后 PC 是否前进。 */
@@ -23,6 +24,9 @@ int bios_dispatch(uint32_t n, arm_cpu_t *cpu)
     case BIOS_SWI_RL_WRAM:    return bios_rl(cpu);
     case BIOS_SWI_RL_VRAM:    return bios_rl(cpu);
     case BIOS_SWI_GET_CRC16:  return bios_crc16(cpu);
+    case BIOS_SWI_SOUNDBIAS:
+        /* SoundBias 只存在于 NDS7；ARM9 的 0x08 未定义，走未知号异常路径 */
+        return cpu->is_arm7 ? bios_soundbias(cpu) : BIOS_RET_UNKNOWN;
     case BIOS_SWI_HALT:             return bios_halt(cpu);
     case BIOS_SWI_INTR_WAIT:        return bios_intr_wait(cpu);
     case BIOS_SWI_VBLANK_INTR_WAIT: return bios_vblank_intr_wait(cpu);

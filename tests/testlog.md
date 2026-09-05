@@ -579,3 +579,30 @@
 - 全量 **665 项检查 0 失败**；真 ROM：ARM9 第一次离开忙等并推进到后续服务循环，
   ARM7 不再停在 0x0200EA90 对应等待。
 
+## 2026-09-06 · 21-B9j+ — SPI device1 完整状态机用例
+
+- `test_spi_fw_hle` 重写为 FFXII 真实序列：0x03+大端地址 03 FE 00（地址首字节
+  也是 0x03）→ 镜像 0 的 version/favoriteColor；0x20 用户设置偏移 C0 7F；
+  RDSR；0x3FF70 镜像 1 的 Update Counter=1、CRC=BAFD。共 11 项。
+- 全量 **675 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9k — 硬件除法/开方 + ROMCTRL 忙位用例
+
+- `test_math_div_sqrt`：模式 0/1/2 除法、除零 DIV0 位与商/余数、32 位
+  -MAX/-1 溢出、只读位写不进去、32/64 位开方（21 项）。
+- 15.2 补 4 字节块：激活后 bit31=1，读 1 字后 busy 与 DRQ 同时回落（3 项）。
+- 全量 **700 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9l — SoundBias SWI 用例
+
+- `test_bios_soundbias`：ARM7 Thumb `SWI 0x08`，r0≠0 → SOUNDBIAS=0x200，
+  r0=0 → 0x000，PC 均前进 2 字节（4 项）。
+- 全量 **704 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9n — 电源/启动寄存器用例
+
+- `test_power_regs`：POSTFLG 默认 1/bit0 粘住/ARM9 bit1 可写/ARM7 bit1 恒 0；
+  POWCNT1 可写掩码 0x820F、POWCNT2 掩码 0x0003；WIFIWAITCNT 默认 0x30 并可写
+  （12 项）。
+- 全量 **716 项检查 0 失败**；真 ROM 越过空闲死锁继续启动服务。
+

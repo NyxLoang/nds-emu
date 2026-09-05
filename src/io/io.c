@@ -8,6 +8,7 @@ io_t *io_create(void)
     io_t *io = calloc(1, sizeof(io_t));
     if (io != NULL) {
         memctl_reset(&io->memctl); /* 直接启动初值：WRAMCNT=3，EXMEMCNT=0xE880 */
+        power_reset(&io->power);   /* 直接启动初值：LCD/2D/3D/喇叭全开 */
         cartbus_init(&io->cartbus);
         gx_reset(&io->gx); /* 矩阵置单位阵 + 视口默认 + GXSTAT 置 FIFO 空 */
     }
@@ -79,6 +80,10 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return ipc_sync_read8(&io->sync, addr, is_arm7);
     if (memctl_is_addr(addr))
         return memctl_read8(&io->memctl, addr, is_arm7);
+    if (power_is_addr(addr) && (is_arm7 || addr >= IO_POWER_POSTFLG))
+        return power_read8(&io->power, addr, is_arm7);
+    if (math_is_addr(addr) && !is_arm7)
+        return math_read8(&io->math, addr);
     if (fifo_is_cnt_addr(addr))
         return fifo_cnt_read8((ipc_fifo_t *)&io->fifo, addr, is_arm7);
     if (addr >= IO_TIMER0_BASE && addr < IO_TIMER_END)
@@ -116,6 +121,14 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     }
     if (memctl_is_addr(addr)) {
         memctl_write8(&io->memctl, addr, val, is_arm7);
+        return;
+    }
+    if (power_is_addr(addr) && (is_arm7 || addr >= IO_POWER_POSTFLG)) {
+        power_write8(&io->power, addr, val, is_arm7);
+        return;
+    }
+    if (math_is_addr(addr) && !is_arm7) {
+        math_write8(&io->math, addr, val);
         return;
     }
     if (fifo_is_cnt_addr(addr)) {

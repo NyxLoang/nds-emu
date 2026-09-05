@@ -67,7 +67,15 @@ static void cartbus_activate(cartbus_t *cb)
         cb->xfer_remaining = 0;
     }
 
-    cb->romctrl |= CART_ROMCTRL_DRQ; /* 瞬时传输模型：立即就绪 */
+    /* 瞬时传输模型：命令一锁存，块内数据立即全部就绪（DRQ=1），
+       bit31 保持“传输忙”直到块被读完，最后一块读完才回落 0。
+       FFXII 用 CPU 轮询 ROMCTRL：bit23=1 时读 CARD_DATA，bit31=1 期间循环。 */
+    if (cb->xfer_remaining > 0) {
+        cb->romctrl |= CART_ROMCTRL_DRQ;
+        cb->romctrl |= CART_ROMCTRL_ACTIVATE; /* bit31：传输中/忙 */
+    } else {
+        cb->romctrl &= ~(CART_ROMCTRL_DRQ | CART_ROMCTRL_ACTIVATE);
+    }
 }
 
 uint8_t cartbus_read8(cartbus_t *cb, uint32_t addr)
@@ -134,17 +142,21 @@ uint32_t cartbus_read32(cartbus_t *cb)
 {
     if (cb->rom == NULL) {
         cb->romctrl &= ~CART_ROMCTRL_DRQ;
+        cb->romctrl &= ~CART_ROMCTRL_ACTIVATE;
         return 0xFFFFFFFFu;
     }
     if (cb->xfer_remaining == 0) {
         cb->romctrl &= ~CART_ROMCTRL_DRQ;
+        cb->romctrl &= ~CART_ROMCTRL_ACTIVATE;
         return 0xFFFFFFFFu;
     }
 
     uint32_t v = rom_le32(cb->rom, cb->rom_size, cb->xfer_addr);
     cb->xfer_addr += 4;
     cb->xfer_remaining = (cb->xfer_remaining > 4) ? cb->xfer_remaining - 4 : 0;
-    if (cb->xfer_remaining == 0)
+    if (cb->xfer_remaining == 0) {
         cb->romctrl &= ~CART_ROMCTRL_DRQ; /* 本块读完，清就绪 */
+        cb->romctrl &= ~CART_ROMCTRL_ACTIVATE; /* 传输结束，bit31 回落 0 */
+    }
     return v;
 }

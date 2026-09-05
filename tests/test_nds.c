@@ -445,13 +445,13 @@ static void test_irq_regs(nds_t *nds)
     bus_write32(nds->bus, IO_IME_ADDR, 0x00000001u);
     CHECK_EQ("IME write/read", bus_read32(nds->bus, IO_IME_ADDR), 0x00000001u);
 
-    /* IE：使能 VBlank（bit3）与其他位 */
-    bus_write32(nds->bus, IO_IE_ADDR, 0x00000008u);
-    CHECK_EQ("IE write/read", bus_read32(nds->bus, IO_IE_ADDR), 0x00000008u);
+    /* IE：使能 VBlank（bit0，与 NDS 硬件一致） */
+    bus_write32(nds->bus, IO_IE_ADDR, IO_IF_VBLANK);
+    CHECK_EQ("IE write/read", bus_read32(nds->bus, IO_IE_ADDR), IO_IF_VBLANK);
 
     /* IF：硬件（io_set_vblank）置位后能读到 */
     io_set_vblank(nds->io);
-    CHECK_EQ("IF vblank set", bus_read32(nds->bus, IO_IF_ADDR), 0x00000008u);
+    CHECK_EQ("IF vblank set", bus_read32(nds->bus, IO_IF_ADDR), IO_IF_VBLANK);
 
     /* IF 写 1 清除：只清被写 1 的位，写 0 的位不受影响 */
     io_set_vblank(nds->io);              /* 重新挂起 */
@@ -459,16 +459,16 @@ static void test_irq_regs(nds_t *nds)
     CHECK_EQ("IF clear-all", bus_read32(nds->bus, IO_IF_ADDR), 0x00000000u);
 
     io_set_vblank(nds->io);
-    bus_write32(nds->bus, IO_IF_ADDR, 0x00000008u); /* 只清 VBlank 位 */
+    bus_write32(nds->bus, IO_IF_ADDR, IO_IF_VBLANK); /* 只清 VBlank 位 */
     CHECK_EQ("IF clear vblank only", bus_read32(nds->bus, IO_IF_ADDR), 0x00000000u);
 }
 
-/* ---- 6.3 用例：指令计数产生 VBlank（IF bit3 位置位） ---- */
+/* ---- 6.3 用例：指令计数产生 VBlank（IF bit0 位置位） ---- */
 static void test_vblank_flag(nds_t *nds)
 {
-    /* 每帧跑完固定步数后 io_set_vblank，IF 的 bit3 应为 1 */
+    /* 每帧跑完固定步数后 io_set_vblank，IF 的 bit0 应为 1 */
     io_set_vblank(nds->io);
-    CHECK_EQ("IF bit3 (VBlank) set", bus_read32(nds->bus, IO_IF_ADDR), IO_IF_VBLANK);
+    CHECK_EQ("IF bit0 (VBlank) set", bus_read32(nds->bus, IO_IF_ADDR), IO_IF_VBLANK);
 }
 
 /* ---- 6.4 用例：最小 IRQ 响应（pending 检测） ----
@@ -542,7 +542,7 @@ static void test_keyinput(nds_t *nds)
 }
 
 /* ---- 6.7 用例：等 VBlank（CPU 轮询 IF，置位后写 VRAM） ----
-   程序：读 IF → 检查 bit3 → 没置位就继续转圈 → 置位后把黄色写进 VRAM。
+   程序：读 IF → 检查 bit0 → 没置位就继续转圈 → 置位后把黄色写进 VRAM。
    测试先跑一段（不给 VBlank），应停在轮询循环、不写屏；
    再 io_set_vblank 后继续，应走出循环并写屏。 */
 static void test_wait_vblank(nds_t *nds)
@@ -554,7 +554,7 @@ static void test_wait_vblank(nds_t *nds)
         /* 0x04 */ 0xE2800C02, /* ADD r0, r0, #0x200        r0 = 0x04000200（0x02 ROR 24） */
         /* 0x08 */ 0xE2800014, /* ADD r0, r0, #0x14         r0 = 0x04000214（IF） */
         /* 0x0C */ 0xE5901000, /* LDR r1, [r0]              r1 = IF */
-        /* 0x10 */ 0xE2112008, /* ANDS r2, r1, #8           VBlank 位（bit3）→ Z 标志 */
+        /* 0x10 */ 0xE2112001, /* ANDS r2, r1, #1           VBlank 位（bit0）→ Z 标志 */
         /* 0x14 */ 0x1A000000, /* BNE 0x1C                  置位则跳出等待 */
         /* 0x18 */ 0xEAFFFFFB, /* B 0x0C                    没置位继续轮询 */
         /* 0x1C */ 0xE3A03406, /* MOV r3, #0x06000000       r3 = VRAM 基址 */
@@ -1124,7 +1124,7 @@ static void test_clz(nds_t *nds)
         { 0x80000000u,  0u, "clz top bit"     },
         { 0x00000001u, 31u, "clz low bit"     },
         { 0x00042009u, 13u, "clz ffxii ie"    }, /* 最高位 bit18：前导 13 个零 */
-        { 0x00000008u, 28u, "clz vblank bit3" },
+        { IO_IF_VBLANK, 31u, "clz vblank bit0" },
     };
 
     bus_write32(nds->bus, base, 0xE16F0F11u); /* CLZ r0, r1 */
@@ -1211,6 +1211,44 @@ static void test_banked_r13_r14(nds_t *nds)
     CHECK_EQ("bank irq sp kept", cpu->r[13], 0x027E3F7Cu);
     CHECK_EQ("bank irq lr kept", cpu->r[14], 0x44444444u);
     CHECK_EQ("bank mode", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_IRQ);
+}
+
+/* ---- 21-B9h 用例：LDM ^（列表不含 PC）载入 User 槽 r13/r14 ---- */
+static void test_ldm_user_bank(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t mem = base + 0x800;
+
+    /* 当前在 SVC 模式：SVC 私有 SP/LR 与 User/System 槽必须互不影响 */
+    cpu->cpsr = ARM_MODE_SYS;
+    cpu->r[13] = 0x027E3AF8u;
+    cpu->r[14] = 0x11111111u;
+    exec_apply_cpsr(cpu, ARM_MODE_SVC);
+    cpu->r[13] = 0x027E3FC0u;
+    cpu->r[14] = 0x22222222u;
+
+    /* 内存里放一份“任务现场”：r0-r12 各异，r13/r14 是要装进 User 槽的值 */
+    for (int i = 0; i < 15; i++)
+        bus_write32(nds->bus, mem + 4u * (uint32_t)i,
+                    (uint32_t)(0x100 + i));
+    bus_write32(nds->bus, mem + 4u * 13u, 0x03000000u);
+    bus_write32(nds->bus, mem + 4u * 14u, 0x04000000u);
+
+    bus_write32(nds->bus, base, 0xE8D07FFFu); /* LDMIA r0, {r0-r14}^ */
+    cpu->r[0] = mem;
+    cpu_reset(cpu, base);
+    exec_set_trace(0);
+    cpu_step(cpu);
+
+    CHECK_EQ("ldmu pc", cpu->r[15], base + 4);
+    CHECK_EQ("ldmu r1 loaded", cpu->r[1], 0x101u);
+    CHECK_EQ("ldmu svc sp kept", cpu->r[13], 0x027E3FC0u);
+    CHECK_EQ("ldmu svc lr kept", cpu->r[14], 0x22222222u);
+    exec_apply_cpsr(cpu, ARM_MODE_SYS);
+    CHECK_EQ("ldmu user sp loaded", cpu->r[13], 0x03000000u);
+    CHECK_EQ("ldmu user lr loaded", cpu->r[14], 0x04000000u);
+    exec_set_trace(1);
 }
 
 /* ---- 21-B9a: BIOS SWI 0x0E GetCRC16 (CRC-16/IBM) ---- */
@@ -1328,7 +1366,7 @@ static void test_irq_split(nds_t *nds)
     /* ARM9 写 IME/IE，ARM7 应读到独立（清零）的值 */
     nds->bus->active_is_arm7 = 0;
     bus_write32(nds->bus, IO_IME_ADDR, 0x00000001u);
-    bus_write32(nds->bus, IO_IE_ADDR,  0x00000008u);
+    bus_write32(nds->bus, IO_IE_ADDR,  IO_IF_VBLANK);
 
     nds->bus->active_is_arm7 = 1;
     CHECK_EQ("arm7 IME independent", bus_read32(nds->bus, IO_IME_ADDR), 0x00000000u);
@@ -1337,7 +1375,7 @@ static void test_irq_split(nds_t *nds)
     /* ARM9 视角读回应得自己写过的值 */
     nds->bus->active_is_arm7 = 0;
     CHECK_EQ("arm9 IME", bus_read32(nds->bus, IO_IME_ADDR), 0x00000001u);
-    CHECK_EQ("arm9 IE",  bus_read32(nds->bus, IO_IE_ADDR),  0x00000008u);
+    CHECK_EQ("arm9 IE",  bus_read32(nds->bus, IO_IE_ADDR),  IO_IF_VBLANK);
     nds->bus->active_is_arm7 = 0; /* 恢复默认 */
 }
 
@@ -4003,6 +4041,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_banked_r13_r14(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9h] LDM ^ 的 User 槽语义（任务上下文恢复）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_ldm_user_bank(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");

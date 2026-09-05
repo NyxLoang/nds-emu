@@ -85,6 +85,14 @@ int cpu_step(arm_cpu_t *cpu)
     /* 12.5：取指前检查 IRQ。条件 = 该核 IF&IE&IME 挂起，且 CPSR 的 I 位未禁止。
        满足则进 IRQ 异常向量（0x18），PC 跳到 handler；被打断指令地址留作返回点。 */
     irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
+    /* 21-B9h：IF&IE 已挂起却被 CPSR.I 屏蔽时只提示一次 */
+    if (irq_pending(irq) && (cpu->cpsr & CPSR_I) && !cpu->irq_mask_logged) {
+        cpu->irq_mask_logged = 1;
+        if (cpu->nds->bus->diag)
+            printf("irq: %s IF&IE pending but masked-by-cpsr-I"
+                   " cpsr=%08X pc=%08X\n",
+                   cpu->is_arm7 ? "arm7" : "arm9", cpu->cpsr, cpu->r[15]);
+    }
     if (irq_pending(irq) && !(cpu->cpsr & CPSR_I)) {
         cpu->cycles++;
         /* 21-B9b：诊断首中断现场——FFXII 的 ARM9 第一次 IRQ 会跳到高向量 0xFFFF0018，

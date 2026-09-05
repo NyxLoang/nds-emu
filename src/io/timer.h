@@ -11,6 +11,7 @@
 
 /* TMxCNT_H 控制位（bit7 使能；bit0-1 分频；bit2 级联阶段 6 忽略） */
 #define TIMER_CNT_ENABLE       0x80u
+#define TIMER_CNT_IRQ          0x40u   /* bit6：溢出置 IF（21-B9h） */
 #define TIMER_CNT_PRESCALER_MASK 0x3u
 
 /* 单个定时器。简化模型：
@@ -28,6 +29,6 @@ uint8_t timer_read8(const nds_timer_t *t, uint32_t addr);
 void timer_write8(nds_timer_t *t, uint32_t addr, uint8_t val);
 
 /* 一个周期过去（本模拟器=一条指令）：使能的定时器按分频累计 */
-void timer_advance(nds_timer_t *t);
+int timer_advance(nds_timer_t *t);
 
 #endif /* NDS_EMU_IO_TIMER_H */

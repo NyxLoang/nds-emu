@@ -10,8 +10,9 @@
 #define IO_IF_ADDR  0x04000214u   /* 挂起位：硬件置 1，软件写 1 清除 */
 #define IO_IRQ_END  0x04000218u   /* 中断区上界（不含），用于区间判断 */
 
-/* IF 里的 VBlank 位（bit3）。其余中断源阶段 6 不产生，先不定义。 */
-#define IO_IF_VBLANK (1u << 3)
+/* IF 里的 VBlank 位（bit0，与 NDS 硬件一致）。早期阶段曾用 bit3 简化，
+   但 bit3 在真机上是 Timer0；FFXII 引入后需按硬件位映射修正（21-B9h）。 */
+#define IO_IF_VBLANK (1u << 0)
 
 /* FIFO 中断位（阶段 8）：bit17 = 发送 FIFO 空，bit18 = 接收 FIFO 非空 */
 #define IO_IF_FIFO_SEND_EMPTY    (1u << 17)

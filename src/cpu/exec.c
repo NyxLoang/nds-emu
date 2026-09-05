@@ -291,6 +291,20 @@ static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
     int n = 0;
     for (int i = 0; i < 16; i++) if (list & (1u << i)) n++;
 
+    /* 21-B9h：LDM/STM ^（S=1）的“用户模式”语义。
+       特权模式下 S=1 且列表不含 PC：r0-r14 访问 User 槽（主要是 r13/r14，
+       其它模式 r8-r12 与 User 同物理寄存器；FIQ 的 r8-r12 尚未单独建槽）；
+       LDM 且列表含 PC 才是异常返回（加载 PC + SPSR 恢复 CPSR）。 */
+    unsigned mode = cpu->cpsr & CPSR_MODE_MASK;
+    int privileged = exec_spsr_index(mode) >= 0;
+    int user_view = s && privileged && !(list & (1u << 15));
+    uint32_t saved_r13 = cpu->r[13];
+    uint32_t saved_r14 = cpu->r[14];
+    if (user_view) {
+        cpu->r[13] = cpu->r13_sys;
+        cpu->r[14] = cpu->r14_sys;
+    }
+
     uint32_t addr;
     if (u)      addr = p ? rn_val + 4 : rn_val;            /* IB / IA */
     else        addr = p ? rn_val - 4u * n : rn_val - 4u * (n - 1); /* DB / DA */
@@ -300,6 +314,13 @@ static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
         if (l) cpu->r[i] = bus_read32(cpu->nds->bus, addr);
         else   bus_write32(cpu->nds->bus, addr, cpu->r[i]);
         addr += 4;
+    }
+    if (user_view) {
+        /* 把 User 槽写回独立存储，再把当前特权模式的 r13/r14 放回可见位置 */
+        cpu->r13_sys = cpu->r[13];
+        cpu->r14_sys = cpu->r[14];
+        cpu->r[13] = saved_r13;
+        cpu->r[14] = saved_r14;
     }
     /* 写回：无论增/减方向，最终基址 = 起始 + n*4 或 - n*4 */
     if (w) cpu->r[rn] = u ? rn_val + 4u * n : rn_val - 4u * n;

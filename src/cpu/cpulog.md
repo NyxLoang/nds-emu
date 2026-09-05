@@ -400,4 +400,23 @@
   停在 0x02007CE0 的链表遍历（与 ARM7 0x037FC8A0 轮询配合）。日志新露出
   ARM9 读 0x04000280-2BF 区域未知 IO，排 B9h 查这批寄存器。
 
+## 2026-09-05 · 21-B9h — LDM/STM ^ 的 User 槽语义 + 中断位按硬件修正
+
+- **做了什么**：
+  - `exec.c` 块搬移补上 ARM `^` 规则：S=1 且寄存器列表不含 PC 时，特权模式读写
+    **User/System 槽的 r13/r14**。此前 SVC 下执行 `ldm r0,{r0-r14}^` 会把任务现场
+    装进 SVC 私有 SP/LR，FFXII 协作式调度“切到 A 却还在跑旧现场”，最终就绪队列
+    A/B 的 next 互相指成环，删除任务函数在环上死转（0x02007CCC）。
+  - headless 进度附带两核 cpsr/r0-r3/IME/IE/IF；“IF&IE pending 但 CPSR.I 屏蔽”
+    只提示一次，便于区分“中断没来”和“来了被关”。
+  - VBlank 从早期简化的 bit3 改回 NDS 硬件 bit0（bit3 实为 Timer0）；
+    Timer0-Timer3 溢出按 TMxCNT_H bit6（IRQ 使能）置 IF bit3-bit6。
+- **怎么验证**：新增 `[case 21-B9h]`：SVC 下 `LDMIA r0,{r0-r14}^`，断言 SVC 私有
+  SP/LR 保持、User 槽 SP/LR 被装入；6.x 中断用例与位常量从 bit3 改 bit0。
+  全量 **649 项检查 0 失败**。
+- **真 ROM 效果**：就绪队列不再成环；第二次、第三次 VBlank IRQ 均能进入 handler
+  并完整返回（`--headless 4000000` 可复现）。Timer0（0x04000100/02=0x00C1）溢出
+  已能置 IF。当前停在 0x0200EA84 等待对象忙位（0x02078F0A bit1）清 0，
+  疑与 Timer0/GX/DMA 完成事件相关，排 B9i。
+
 

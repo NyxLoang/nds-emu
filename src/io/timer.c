@@ -33,13 +33,18 @@ void timer_write8(nds_timer_t *t, uint32_t addr, uint8_t val)
     }
 }
 
-void timer_advance(nds_timer_t *t)
+int timer_advance(nds_timer_t *t)
 {
     if (!(t->cnt_h & TIMER_CNT_ENABLE))
-        return; /* 未使能：不计数 */
+        return 0; /* 未使能：不计数 */
     unsigned div = s_prescalers[t->cnt_h & TIMER_CNT_PRESCALER_MASK];
     if (++t->acc >= div) {
         t->acc = 0;
-        t->cnt_l++; /* 16 位回绕由 uint16 溢出自然处理 */
+        if (t->cnt_l == 0xFFFFu) {
+            t->cnt_l = 0;
+            return 1; /* 21-B9h：溢出，由上层置对应 IF 位 */
+        }
+        t->cnt_l++;
     }
+    return 0;
 }

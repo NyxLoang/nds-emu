@@ -242,3 +242,12 @@
 - **观察/遗留（B8 素材）**：headless 终点仍为 ARM9 PC=0200B840、ARM7 PC=037FC0B0。
   ARM9 在 0x0200B834 轮询事件位（0x027FFC00 基址 + 偏移 0x38C 的 bit12），ARM7
   停在 0x037FC0A0/B0 轮询 0x027FFFF0——两核各自的“事件状态/命令口”语义待 B8 解码。
+
+## 2026-09-05 · 21-B9h — VBlank bit0 + Timer0-Timer3 溢出置 IF
+
+- `irq.h`：`IO_IF_VBLANK` 从 bit3 改回硬件 bit0（早期阶段把 bit3 当 VBlank 是简化，
+  但真机 bit3=Timer0，FFXII 的 `ie=0x00042009` 同时含 bit0/bit3，必须按硬件位走）。
+- `timer.h/.c`：`timer_advance` 返回 16 位溢出；`io_advance_timers` 在 TMxCNT_H
+  bit6（IRQ 使能）时把溢出置到当前核 IF 的 bit3-bit6。
+- FFXII 启动代码 `0x02008C70` 配置 TM0：CNT_H=0x00C1（1/64 分频 + IRQ 使能），
+  headless 跑到约 419 万 ARM9 周期时溢出被正确置 IF，handler 能正常进入/恢复。

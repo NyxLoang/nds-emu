@@ -37,6 +37,7 @@ typedef struct arm_cpu {
     uint64_t cycles; /* 已执行指令数（供主循环计数/验证） */
     int deadloop_reported; /* 死循环识别已打印过（避免每步刷屏） */
     int irq_dump_done;     /* 首中断现场快照已打印过（21-B9b，避免每次 IRQ 刷屏） */
+    int irq_mask_logged;   /* “IF&IE 已挂起但 CPSR.I 屏蔽”只提示一次（21-B9h） */
     irq_hle_ctx_t irq_hle; /* IRQ HLE 桩的现场保存区（21-B9f） */
 } arm_cpu_t;
 

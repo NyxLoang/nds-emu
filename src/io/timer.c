@@ -24,12 +24,16 @@ void timer_write8(nds_timer_t *t, uint32_t addr, uint8_t val)
         /* 写 CNT_L：只改对应字节，其余位保留 */
         uint32_t shift = off * 8;
         t->cnt_l = (uint16_t)((t->cnt_l & ~(0xFFu << shift)) | ((uint32_t)val << shift));
+        t->reload = t->cnt_l; /* 21-B9j：CNT_L 同时作为重载值 */
     } else {
         /* 写 CNT_H：改控制字节；真机写控制寄存器会重启计数器 */
         uint32_t shift = (off - 2) * 8;
+        uint16_t old_h = t->cnt_h;
         t->cnt_h = (uint16_t)((t->cnt_h & ~(0xFFu << shift)) | ((uint32_t)val << shift));
-        t->cnt_l = 0;
         t->acc = 0;
+        /* 21-B9j：使能沿（0→1）时从 CNT_L/reload 起跳，而不是清 0 */
+        if ((t->cnt_h & TIMER_CNT_ENABLE) && !(old_h & TIMER_CNT_ENABLE))
+            t->cnt_l = t->reload;
     }
 }
 
@@ -41,7 +45,7 @@ int timer_advance(nds_timer_t *t)
     if (++t->acc >= div) {
         t->acc = 0;
         if (t->cnt_l == 0xFFFFu) {
-            t->cnt_l = 0;
+            t->cnt_l = t->reload; /* 21-B9j：溢出后回到重载值 */
             return 1; /* 21-B9h：溢出，由上层置对应 IF 位 */
         }
         t->cnt_l++;

@@ -469,6 +469,8 @@ static void test_vblank_flag(nds_t *nds)
     /* 每帧跑完固定步数后 io_set_vblank，IF 的 bit0 应为 1 */
     io_set_vblank(nds->io);
     CHECK_EQ("IF bit0 (VBlank) set", bus_read32(nds->bus, IO_IF_ADDR), IO_IF_VBLANK);
+    CHECK_EQ("IF7 vblank set", nds->io->irq[1].ifl & IO_IF_VBLANK,
+             IO_IF_VBLANK);
 }
 
 /* ---- 6.4 用例：最小 IRQ 响应（pending 检测） ----
@@ -1370,6 +1372,33 @@ static void test_arm7_irq_slot(nds_t *nds)
              ARM_MODE_USER);
     CHECK_EQ("arm7 slot pc advanced", cpu->r[15], pc + 4);
     exec_set_trace(1);
+}
+
+/* ---- 21-B9j 用例：TM3 重载值 + 溢出置 IF（FFXII service6 依赖） ---- */
+static void test_timer_reload_overflow(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu7;
+    const uint32_t base = BUS_ARM7_WRAM_BASE;
+    const uint32_t tm3_l = IO_TIMER0_BASE + 3u * IO_TIMER_STRIDE;      /* 0x0400010C */
+    const uint32_t tm3_h = tm3_l + 2;                                   /* 0x0400010E */
+
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, base, 0xEAFFFFFEu); /* ARM7 死循环，让定时器随步进 */
+    bus_write16(nds->bus, tm3_l, 0xFFF0u);    /* 先写重载值 */
+    bus_write16(nds->bus, tm3_h, 0x00C0u);    /* 使能 + IRQ + 1:1 */
+    CHECK_EQ("tm3 reload loaded", nds->io->timer[3].cnt_l, 0xFFF0u);
+
+    nds->io->irq[1].ifl = 0;
+    cpu_reset(cpu, base);
+    exec_set_trace(0);
+    for (int i = 0; i < 15; i++)
+        cpu_step(cpu);
+    CHECK_EQ("tm3 no overflow yet", nds->io->irq[1].ifl & 0x40u, 0u);
+    cpu_step(cpu); /* 第 16 个周期：0xFFF0→0xFFFF 后回绕 */
+    CHECK_EQ("tm3 overflow IF bit6", nds->io->irq[1].ifl & 0x40u, 0x40u);
+    CHECK_EQ("tm3 reloaded", nds->io->timer[3].cnt_l, 0xFFF0u);
+    exec_set_trace(1);
+    nds->bus->active_is_arm7 = 0;
 }
 
 /* ---- 阶段 21-B4 用例：ARM BX 奇地址应切 Thumb ---- */
@@ -4123,6 +4152,13 @@ int main(void)
         if (nds == NULL) return 1;
         test_fifo_cnt_combine(nds);
         test_arm7_irq_slot(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9j] TM3 CNT_L 重载值 + 溢出置 IF\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_timer_reload_overflow(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");

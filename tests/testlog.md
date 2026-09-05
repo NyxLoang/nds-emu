@@ -564,3 +564,11 @@
 - 全量 **659 项检查 0 失败**；真 ROM：ARM9 FIFO 命令能送达 ARM7，ARM7 handler
   不再跑飞；忙位清除路径待 B9j。
 
+## 2026-09-05 · 21-B9j（前半）— TM3 reload / 双核 VBlank 用例
+
+- `test_timer_reload_overflow`：CNT_L=0xFFF0 后写 CNT_H(0xC0)，15 步无 IF、第 16 步
+  溢出置 ARM7 IF bit6 并回 reload（4 项）。
+- 6.3 补 ARM7 IF 同步收到 VBlank（1 项）。
+- 全量 **664 项检查 0 失败**；真 ROM：ARM7 现在有持续 VBlank 事件可推进状态机，
+  但 service6 完成回执仍未出现，B9j 后半继续。
+

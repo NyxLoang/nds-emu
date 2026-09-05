@@ -22,6 +22,7 @@
 typedef struct nds_timer {
     uint16_t cnt_l;
     uint16_t cnt_h;
+    uint16_t reload;  /* 21-B9j：写 CNT_L 的重载值；CNT_H 使能时从它起跳 */
     uint32_t acc;
 } nds_timer_t;
 

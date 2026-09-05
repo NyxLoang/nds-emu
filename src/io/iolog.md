@@ -261,3 +261,14 @@
   应答清除。
 - 真 ROM 验证：ARM9 两条 FIFO 命令（0x80004106/0x40402806）能入队，ARM7 IF18
   置位并触发 IRQ。
+
+## 2026-09-05 · 21-B9j（前半）— 定时器重载值 + ARM7 也能收到 VBlank
+
+- `timer.h/.c`：CNT_L 写入同时保存为 reload；CNT_H 使能沿（0→1）从 reload 起跳，
+  溢出后回到 reload（此前写 CNT_H 一律清 0，FFXII 用“先 CNT_L 后 CNT_H”配置
+  的溢出周期全部失效）。
+- `io.c`：`io_set_vblank` 同时置 ARM9/ARM7 两套 IF——VBlank 是 LCD 信号，两个中断
+  控制器都会收到；FFXII 的 ARM7 IE bit0 开着，ARM7 现在能持续收到帧事件。
+- 新增 `[case 21-B9j]`：TM3 CNT_L=0xFFF0、CNT_H 使能+IRQ，15 步不溢出、第 16 步
+  置 IF bit6 且回 reload；6.3 用例补 ARM7 IF 也收到 VBlank 的断言。
+- 全量 **664 项检查 0 失败**。ARM9 忙位仍未清，B9j 后半继续追 service6 完成回执。

@@ -377,6 +377,18 @@ handler，下一步 B9i 追“忙位谁清”。
 命令入队并触发 ARM7 IRQ，ARM7 handler 能完整返回。ARM9 忙位仍未清，B9j 查
 ARM7 回执路径。
 
+### 21-B9j（前半，2026-09-05）：定时器重载语义 + ARM7 VBlank 信号
+
+**做了什么**：
+- service6 的真实运行时入口定位为 0x03804D7C；第二条命令会成功置 state=1，但
+  完成回执需后续事件推进状态机。
+- 修两处硬件语义：① TM3/任意定时器 CNT_L 应作为 reload，CNT_H 使能时从 reload
+  起跳、溢出回 reload；② VBlank 同时置 ARM9/ARM7 两套 IF（此前 ARM7 IE bit0
+  永远等不到帧事件）。
+
+**验证**：B9j 单测 4 项 + 6.3 补 1 项；全量 **664 项检查 0 失败**。ARM7 现在能
+收到 VBlank IRQ，但 service6 仍不发完成回执，B9j 后半继续。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

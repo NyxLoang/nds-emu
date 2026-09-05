@@ -220,7 +220,11 @@ save_t *io_get_save(io_t *io)
 
 void io_set_vblank(io_t *io)
 {
-    irq_set_vblank(&io->irq[0]); /* VBlank 是 ARM9 显示事件 */
+    /* 21-B9j：VBlank 是 LCD 信号，两套中断控制器都会收到；
+       FFXII 的 ARM7 IE bit0 也开着，只有 ARM7 也能被帧事件唤醒，
+       service6 的完成状态机才会推进。 */
+    irq_set_vblank(&io->irq[0]);
+    irq_set_vblank(&io->irq[1]);
     dma_fire(&io->dma, io->bus, DMA_START_VBLANK); /* 阶段 15：触发 VBlank DMA */
 }
 

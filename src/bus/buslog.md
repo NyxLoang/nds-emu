@@ -95,6 +95,22 @@
   新暴露下一个 gap——ARM7 写 `0x04000180/81`（IPCSYNC）被当作未知 IO 忽略，留待 B2。
 - **结果**：✅ 用户验收通过（2026-09-05）。
 
+## 2026-09-05 · 21-B7 — Shared WRAM 按 WRAMCNT 双核切分
+
+- **背景**：B1 把 0x03000000 / 0x037F8000 无条件映射给两核同一 32KB，真机则按
+  WRAMCNT 低 2 位分权（默认 3=全给 ARM7，ARM9 直接启动后看不到 Shared WRAM）。
+- **做了什么**：`bus_resolve` 的两个 Shared WRAM 分支改走新增 `bus_shared_resolve`：
+  按 `bus->io->memctl.wramcnt & 3` 与 `active_is_arm7` 选择「内存指针 + 掩码」，
+  换算沿用 melonDS 的 `addr & mask` 重复别名方式：
+  - mode 0：ARM9 全 32KB；ARM7 改见自己的 ARM7 WRAM（主区=低 32KB、镜像=高 32KB）。
+  - mode 1/2：双方各 16KB，且各自窗口在镜像区同样重复。
+  - mode 3：ARM7 全 32KB，ARM9 读 0、写忽略（直接启动默认）。
+  未分得的窗口继续遵守项目「读 0 / 写忽略」约定。
+- **怎么验证**：`test_shared_wram` 先切 WRAMCNT=0 再验旧双向别名不回归；新增
+  `test_wramcnt_split` 覆盖 mode 0/1/2/3 的双核可见性、镜像别名与 ARM7 WRAM 别名。
+  `test_nds.exe` **587 项检查 0 失败**。
+- **结果**：✅ 自测通过；真 ROM 3 条未知 IO 消除，双核轮询卡点留给 B8。
+
 ## 2026-09-05 · 21-B6 — Main RAM 无缓存镜像仅 ARM9 可见
 
 - **背景/定位**：B5 后 ARM9 在约 cycle 463,554 弹回 0xE1C010B0（`LDMFD sp!` 后

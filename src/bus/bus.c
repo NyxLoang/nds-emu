@@ -19,6 +19,44 @@ void bus_set_diag(bus_t *bus, int on)
         bus->diag = on;
 }
 
+/* Shared WRAM 按 WRAMCNT 低 2 位 + 当前访问者切分（阶段 21-B7）。
+   真机整片 0x03xxxxxx 区域会按每个核的「基址指针 + 掩码」重复别名，
+   这里只处理本项目映射的两个 32KB 口（0x03000000 主区 / 0x037F8000 镜像），
+   换算采用同一套「指针 + addr & mask」，与 melonDS MapSharedWRAM 对应：
+   - 0：全给 ARM9（ARM7 转而看到自己的 ARM7 WRAM：主区=低 32KB、镜像=高 32KB）
+   - 1：ARM9 高 16KB、ARM7 低 16KB（各自 16KB 窗口在镜像区同样重复）
+   - 2：ARM9 低 16KB、ARM7 高 16KB
+   - 3：全给 ARM7（ARM9 读 0、写忽略；直接启动默认态）
+   未分得的窗口读 0、写忽略（与本项目「未映射读 0 写忽略」约定一致）。 */
+static int bus_shared_resolve(const bus_t *bus, uint32_t addr,
+                              const uint8_t **region, size_t *off)
+{
+    const uint8_t *mem = NULL;
+    uint32_t mask = 0;
+    uint8_t mode = bus->io != NULL ? (uint8_t)(bus->io->memctl.wramcnt & 3u)
+                                   : (uint8_t)IO_WRAMCNT_INIT;
+
+    if (!bus->active_is_arm7) {
+        switch (mode) {
+        case 0: mem = bus->shared_wram;         mask = 0x7FFFu; break;
+        case 1: mem = bus->shared_wram + 0x4000; mask = 0x3FFFu; break;
+        case 2: mem = bus->shared_wram;         mask = 0x3FFFu; break;
+        default: return 0; /* case 3：Shared WRAM 全归 ARM7 */
+        }
+    } else {
+        switch (mode) {
+        case 0: mem = bus->arm7_wram;           mask = 0xFFFFu; break;
+        case 1: mem = bus->shared_wram;         mask = 0x3FFFu; break;
+        case 2: mem = bus->shared_wram + 0x4000; mask = 0x3FFFu; break;
+        case 3: mem = bus->shared_wram;         mask = 0x7FFFu; break;
+        default: return 0;
+        }
+    }
+    *region = mem;
+    *off = (size_t)(addr & mask);
+    return 1;
+}
+
 /* 地址换算核心：判断 addr 落在哪个内存区间，填出「区间数组指针 + 偏移」。
    命中返回 1；未映射（含 IO 桩区间）返回 0，调用方按「读 0 / 写忽略」处理。
    换算规则：区间内下标 = addr - 区间基址（如 0x02000100 - 0x02000000 = 0x100）。
@@ -58,21 +96,14 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - BUS_ARM7_WRAM_BASE);
         return 1;
     }
-    /* Shared WRAM 主区：32KB（阶段 21-B1，真 ROM 启动时 ARM7 拷贝代码到 0x03000000 后跳入执行） */
+    /* Shared WRAM 主区：32KB（阶段 21-B1 映射，21-B7 起按 WRAMCNT 双核切分） */
     if (addr >= BUS_SHARED_WRAM_BASE &&
-        addr - BUS_SHARED_WRAM_BASE < BUS_SHARED_WRAM_SIZE) {
-        *region = bus->shared_wram;
-        *off = (size_t)(addr - BUS_SHARED_WRAM_BASE);
-        return 1;
-    }
-    /* Shared WRAM 镜像区：0x037F8000 起 32KB，与主区同一物理数组（别名）。
-       换算规则与主区相同：区间内下标 = addr - 镜像基址。 */
+        addr - BUS_SHARED_WRAM_BASE < BUS_SHARED_WRAM_SIZE)
+        return bus_shared_resolve(bus, addr, region, off);
+    /* Shared WRAM 镜像区：0x037F8000 起 32KB，与主区同一物理数组的别名口 */
     if (addr >= BUS_SHARED_WRAM_MIRROR &&
-        addr - BUS_SHARED_WRAM_MIRROR < BUS_SHARED_WRAM_SIZE) {
-        *region = bus->shared_wram;
-        *off = (size_t)(addr - BUS_SHARED_WRAM_MIRROR);
-        return 1;
-    }
+        addr - BUS_SHARED_WRAM_MIRROR < BUS_SHARED_WRAM_SIZE)
+        return bus_shared_resolve(bus, addr, region, off);
     /* 调色板 RAM：2KB（阶段 9，BG/OBJ 颜色查表） */
     if (addr >= BUS_PALETTE_BASE &&
         addr - BUS_PALETTE_BASE < BUS_PALETTE_SIZE) {

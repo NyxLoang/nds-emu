@@ -218,3 +218,27 @@
   0x038043C9` 奇地址本应切 Thumb 却没切，随后把数据区当 ARM 码执行跑飞（约
   cycle 231,180）。两点分别排入 B3/B4。
 - **结果**：✅ 用户验收通过（2026-09-05）。
+
+## 2026-09-05 · 21-B7 — EXMEMCNT / WRAMCNT 内存控制寄存器
+
+- **背景/定位**：B6 后 headless 还剩 3 条 ARM9 未知 IO：半字读 `0x04000204/205`
+  （EXMEMCNT）、字节写 `0x04000247=03`（WRAMCNT）。melonDS 直接启动语义：
+  Shared WRAM 初始全给 ARM7（WRAMCNT=3），EXMEMCNT 初值 0xE880。
+- **做了什么**：
+  - 新建 `src/io/memctl.h/.c`（功能文件，日志仍归 iolog）：`memctl_t` 持
+    `exmem[2]`（ARM9/ARM7 各一份 16 位值）与 `wramcnt`。
+  - EXMEMCNT：16 位寄存器按字节访问（0x204 低字节 / 0x205 高字节）；ARM9 可写
+    bit15/11/7-0，bit13/14 只读保留，写后把 bit7-14 镜像给 ARM7；ARM7 只能改自己
+    低 7 位（bit0-6）。直接启动初值 `0xE880`。
+  - WRAMCNT：ARM9 在 0x04000247 读写，ARM7 在 0x04000241 只读；值只取低 2 位
+    （0=全 ARM9，1=ARM9 高半 + ARM7 低半，2=互换，3=全 ARM7）。
+  - `io_t` 增 `memctl` 字段；`io_create` 调 `memctl_reset`；`io_read8/write8`
+    路由 `memctl_is_addr`。
+  - `CMakeLists.txt` 的 `ndscore` 加入 `src/io/memctl.c`。
+- **怎么验证**：`test_wramcnt_regs`（初值、双核读写分流、ARM7 只读视图、EXMEMCNT
+  高低字节 + 半字掩码）+ `test_wramcnt_split`（Shared WRAM 全量/半量四档切分）；
+  `test_nds.exe` **587 项检查 0 失败**；真 ROM `--headless 3000000` 不再打印
+  `io: ... unknown addr=04000204/205/247`。
+- **观察/遗留（B8 素材）**：headless 终点仍为 ARM9 PC=0200B840、ARM7 PC=037FC0B0。
+  ARM9 在 0x0200B834 轮询事件位（0x027FFC00 基址 + 偏移 0x38C 的 bit12），ARM7
+  停在 0x037FC0A0/B0 轮询 0x027FFFF0——两核各自的“事件状态/命令口”语义待 B8 解码。

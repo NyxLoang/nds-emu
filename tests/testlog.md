@@ -453,6 +453,18 @@
   （FFXII 栈槽偏移 0x3E3B34）；ARM9 视角双向别名用例不回归。
 - 全量 **559 项检查 0 失败**；真 ROM：ARM9 不再因 ARM7 块拷贝覆盖栈而弹 0xE1C010B0。
 
+## 2026-09-05 · 21-B7 — EXMEMCNT/WRAMCNT + Shared WRAM 切分用例
+
+- `test_nds.c` 新增 `[case 21-B7]`：
+  - `test_wramcnt_regs`：EXMEMCNT 双核初值 0xE880、半字可写位与字节访问、ARM9
+    写高 7 位镜像给 ARM7、ARM7 只改自己低 7 位；WRAMCNT ARM9 0x247 写 /
+    ARM7 0x241 只读，共 13 项检查。
+  - `test_wramcnt_split`：Shared WRAM mode 3 全给 ARM7（ARM9 盲写被忽略）、
+    mode 0 全给 ARM9（ARM7 转看 ARM7 WRAM 别名）、mode 1/2 半区互换 + 镜像重复
+    别名，共 13 项检查。
+  - `test_shared_wram`（B1 回归）开头补切 WRAMCNT=0，其余断言不变。
+- 全量 **587 项检查 0 失败**；真 ROM headless 不再报 EXMEMCNT/WRAMCNT 未知 IO。
+
 ## 2026-09-05 · 21-B5 — Thumb BX 回归 + trace
 
 - `thumb.c` 普通 Thumb 指令新增逐条 trace（bring-up 诊断）；修复 BX/BLX 寄存器号解码

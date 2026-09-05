@@ -749,6 +749,12 @@ static void test_arm7_fetch(nds_t *nds)
 /* ---- 阶段 21-B1 用例：Shared WRAM（0x03000000 32KB + 0x037F8000 镜像） ---- */
 static void test_shared_wram(nds_t *nds)
 {
+    /* 21-B7 起 Shared WRAM 按 WRAMCNT 切分，直接启动默认全给 ARM7。
+       旧 B1 用例的本体是「ARM9 视角全 32KB 双向别名」，先切到 WRAMCNT=0。 */
+    nds->bus->active_is_arm7 = 0;
+    bus_write8(nds->bus, IO_WRAMCNT_ARM9_ADDR, 0x00u);
+    CHECK_EQ("wramcnt arm9 set0", bus_read8(nds->bus, IO_WRAMCNT_ARM9_ADDR), 0x00u);
+
     /* 主区写 32 位，读回一致 */
     bus_write32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100, 0xDEADBEEFu);
     CHECK_EQ("shared main read32", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
@@ -780,6 +786,107 @@ static void test_shared_wram(nds_t *nds)
     CHECK_EQ("shared mirror last word",
              bus_read32(nds->bus, BUS_SHARED_WRAM_MIRROR + BUS_SHARED_WRAM_SIZE - 4),
              0xAABBCCDDu);
+}
+
+/* ---- 阶段 21-B7 用例：EXMEMCNT / WRAMCNT 寄存器语义 ---- */
+static void test_wramcnt_regs(nds_t *nds)
+{
+    /* 直接启动初值：WRAMCNT=3（Shared WRAM 全给 ARM7）、EXMEMCNT=0xE880 */
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("exmem arm9 init", bus_read16(nds->bus, IO_EXMEMCNT_ADDR), 0xE880u);
+    CHECK_EQ("wramcnt arm9 init", bus_read8(nds->bus, IO_WRAMCNT_ARM9_ADDR), 0x03u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("exmem arm7 init", bus_read16(nds->bus, IO_EXMEMCNT_ADDR), 0xE880u);
+    CHECK_EQ("wramcnt arm7 init", bus_read8(nds->bus, IO_WRAMCNT_ARM7_ADDR), 0x03u);
+
+    /* ARM9 写 WRAMCNT=1：ARM9 在 0x247、ARM7 在 0x241 都能读到 */
+    nds->bus->active_is_arm7 = 0;
+    bus_write8(nds->bus, IO_WRAMCNT_ARM9_ADDR, 0x01u);
+    CHECK_EQ("wramcnt arm9 write", bus_read8(nds->bus, IO_WRAMCNT_ARM9_ADDR), 0x01u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("wramcnt arm7 sees", bus_read8(nds->bus, IO_WRAMCNT_ARM7_ADDR), 0x01u);
+
+    /* ARM7 的 0x241 是只读视图：尝试写不会改变状态 */
+    bus_write8(nds->bus, IO_WRAMCNT_ARM7_ADDR, 0x00u);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("wramcnt arm7 write ignored", bus_read8(nds->bus, IO_WRAMCNT_ARM9_ADDR), 0x01u);
+
+    /* EXMEMCNT：ARM9 写 0xFFFF 只落下可写位（bit13/14 保留），并把高 7 位同步给 ARM7 */
+    bus_write16(nds->bus, IO_EXMEMCNT_ADDR, 0xFFFFu);
+    CHECK_EQ("exmem arm9 after ff", bus_read16(nds->bus, IO_EXMEMCNT_ADDR), 0xE8FFu);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("exmem arm7 sync high", bus_read16(nds->bus, IO_EXMEMCNT_ADDR), 0xE880u);
+
+    /* ARM7 只能写自己的低 7 位：写 0x003F → 0xE8BF，ARM9 那份不变 */
+    bus_write16(nds->bus, IO_EXMEMCNT_ADDR, 0x003Fu);
+    CHECK_EQ("exmem arm7 low write", bus_read16(nds->bus, IO_EXMEMCNT_ADDR), 0xE8BFu);
+    CHECK_EQ("exmem arm7 low byte", bus_read8(nds->bus, IO_EXMEMCNT_ADDR), 0xBFu);
+    CHECK_EQ("exmem arm7 high byte", bus_read8(nds->bus, IO_EXMEMCNT_ADDR + 1), 0xE8u);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("exmem arm9 unchanged", bus_read16(nds->bus, IO_EXMEMCNT_ADDR), 0xE8FFu);
+
+    /* 复位 WRAMCNT，避免影响同一台机器上的下一个用例（默认 3 = 全给 ARM7） */
+    bus_write8(nds->bus, IO_WRAMCNT_ARM9_ADDR, 0x03u);
+}
+
+/* ---- 阶段 21-B7 用例：WRAMCNT 切分 Shared WRAM（含 ARM7 未持有时的 ARM7 WRAM 别名） ---- */
+static void test_wramcnt_split(nds_t *nds)
+{
+    /* 默认 3：Shared WRAM 全归 ARM7，ARM9 读 0 / 写忽略 */
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100, 0x11111111u);
+    CHECK_EQ("mode3 arm7 write", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0x11111111u);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("mode3 arm9 blind", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100), 0x00u);
+    bus_write32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100, 0x22222222u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("mode3 arm9 write ignored", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0x11111111u);
+
+    /* 切到 0：ARM9 全 32KB；ARM7 改经主区/镜像看到自己的 ARM7 WRAM 低/高 32KB */
+    nds->bus->active_is_arm7 = 0;
+    bus_write8(nds->bus, IO_WRAMCNT_ARM9_ADDR, 0x00u);
+    bus_write32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100, 0x22222222u);
+    CHECK_EQ("mode0 arm9 write", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0x22222222u);
+    nds->bus->active_is_arm7 = 1;
+    bus_write8(nds->bus, BUS_SHARED_WRAM_BASE + 0x234, 0xABu);
+    CHECK_EQ("mode0 arm7 sees wram low", bus_read8(nds->bus, BUS_ARM7_WRAM_BASE + 0x234),
+             0xABu);
+    bus_write8(nds->bus, BUS_SHARED_WRAM_MIRROR + 0x234, 0xCDu);
+    CHECK_EQ("mode0 arm7 mirror wram high",
+             bus_read8(nds->bus, BUS_ARM7_WRAM_BASE + 0x8234), 0xCDu);
+
+    /* 切到 1：ARM9 看到高 16KB（主区/镜像按 16KB 掩码重复），ARM7 看到低 16KB */
+    nds->bus->active_is_arm7 = 0;
+    bus_write8(nds->bus, IO_WRAMCNT_ARM9_ADDR, 0x01u);
+    CHECK_EQ("mode1 arm9 low blind", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0x00u);
+    bus_write32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100, 0x33333333u); /* → 高半 0x4100 */
+    CHECK_EQ("mode1 arm9 high write", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0x33333333u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("mode1 arm7 low keeps", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0x22222222u);
+    bus_write32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100, 0x44444444u);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("mode1 arm9 high unchanged", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0x33333333u);
+    CHECK_EQ("mode1 mirror arm9 high", bus_read32(nds->bus, BUS_SHARED_WRAM_MIRROR + 0x100),
+             0x33333333u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("mode1 mirror arm7 low", bus_read32(nds->bus, BUS_SHARED_WRAM_MIRROR + 0x100),
+             0x44444444u);
+
+    /* 切到 2：两核半区互换——ARM9 看低 16KB（ARM7 刚写的 0x44444444），ARM7 看高 16KB */
+    nds->bus->active_is_arm7 = 0;
+    bus_write8(nds->bus, IO_WRAMCNT_ARM9_ADDR, 0x02u);
+    CHECK_EQ("mode2 arm9 low sees", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0x44444444u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("mode2 arm7 high sees", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0x33333333u);
 }
 
 /* ---- 阶段 21-B2 用例：IPCSYNC 同步寄存器（双核数据交叉 + 只读/只写位） ---- */
@@ -3614,6 +3721,14 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_arm_bx_thumb(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B7] EXMEMCNT/WRAMCNT + Shared WRAM 双核切分\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_wramcnt_regs(nds);
+        test_wramcnt_split(nds);
         nds_destroy(nds);
     }
     printf("\n[case 8.4] 交错调度 2:1\n");

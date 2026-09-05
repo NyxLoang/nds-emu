@@ -7,6 +7,7 @@ io_t *io_create(void)
 {
     io_t *io = calloc(1, sizeof(io_t));
     if (io != NULL) {
+        memctl_reset(&io->memctl); /* 直接启动初值：WRAMCNT=3，EXMEMCNT=0xE880 */
         cartbus_init(&io->cartbus);
         gx_reset(&io->gx); /* 矩阵置单位阵 + 视口默认 + GXSTAT 置 FIFO 空 */
     }
@@ -76,6 +77,8 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return irq_read8(&io->irq[is_arm7 ? 1 : 0], addr);
     if (ipc_sync_is_addr(addr))
         return ipc_sync_read8(&io->sync, addr, is_arm7);
+    if (memctl_is_addr(addr))
+        return memctl_read8(&io->memctl, addr, is_arm7);
     if (fifo_is_cnt_addr(addr))
         return fifo_cnt_read8((ipc_fifo_t *)&io->fifo, addr, is_arm7);
     if (addr >= IO_TIMER0_BASE && addr < IO_TIMER_END)
@@ -109,6 +112,10 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         /* 请求目标是对端核：ARM9 写请求 → ARM7 的 IF，ARM7 写请求 → ARM9 的 IF */
         ipc_sync_write8(&io->sync, addr, val, is_arm7,
                         &io->irq[is_arm7 ? 0 : 1]);
+        return;
+    }
+    if (memctl_is_addr(addr)) {
+        memctl_write8(&io->memctl, addr, val, is_arm7);
         return;
     }
     if (fifo_is_cnt_addr(addr)) {

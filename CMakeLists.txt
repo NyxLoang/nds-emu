@@ -56,6 +56,7 @@ add_library(ndscore STATIC
     src/io/fifo.c
     src/io/disp.c
     src/io/touch.c
+    src/io/memctl.c
     src/snd/snd.c
     src/gx/gx.c
     src/ppu/render.c

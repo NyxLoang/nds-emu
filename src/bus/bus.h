@@ -69,7 +69,7 @@ typedef struct bus {
     uint8_t  main_ram[BUS_MAIN_RAM_SIZE]; /* Main RAM：4MB */
     uint8_t  vram[BUS_VRAM_SIZE];         /* VRAM：656KB */
     uint8_t  arm7_wram[BUS_ARM7_WRAM_SIZE]; /* ARM7 WRAM：64KB */
-    uint8_t  shared_wram[BUS_SHARED_WRAM_SIZE]; /* Shared WRAM：32KB（0x03000000 + 0x037F8000 镜像） */
+    uint8_t  shared_wram[BUS_SHARED_WRAM_SIZE]; /* Shared WRAM：32KB（WRAMCNT 切分，见 bus.c） */
     uint8_t  palette[BUS_PALETTE_SIZE];   /* 调色板 RAM：2KB */
     uint8_t  oam[BUS_OAM_SIZE];           /* OAM：2KB（OBJ 属性） */
     io_t    *io;                          /* IO 寄存器区实现（由 nds 挂入） */

@@ -9,6 +9,7 @@
 #include "fifo.h"
 #include "disp.h"
 #include "touch.h"
+#include "memctl.h"
 #include "snd/snd.h"
 #include "gx/gx.h"
 #include "cart/cartbus.h"
@@ -31,6 +32,7 @@ typedef struct io {
     ipc_sync_t sync;                  /* IPCSYNC（阶段 21-B2：双核同步寄存器） */
     disp_t disp;                      /* 2D 显示控制（阶段 9：DISPCNT/BGxCNT/滚动） */
     touch_t touch;                    /* 触摸屏 SPI（阶段 17：SPICNT/SPIDATA + TSC） */
+    memctl_t memctl;                  /* 内存控制（阶段 21-B7：EXMEMCNT/WRAMCNT） */
     snd_t snd;                        /* 音频（阶段 18：16 通道 + SOUNDCNT/SOUNDBIAS） */
     gx_t gx;                          /* 3D 几何引擎（阶段 19：DISP3DCNT/GXSTAT/GXFIFO） */
     cartbus_t cartbus;                /* 卡带总线（阶段 15：ROMCTRL/命令/数据端口） */

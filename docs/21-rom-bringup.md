@@ -59,7 +59,7 @@ r15 读值 = (当前 PC & ~3) + 8
 |---|-----|------|
 | G1 | ARM r15 读缺 +8，PC 相对字面量池读错 | ✅ 已修 |
 | G2 | Shared WRAM（0x03000000-0x03007FFF）及镜像（0x037F8000 一带）未映射 | ✅ 已修（21-B1，2026-09-05） |
-| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2..B6 已修：IPCSYNC + Main RAM 镜像 + ARM BX 切 Thumb + Thumb BX 寄存器号 + 镜像仅 ARM9 可见；ARM9 栈污染已解，双核仍停在各自轮询，见 B7） |
+| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2..B7 已修：IPCSYNC + Main RAM 镜像 + ARM BX 切 Thumb + Thumb BX 寄存器号 + 镜像仅 ARM9 可见 + EXMEMCNT/WRAMCNT；双核仍停在各自轮询，见 B8） |
 | G4 | 修完 G2/G3 后继续暴露的更多 gap（SWI/PPU/中断/内存等） | ⏳ Phase B 迭代 |
 
 ---
@@ -147,6 +147,25 @@ ARM9 全程停在主存代码区不再崩栈；ARM7 停在 0x037FC0xx 轮询循�
 新出现的 3 条 ARM9 未知 IO（读 0x04000204/205、写 0x04000247=03）与 ARM7 轮询
 循环一起成为 B7 素材。
 
+### 21-B7 之后（2026-09-05）：EXMEMCNT/WRAMCNT 语义补齐，握手卡点前移 B8
+
+给 bus 补齐真实 Shared WRAM 所有权之后，用 `--headless 3000000` 重跑 FFXII：
+
+```text
+headless: step=1048576 ARM9 PC=0200B844 cyc=699051 | ARM7 PC=037FC0B0 cyc=349525
+headless: done. ARM9 PC=0200B840 cyc=2000000 | ARM7 PC=037FC0B0 cyc=1000000
+```
+
+1. `io: read unknown 04000204/205` 与 `io: write unknown 04000247` 三条全部消失；
+   寄存器初值/读写位与 melonDS 直接启动口径一致（WRAMCNT=3、EXMEMCNT=0xE880）。
+2. trace 显示 IPCSYNC 上的 8→0 计数握手已经能跑完（ARM9 走完 0x0200B94C 附近
+   的轮询并正常返回），随后 ARM9 进入 0x0200B834 的事件位轮询：按 `r1` 选
+   `0x027FFC00 + r1*4`、再读 `+0x38C` 处字并测试 bit12；ARM7 停在 0x037FC0A0/B0
+   轮询 `0x027FFFF0`。ARM9 在等的那一位（0x027FFF8C bit12）始终未被 ARM7 置上。
+
+结论：B7 已把未知 IO 清零，双核当前卡在「ARM7 命令口 0x027FFFF0 → ARM9 事件
+状态区 0x027FFF8C」这条数据约定上，排入 B8 继续解码。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误
@@ -180,8 +199,9 @@ Phase B 的验收口径：**hard_title**——FFXII 能进入标题画面。
 | B4 | 修 ARM BX 奇地址未切 Thumb（ARM7 0x038043C9 入口） | 单测 555 项 0 失败；ARM7 不再按 ARM 误译 Thumb 区，旧 0x0626D1xx 终点消失 |
 | B5 | 补 Thumb 逐条 trace，定位并修复 ARM7 跳进 IO 区的根因（Thumb BX/BLX Rm 解码错误） | Thumb trace + headless：IO 刷屏消失，ARM7 正常进出 SWI3/BX-lr 桩（557 项 0 失败） |
 | B6 | ARM9 栈 LR 污染定位与修复（Main RAM 无缓存镜像仅 ARM9 可见，ARM7 写访问落空） | LDM trace + 写监视：ARM9 过 0x0200B9B4 返回点、不再弹 0xE1C010B0（559 项 0 失败） |
-| B7 | 排查 ARM9 新未知 IO（0x04000204/205、0x04000247）与 ARM7 轮询循环卡点 | 寄存器语义 + headless，双核握手继续推进 |
-| B8… | 继续按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
+| B7 | ✅ 排查 ARM9 新未知 IO（0x04000204/205、0x04000247）并实现 EXMEMCNT/WRAMCNT + Shared WRAM 双核切分 | 587 项单测 0 失败；headless 3 条未知 IO 消除 |
+| B8 | 解码 ARM7 0x027FFFF0 命令口与 ARM9 0x027FFF8C 事件位约定，让双核握手继续前移 | 每轮 headless 重跑观察下一卡点 |
+| B9… | 继续按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
 
 > 后续步骤只有在真机现象出现后才能精确拆解，这也是本项目“一次一个微步”的原因——
 > bring-up 阶段不预先猜十步，而是一步一个证据地往前走。

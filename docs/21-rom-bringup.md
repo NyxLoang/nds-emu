@@ -389,6 +389,17 @@ ARM7 回执路径。
 **验证**：B9j 单测 4 项 + 6.3 补 1 项；全量 **664 项检查 0 失败**。ARM7 现在能
 收到 VBlank IRQ，但 service6 仍不发完成回执，B9j 后半继续。
 
+### 21-B9j（后半，2026-09-06）：SPI device1 固件最小实现——ARM9 首次离开忙等
+
+**做了什么**：
+- service6 的真实工作内容锁定为 **SPI 访问**：事件处理器 0x03804A54 操作
+  0x040001C0/1C2，SPICNT=0x8900 的 device 位是 1（固件 Flash）。
+- 旧实现只认触摸 device 2，固件读命令全被忽略；补“空固件回 0xFF”最小 HLE。
+
+**验证**：新增 SPI device1 单测；全量 **665 项检查 0 失败**。headless 真 ROM：
+ARM9 PC 从 0x0200EA90 推进到 0x0200B838/0xF1BC 服务循环，ARM7 进入 0x027F6xxx
+继续处理；后续需补固件真实内容或完整 SPI 状态机。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

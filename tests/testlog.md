@@ -572,3 +572,10 @@
 - 全量 **664 项检查 0 失败**；真 ROM：ARM7 现在有持续 VBlank 事件可推进状态机，
   但 service6 完成回执仍未出现，B9j 后半继续。
 
+## 2026-09-06 · 21-B9j（后半）— SPI device1 固件回读用例
+
+- `test_spi_fw_hle`：SPICNT=0x8900（使能+device1）后写 READ 命令，SPIDATA 回
+  0xFF（1 项）。
+- 全量 **665 项检查 0 失败**；真 ROM：ARM9 第一次离开忙等并推进到后续服务循环，
+  ARM7 不再停在 0x0200EA90 对应等待。
+

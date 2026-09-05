@@ -17,6 +17,7 @@
 #define SPICNT_BAUD_MASK    0x0003u   /* bit0-1 波特率 */
 #define SPICNT_BUSY         (1u << 7) /* 只读：0=就绪 1=忙（瞬时模型恒 0） */
 #define SPICNT_DEVICE_MASK  (3u << 8) /* bit8-9 设备选择 */
+#define SPICNT_DEVICE_FW    (1u << 8) /* 设备 1 = 固件 Flash */
 #define SPICNT_DEVICE_TOUCH (2u << 8) /* 设备 2 = 触摸屏 */
 #define SPICNT_XFERSIZE     (1u << 10)/* 0=8 位 1=16 位(有 bug，本阶段忽略) */
 #define SPICNT_HOLD         (1u << 11)/* 0=传输后撤片选 1=保持 */

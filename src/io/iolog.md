@@ -272,3 +272,15 @@
 - 新增 `[case 21-B9j]`：TM3 CNT_L=0xFFF0、CNT_H 使能+IRQ，15 步不溢出、第 16 步
   置 IF bit6 且回 reload；6.3 用例补 ARM7 IF 也收到 VBlank 的断言。
 - 全量 **664 项检查 0 失败**。ARM9 忙位仍未清，B9j 后半继续追 service6 完成回执。
+
+## 2026-09-06 · 21-B9j（后半）— SPI device1（固件 Flash）最小实现
+
+- 定位：ARM7 service6（0x03804D7C）的事件处理器 0x03804A54 实际在操作 **SPI
+  寄存器 0x040001C0/1C2**，且 SPICNT 高字节 0x89 的 device 位 = 1（固件 Flash），
+  不是此前实现的触摸屏 device 2。
+- `touch.c`：非触摸设备写 SPIDATA 时，若 device=1 则按“空固件”回读 0xFF，
+  让 FFXII 的命令序列能走完；`touch.h` 增加 `SPICNT_DEVICE_FW`。
+- 新增 `[case 21-B9j] SPI device1 最小回读`：使能+device1+READ 命令后 SPIDATA
+  回 0xFF（1 项）。
+- 全量 **665 项检查 0 失败**。真 ROM 效果：ARM9 首次真正离开 0x0200EA90 忙等，
+  推进到 0x0200B838/0x0200F1BC 的后续服务循环；ARM7 也进入 0x027F6xxx 继续处理。

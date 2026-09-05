@@ -53,7 +53,14 @@ static uint8_t touch_reply(const touch_t *t)
 static void touch_transfer(touch_t *t, uint8_t out)
 {
     if (!touch_active(t))
+    {
+        /* 21-B9j：设备 1（固件 Flash）最小 HLE——FFXII 启动会经 ARM7 FIFO
+           service6 读固件；本模拟器暂无固件镜像，按“空数据 0xFF”回读，
+           让命令序列能继续走完。 */
+        if ((t->spicnt & SPICNT_DEVICE_MASK) == SPICNT_DEVICE_FW)
+            t->spidata = 0xFFu;
         return;
+    }
     if (out & 0x80) {
         t->cmd = out;
         t->channel = (out >> 4) & 7;

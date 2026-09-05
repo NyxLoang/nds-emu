@@ -1401,6 +1401,18 @@ static void test_timer_reload_overflow(nds_t *nds)
     nds->bus->active_is_arm7 = 0;
 }
 
+/* ---- 21-B9j 用例：SPI device1（固件 Flash）最小回读 ---- */
+static void test_spi_fw_hle(nds_t *nds)
+{
+    nds->bus->active_is_arm7 = 1;
+    bus_write8(nds->bus, IO_SPICNT, 0x00u);
+    bus_write8(nds->bus, IO_SPICNT + 1, 0x89u); /* 使能 + device1 */
+    bus_write8(nds->bus, IO_SPIDATA, 0x03u);    /* READ 命令 */
+    CHECK_EQ("spi fw read 0xff",
+             bus_read8(nds->bus, IO_SPIDATA), 0xFFu);
+    nds->bus->active_is_arm7 = 0;
+}
+
 /* ---- 阶段 21-B4 用例：ARM BX 奇地址应切 Thumb ---- */
 static void test_arm_bx_thumb(nds_t *nds)
 {
@@ -4159,6 +4171,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_timer_reload_overflow(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9j] SPI device1 固件最小回读\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_spi_fw_hle(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");

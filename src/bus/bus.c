@@ -33,8 +33,12 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         return 1;
     }
     /* Main RAM 无缓存镜像：0x02400000 起 4MB，与主区同一物理数组（别名，阶段 21-B3）。
-       换算规则与主区相同：区间内下标 = addr - 镜像基址。 */
-    if (addr >= BUS_MAIN_RAM_MIRROR_BASE &&
+       换算规则与主区相同：区间内下标 = addr - 镜像基址。
+       该镜像是 ARM9 的“绕过缓存”通道，ARM7 内存图里没有这一段（21-B6）：
+       FFXII 的 ARM7 会向该区做块拷贝，真机上同样落空；若给 ARM7 也映射，
+       拷贝会覆盖 ARM9 放在镜像区的栈，导致函数返回地址被指令字污染。 */
+    if (!bus->active_is_arm7 &&
+        addr >= BUS_MAIN_RAM_MIRROR_BASE &&
         addr - BUS_MAIN_RAM_MIRROR_BASE < BUS_MAIN_RAM_SIZE) {
         *region = bus->main_ram;
         *off = (size_t)(addr - BUS_MAIN_RAM_MIRROR_BASE);

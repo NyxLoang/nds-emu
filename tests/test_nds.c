@@ -882,6 +882,17 @@ static void test_main_ram_mirror(nds_t *nds)
     CHECK_EQ("ffxii stack alias",
              bus_read32(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x1E3F80), 0x020008F8u);
 
+    /* ARM7 视角：镜像区不可见——真机该镜像是 ARM9 的缓存绕过通道，
+       ARM7 的写访问落空；若映射给 ARM7，FFXII 的 ARM7 块拷贝会覆盖
+       ARM9 放在镜像区的栈（21-B6 修复）。用 FFXII 实际栈槽偏移 0x3E3B34 验证。 */
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x3E3B34, 0xDEADBEEFu);
+    CHECK_EQ("mirror arm7 write dropped",
+             bus_read8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x3E3B34), 0x00u);
+    CHECK_EQ("mirror arm7 main intact",
+             bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x3E3B34), 0x00000000u);
+    nds->bus->active_is_arm7 = 0;
+
     /* 镜像首字节与末字边界 */
     bus_write8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE, 0xA5);
     CHECK_EQ("mirror first byte", bus_read8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE), 0xA5u);

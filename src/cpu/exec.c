@@ -279,10 +279,15 @@ static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
         int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
         if (idx >= 0) cpu->cpsr = cpu->spsr[idx];
     }
-    if (g_trace)
-        printf("cpu: PC=%08X insn=%08X %s r%u%s, list=%04X n=%d cycles=%llu\n",
-               cpu->r[15], insn, l ? "LDM" : "STM", rn, w ? "!" : "", list, n,
-               (unsigned long long)cpu->cycles);
+    if (g_trace) {
+        /* 21-B6：LDM/STM trace 附上基址（rn=13 即 SP 变化前）与弹出 PC，
+           便于 bring-up 阶段追“返回地址被污染”类问题。 */
+        printf("cpu: PC=%08X insn=%08X %s r%u%s, list=%04X n=%d",
+               cpu->r[15], insn, l ? "LDM" : "STM", rn, w ? "!" : "", list, n);
+        if (rn == 13) printf(" base=%08X", rn_val);
+        if (l && (list & (1u << 15))) printf(" pc_new=%08X", cpu->r[15]);
+        printf(" cycles=%llu\n", (unsigned long long)cpu->cycles);
+    }
 }
 
 /* ---- 10.6 乘法 MUL/MLA + 长乘 UMULL/UMLAL/SMULL/SMLAL ---- */

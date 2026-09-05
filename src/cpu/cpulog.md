@@ -287,4 +287,11 @@
   0x0200B9B0 `LDMFD sp!, {r4,r5,lr}` 后 `BX r14 -> 0xE1C010B0`——被弹回的 LR 已被
   污染，留待 B6 定位栈污染来源。
 
+## 2026-09-05 · 21-B6 — LDM/STM trace 增强（协助定位栈污染）
+
+- `exec.c` 的 LDM/STM 逐条 trace 增加 `base`（rn=13 时 SP 变化前）与 `pc_new`
+  （LDM 含 PC 时弹出的目标），便于 bring-up 阶段追“返回地址被污染”问题。
+- 用它确认 B6 污染点：ARM9 LR 槽 0x027E3B34 在 ARM7 块拷贝时被写入 0xE1C010B0；
+  修复（镜像仅 ARM9 可见）后 `BX r14` 正常返回，见 buslog 21-B6。
+
 

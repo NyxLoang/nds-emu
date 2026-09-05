@@ -59,7 +59,7 @@ r15 读值 = (当前 PC & ~3) + 8
 |---|-----|------|
 | G1 | ARM r15 读缺 +8，PC 相对字面量池读错 | ✅ 已修 |
 | G2 | Shared WRAM（0x03000000-0x03007FFF）及镜像（0x037F8000 一带）未映射 | ✅ 已修（21-B1，2026-09-05） |
-| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2..B5 已修：IPCSYNC + Main RAM 镜像 + ARM BX 切 Thumb + Thumb BX 寄存器号；ARM7 IO 刷屏消失，ARM9 栈 LR 污染待 B6） |
+| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2..B6 已修：IPCSYNC + Main RAM 镜像 + ARM BX 切 Thumb + Thumb BX 寄存器号 + 镜像仅 ARM9 可见；ARM9 栈污染已解，双核仍停在各自轮询，见 B7） |
 | G4 | 修完 G2/G3 后继续暴露的更多 gap（SWI/PPU/中断/内存等） | ⏳ Phase B 迭代 |
 
 ---
@@ -137,6 +137,16 @@ Thumb 逐条 trace 直接抓到二次跑飞源头：0x038043C8 只有两条 Thum
 `LDMFD sp!, {r4,r5,lr}` 后 `BX r14 -> 0xE1C010B0`——栈里保存的返回地址被污染，
 B6 将定位污染来源。
 
+### 21-B6 之后（2026-09-05）：栈污染来自 ARM7 误写 Main RAM 镜像
+
+给 LDM trace 增加 SP/弹出 PC 后定位 LR 槽 0x027E3B34；总线写监视抓到写入者是
+**ARM7 的块拷贝循环（0x02380124-130）**，它在约 cycle 141,868 把 0xE1C010B0 写进
+该槽。根因：0x02400000-0x027FFFFF 是 **ARM9 专用的无缓存镜像**（ARM7 内存图没有
+这段），B3 无差别映射让 ARM7 的拷贝真实落盘、覆盖了 ARM9 的栈。改为仅 ARM9 可见后，
+ARM9 全程停在主存代码区不再崩栈；ARM7 停在 0x037FC0xx 轮询循环。
+新出现的 3 条 ARM9 未知 IO（读 0x04000204/205、写 0x04000247=03）与 ARM7 轮询
+循环一起成为 B7 素材。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误
@@ -169,8 +179,9 @@ Phase B 的验收口径：**hard_title**——FFXII 能进入标题画面。
 | B3 | 映射 Main RAM 无缓存镜像 0x02400000-0x027FFFFF（FFXII 栈放 0x027E0000 附近） | 单测 552 项 0 失败；headless：ARM9 稳定在 0x0200B9xx 主存代码区，不再弹 PC=0 |
 | B4 | 修 ARM BX 奇地址未切 Thumb（ARM7 0x038043C9 入口） | 单测 555 项 0 失败；ARM7 不再按 ARM 误译 Thumb 区，旧 0x0626D1xx 终点消失 |
 | B5 | 补 Thumb 逐条 trace，定位并修复 ARM7 跳进 IO 区的根因（Thumb BX/BLX Rm 解码错误） | Thumb trace + headless：IO 刷屏消失，ARM7 正常进出 SWI3/BX-lr 桩（557 项 0 失败） |
-| B6 | 定位 ARM9 栈中返回地址被污染成 0xE1C010B0 的来源并修复 | trace/寄存器诊断 + headless，ARM9 过 0x0200B9B4 返回点 |
-| B7… | 继续按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
+| B6 | ARM9 栈 LR 污染定位与修复（Main RAM 无缓存镜像仅 ARM9 可见，ARM7 写访问落空） | LDM trace + 写监视：ARM9 过 0x0200B9B4 返回点、不再弹 0xE1C010B0（559 项 0 失败） |
+| B7 | 排查 ARM9 新未知 IO（0x04000204/205、0x04000247）与 ARM7 轮询循环卡点 | 寄存器语义 + headless，双核握手继续推进 |
+| B8… | 继续按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
 
 > 后续步骤只有在真机现象出现后才能精确拆解，这也是本项目“一次一个微步”的原因——
 > bring-up 阶段不预先猜十步，而是一步一个证据地往前走。

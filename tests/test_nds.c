@@ -746,6 +746,42 @@ static void test_arm7_fetch(nds_t *nds)
     CHECK_EQ("arm7 fetch PC", nds->cpu7->r[15], BUS_ARM7_WRAM_BASE + 4);
 }
 
+/* ---- 阶段 21-B1 用例：Shared WRAM（0x03000000 32KB + 0x037F8000 镜像） ---- */
+static void test_shared_wram(nds_t *nds)
+{
+    /* 主区写 32 位，读回一致 */
+    bus_write32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100, 0xDEADBEEFu);
+    CHECK_EQ("shared main read32", bus_read32(nds->bus, BUS_SHARED_WRAM_BASE + 0x100),
+             0xDEADBEEFu);
+
+    /* 主区写 → 镜像区同偏移读到同一数据（别名） */
+    bus_write32(nds->bus, BUS_SHARED_WRAM_BASE + 0x200, 0x12345678u);
+    CHECK_EQ("shared mirror sees main", bus_read32(nds->bus, BUS_SHARED_WRAM_MIRROR + 0x200),
+             0x12345678u);
+
+    /* 镜像区写 → 主区同偏移读到同一数据（反向别名） */
+    bus_write16(nds->bus, BUS_SHARED_WRAM_MIRROR + 0x300, 0xBEEFu);
+    CHECK_EQ("shared main sees mirror", bus_read16(nds->bus, BUS_SHARED_WRAM_BASE + 0x300),
+             0xBEEFu);
+
+    /* 区间末字节可写读回（32KB 边界内） */
+    bus_write8(nds->bus, BUS_SHARED_WRAM_BASE + BUS_SHARED_WRAM_SIZE - 1, 0xA5);
+    CHECK_EQ("shared last byte", bus_read8(nds->bus, BUS_SHARED_WRAM_BASE + BUS_SHARED_WRAM_SIZE - 1),
+             0xA5u);
+    CHECK_EQ("shared mirror last byte",
+             bus_read8(nds->bus, BUS_SHARED_WRAM_MIRROR + BUS_SHARED_WRAM_SIZE - 1), 0xA5u);
+
+    /* 主区后越界（0x03008000）读 0；镜像区上界恰为 ARM7 WRAM 基址，不在此断言 */
+    CHECK_EQ("shared main beyond", bus_read8(nds->bus, BUS_SHARED_WRAM_BASE + BUS_SHARED_WRAM_SIZE),
+             0x00u);
+
+    /* 镜像区末字（镜像基址 + 0x7FFC）与主区同物理数据（别名在区间边界仍成立） */
+    bus_write32(nds->bus, BUS_SHARED_WRAM_BASE + BUS_SHARED_WRAM_SIZE - 4, 0xAABBCCDDu);
+    CHECK_EQ("shared mirror last word",
+             bus_read32(nds->bus, BUS_SHARED_WRAM_MIRROR + BUS_SHARED_WRAM_SIZE - 4),
+             0xAABBCCDDu);
+}
+
 /* ---- 8.4 用例：交错调度 2:1 ---- */
 static void test_interleave(nds_t *nds)
 {
@@ -3381,6 +3417,13 @@ int main(void)
         if (nds == NULL) return 1;
         test_arm7_wram(nds);
         test_arm7_fetch(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B1] Shared WRAM 映射（0x03000000 + 0x037F8000 镜像）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_shared_wram(nds);
         nds_destroy(nds);
     }
     printf("\n[case 8.4] 交错调度 2:1\n");

@@ -13,6 +13,10 @@
 /* ARM7 专属 WRAM：64KB（阶段 8，ARM7 镜像装载于此）。 */
 #define BUS_ARM7_WRAM_SIZE (64 * 1024)
 
+/* Shared WRAM：32KB（阶段 21-B1，双核共享内存，真 ROM 启动时 ARM7 会拷贝代码到此处执行）。
+   真机该区有两个地址别名：主区 0x03000000 与镜像区 0x037F8000，均映射到同一数组。 */
+#define BUS_SHARED_WRAM_SIZE (32 * 1024)
+
 /* 调色板 RAM：2KB（阶段 9，BG/OBJ 颜色查表，主 0x05000000 + 副 0x05000400）。 */
 #define BUS_PALETTE_SIZE 0x800u
 
@@ -36,6 +40,8 @@
 
 /* 地址区间基址（内存地图见 docs/03-memory-map.md） */
 #define BUS_MAIN_RAM_BASE 0x02000000u
+#define BUS_SHARED_WRAM_BASE 0x03000000u       /* Shared WRAM 主区基址 */
+#define BUS_SHARED_WRAM_MIRROR 0x037F8000u     /* Shared WRAM 镜像区基址（别名） */
 #define BUS_VRAM_BASE     0x06000000u
 #define BUS_IO_BASE       0x04000000u
 #define BUS_IO_SIZE       0x00010000u   /* IO 区间 64KB，具体寄存器由 io 模块实现 */
@@ -59,6 +65,7 @@ typedef struct bus {
     uint8_t  main_ram[BUS_MAIN_RAM_SIZE]; /* Main RAM：4MB */
     uint8_t  vram[BUS_VRAM_SIZE];         /* VRAM：656KB */
     uint8_t  arm7_wram[BUS_ARM7_WRAM_SIZE]; /* ARM7 WRAM：64KB */
+    uint8_t  shared_wram[BUS_SHARED_WRAM_SIZE]; /* Shared WRAM：32KB（0x03000000 + 0x037F8000 镜像） */
     uint8_t  palette[BUS_PALETTE_SIZE];   /* 调色板 RAM：2KB */
     uint8_t  oam[BUS_OAM_SIZE];           /* OAM：2KB（OBJ 属性） */
     io_t    *io;                          /* IO 寄存器区实现（由 nds 挂入） */

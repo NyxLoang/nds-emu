@@ -46,6 +46,21 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - BUS_ARM7_WRAM_BASE);
         return 1;
     }
+    /* Shared WRAM 主区：32KB（阶段 21-B1，真 ROM 启动时 ARM7 拷贝代码到 0x03000000 后跳入执行） */
+    if (addr >= BUS_SHARED_WRAM_BASE &&
+        addr - BUS_SHARED_WRAM_BASE < BUS_SHARED_WRAM_SIZE) {
+        *region = bus->shared_wram;
+        *off = (size_t)(addr - BUS_SHARED_WRAM_BASE);
+        return 1;
+    }
+    /* Shared WRAM 镜像区：0x037F8000 起 32KB，与主区同一物理数组（别名）。
+       换算规则与主区相同：区间内下标 = addr - 镜像基址。 */
+    if (addr >= BUS_SHARED_WRAM_MIRROR &&
+        addr - BUS_SHARED_WRAM_MIRROR < BUS_SHARED_WRAM_SIZE) {
+        *region = bus->shared_wram;
+        *off = (size_t)(addr - BUS_SHARED_WRAM_MIRROR);
+        return 1;
+    }
     /* 调色板 RAM：2KB（阶段 9，BG/OBJ 颜色查表） */
     if (addr >= BUS_PALETTE_BASE &&
         addr - BUS_PALETTE_BASE < BUS_PALETTE_SIZE) {

@@ -83,3 +83,14 @@
 - `bus.h` 增 `BUS_LCDC_VRAM_BASE=0x06800000`、`BUS_LCDC_VRAM_SIZE=512KB`；`bus_resolve` 新增分支映射到
   `vram[0]`（与 `0x06000000` 主 VRAM 同物理区），供 `render_capture` 把顶屏出图写回 LCDC VRAM。
 - 验收：`test_capture_render` 捕获后从 `0x06800000` 读回顶屏 RGB555。
+
+## 2026-09-05 · 21-B1 — Shared WRAM 主区 + 镜像映射
+
+- **做了什么**：`bus.h` 新增 32KB Shared WRAM 常量与 `bus_t.shared_wram[32KB]`；`bus_resolve` 增加两个分支：
+  主区 `0x03000000` 与镜像区 `0x037F8000` 各自 32KB 换算到**同一物理数组**，写主区可从镜像读回、
+  写镜像也可从主区读回（真机同 RAM 双地址别名）。`tests/test_nds.c` 新增 `test_shared_wram`
+  （8/16/32 位读写、双向别名、末字节/末字边界、主区越界读 0），注册为 `[case 21-B1]`。
+- **怎么验证**：`cmake --build build --parallel` 编译通过；`test_nds.exe` **528 项检查 0 失败**；
+  真 ROM `--headless 20000000` 重跑：ARM7 不再在 `0x037F8xxx` 逐 0 漂移，卡点解除；
+  新暴露下一个 gap——ARM7 写 `0x04000180/81`（IPCSYNC）被当作未知 IO 忽略，留待 B2。
+- **结果**：✅ 用户验收通过（2026-09-05）。

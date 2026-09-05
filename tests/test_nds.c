@@ -1060,8 +1060,11 @@ static void test_irq_slot_jump(nds_t *nds)
     bus_set_arm9_dtcm(nds->bus, 1, 0x027E0000u, 0x4000u);
     nds->bus->active_is_arm7 = 0;
     bus_write32(nds->bus, 0x027E3FFCu, handler);
-    /* handler：SUBS pc, lr, #4 → 返回被打断处并恢复 CPSR */
-    bus_write32(nds->bus, handler, 0xE25EF004u);
+    /* handler：FFXII 分发器风格——stmdb sp!,{lr} / 破坏 r1 / ldmfd sp!,{pc}。
+       返回地址由 HLE 桩设为被打断 PC，返回后由 cpu_step 恢复现场。 */
+    bus_write32(nds->bus, handler + 0x00, 0xE92D4000u); /* STMFD sp!, {lr} */
+    bus_write32(nds->bus, handler + 0x04, 0xE3A01011u); /* MOV r1, #0x11（破坏现场） */
+    bus_write32(nds->bus, handler + 0x08, 0xE8BD8000u); /* LDMFD sp!, {pc} */
 
     static const uint32_t prog[] = {
         /* 0x00 */ 0xE3A00005, /* MOV r0, #5 */
@@ -1072,6 +1075,8 @@ static void test_irq_slot_jump(nds_t *nds)
         bus_write32(nds->bus, base + 4 * i, prog[i]);
 
     cpu->cpsr = ARM_MODE_USER;                  /* I=0 允许 IRQ */
+    cpu->r[1] = 0xAB;                           /* 被中断代码的“活”寄存器值 */
+    cpu->r[13] = base + 0x1000;                  /* handler 压栈/弹栈用的 SP */
     nds->io->irq[0].ie  = IO_IF_VBLANK;
     nds->io->irq[0].ifl = IO_IF_VBLANK;
     nds->io->irq[0].ime = 1;
@@ -1084,12 +1089,22 @@ static void test_irq_slot_jump(nds_t *nds)
     CHECK_EQ("slot I set", (cpu->cpsr & CPSR_I) ? 1u : 0u, 1u);
     CHECK_EQ("slot spsr saved", cpu->spsr[exec_spsr_index(ARM_MODE_IRQ)],
              ARM_MODE_USER);
-    CHECK_EQ("slot lr=pc+4", cpu->r[14], base + 4);
+    CHECK_EQ("slot lr=ret pc", cpu->r[14], base); /* HLE 桩返回点=被打断指令 */
 
-    cpu_step(cpu);   /* handler 内 SUBS pc, lr, #4 → 返回原程序 */
-    CHECK_EQ("slot return PC", cpu->r[15], base);
+    nds->io->irq[0].ifl = 0; /* 模拟 handler 已写 IF 清除，避免返回后立即重入 */
+    cpu_step(cpu);           /* STMFD sp!, {lr}：把返回点压栈 */
+    cpu_step(cpu);           /* MOV r1, #0x11：破坏被中断现场的 r1 */
+    CHECK_EQ("slot r1 clobbered", cpu->r[1], 0x11);
+    cpu_step(cpu);           /* LDMFD sp!, {pc}：弹回返回点 */
+    CHECK_EQ("slot pop pc", cpu->r[15], base);
+    CHECK_EQ("slot pop mode", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_IRQ);
+
+    cpu_step(cpu);           /* cpu_step 恢复现场后执行被中断的 MOV r0,#5 */
+    CHECK_EQ("slot r1 restored", cpu->r[1], 0xAB);
     CHECK_EQ("slot return mode", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_USER);
     CHECK_EQ("slot return I", (cpu->cpsr & CPSR_I) ? 1u : 0u, 0u);
+    CHECK_EQ("slot instr rerun", cpu->r[0], 5u);
+    CHECK_EQ("slot return PC", cpu->r[15], base + 4);
     exec_set_trace(1);
 
     bus_set_arm9_dtcm(nds->bus, 0, 0, 0); /* 恢复禁用，避免污染后续用例 */

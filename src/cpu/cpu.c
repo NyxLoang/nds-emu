@@ -31,6 +31,7 @@ void cpu_reset(arm_cpu_t *cpu, uint32_t reset_pc)
     cpu->r[15] = reset_pc;
     cpu->cycles = 0;
     cpu->deadloop_reported = 0;
+    cpu->irq_hle.active = 0;
 }
 
 /* 3a.3 取指：按 PC 从总线读 32 位指令字（小端拼拆已在 bus_read32 内完成）。 */
@@ -45,6 +46,30 @@ uint16_t cpu_fetch16(const arm_cpu_t *cpu)
     return bus_read16(cpu->nds->bus, cpu->r[15]);
 }
 
+/* 21-B9f：IRQ HLE 桩的“返回恢复”。FFXII 的中断分发器用
+   `stmdb sp!,{lr}; ...; ldmfd sp!,{pc}` 返回——它压入/弹出的返回地址是模拟桩
+   设置的“被打断指令 PC”（等价于真 BIOS 把 stub 地址放进 LR，stub 再 SUBS 返回）。
+   由于没有可执行 BIOS 桩，返回后由本函数在取指前恢复现场并重执行被打断指令。 */
+static void irq_hle_restore(arm_cpu_t *cpu)
+{
+    if (!cpu->irq_hle.active)
+        return;
+    if ((cpu->cpsr & CPSR_MODE_MASK) != ARM_MODE_IRQ)
+        return;
+    if (cpu->r[15] != cpu->irq_hle.ret_pc)
+        return;
+    for (int i = 0; i < 4; i++)
+        cpu->r[i] = cpu->irq_hle.r[i];
+    cpu->r[12] = cpu->irq_hle.ip;
+    cpu->cpsr = cpu->irq_hle.saved_cpsr;
+    cpu->irq_hle.active = 0;
+    if (cpu->nds->bus->diag && cpu->irq_hle.log_count < 16) {
+        printf("irq: #%d %s restore ret_pc=%08X cpsr=%08X\n",
+               cpu->irq_hle.log_count, cpu->is_arm7 ? "arm7" : "arm9",
+               cpu->r[15], cpu->cpsr);
+    }
+}
+
 /* 单步执行一条指令：
    框架只负责「取指 + 指令计数」，指令语义全部委托给 exec_step（见 exec.c）。
    返回 0 表示停机（本阶段总是返回 1，停机由死循环达成）。 */
@@ -52,6 +77,8 @@ int cpu_step(arm_cpu_t *cpu)
 {
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
+    /* 21-B9f：先检查 IRQ handler 是否刚弹出返回地址（见函数注释） */
+    irq_hle_restore(cpu);
     /* 6.5：一条指令 ≈ 一个周期，推进所有使能定时器（分频在 timer.c 内处理） */
     io_advance_timers(cpu->nds->io);
     /* 12.5：取指前检查 IRQ。条件 = 该核 IF&IE&IME 挂起，且 CPSR 的 I 位未禁止。
@@ -82,6 +109,16 @@ int cpu_step(arm_cpu_t *cpu)
                    cpu->is_arm7 ? "arm7" : "arm9", cpu->r[15], cpu->cpsr,
                    irq->ime, irq->ie, irq->ifl, slot_f8, slot_fc);
         }
+        if (cpu->nds->bus->diag && cpu->irq_dump_done &&
+            cpu->irq_hle.log_count < 16) {
+            printf("irq: #%d %s trigger pc=%08X cpsr=%08X\n",
+                   cpu->irq_hle.log_count + 1, cpu->is_arm7 ? "arm7" : "arm9",
+                   cpu->r[15], cpu->cpsr);
+        }
+        /* HLE 桩现场：arm_exception 只改 CPSR/r14/r15，r0-r3/r12 仍是被中断值，
+           saved_cpsr/ret_pc 必须在切模式前取。 */
+        uint32_t saved_cpsr = cpu->cpsr;
+        uint32_t ret_pc = cpu->r[15];
         arm_exception(cpu, EXC_IRQ_OFF, ARM_MODE_IRQ, 4);
         /* 21-B9c：模拟 ARM9 BIOS 高向量跳板——真机 0xFFFF0018 处的 BIOS 代码会从
            DTCM 末 4 字节（0x3FFC，用户 IRQ handler 指针槽）取地址再跳转。本模拟器
@@ -93,12 +130,26 @@ int cpu_step(arm_cpu_t *cpu)
             uint32_t slot_fc = bus_read32(cpu->nds->bus,
                                           cpu->nds->bus->arm9_dtcm_base + 0x3FFCu);
             if (slot_fc != 0) {
+                /* 激活 HLE 桩：把返回点设成被打断指令 PC，dispatcher 的
+                   pop {pc} 会回到这里，随后 irq_hle_restore 恢复现场 */
+                cpu->irq_hle.active = 1;
+                cpu->irq_hle.saved_cpsr = saved_cpsr;
+                cpu->irq_hle.ret_pc = ret_pc;
+                cpu->irq_hle.r[0] = cpu->r[0];
+                cpu->irq_hle.r[1] = cpu->r[1];
+                cpu->irq_hle.r[2] = cpu->r[2];
+                cpu->irq_hle.r[3] = cpu->r[3];
+                cpu->irq_hle.ip = cpu->r[12];
+                cpu->irq_hle.log_count++;
                 /* 目标地址 LSB=1 表示 Thumb 入口：按 BX 规则清 PC 最低位并置 T */
                 if (slot_fc & 1u)
                     cpu->cpsr |= CPSR_T;
                 else
                     cpu->cpsr &= ~CPSR_T;
                 cpu->r[15] = slot_fc & ~1u;
+                /* dispatcher 以 stmdb/pop 成对使用 lr：给它“返回被中断 PC”的
+                   地址（真 BIOS 桩会给 stub 地址再 SUBS 回这里，效果等价） */
+                cpu->r[14] = ret_pc;
             }
         }
         return 1;

@@ -367,4 +367,23 @@
   内不再出现固定单点卡死；后续要确认第二次及以后的 VBlank IRQ 是否照常触发、
   启动流程是否会随帧数继续推进。
 
+## 2026-09-05 · 21-B9f — IRQ HLE 桩：被中断现场保存/恢复
+
+- **做了什么**：
+  - `cpu.h/.c`：IRQ 经槽跳用户 handler 前把被中断现场的 r0-r3、r12、CPSR、
+    返回点（被打断 PC）存进模拟器私有槽；handler 弹栈返回（FFXII 分发器是
+    `stmdb sp!,{lr}; ...; ldmfd sp!,{pc}` 风格）后，`cpu_step` 在取指前恢复
+    现场并重执行被打断指令——等价真 BIOS 桩“保存 r0-r3/r12 → 调 handler →
+    恢复 → 返回”，但没有可执行 BIOS 代码。
+  - 修复 `arm_exception` trace 参数顺序 bug（vec/mode/lr/cycles 错位导致
+    日志数值荒谬）；`--headless` 下打印前若干次 IRQ 触发/恢复点，便于追踪
+    多次中断。
+- **怎么验证**：B9c 用例改为 FFXII 分发器风格（push lr / 破坏 r1 / pop pc），
+  断言 handler 破坏的 r1 在返回后恢复、CPSR 恢复、被中断指令重执行。全量
+  **633 项检查 0 失败**。
+- **真 ROM 现象**：第一次 VBlank 的完整处理链（含处理函数里嵌套的大块内存
+  填充）执行完成；但第二次 IRQ 前 ARM9 落入未映射 0x0027xxxx 漂移。根因怀疑：
+  模拟器所有模式仍共用 SP，IRQ handler 用 System 栈压栈/嵌套，覆盖了用户现场
+  （真机 IRQ 有独立 r13_irq）。排 B9g：实现按模式独立的 r13/r14。
+
 

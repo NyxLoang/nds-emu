@@ -4,6 +4,18 @@
 #include <stdint.h>
 #include "nds/nds.h"
 
+/* 21-B9f：IRQ HLE 桩保存的“被中断现场”。真 BIOS 在跳用户 IRQ handler 前会保存
+   r0-r3/r12/SPSR，handler 返回后恢复；本模拟器没有可执行 BIOS 桩代码，改用模拟器
+   私有槽保存，handler 弹出返回地址后由 cpu_step 取指前统一恢复。 */
+typedef struct irq_hle_ctx {
+    int active;          /* 有未恢复的 IRQ 现场 */
+    int log_count;       /* 诊断：已打印过的中断/恢复次数（限前若干次） */
+    uint32_t r[4];       /* 被中断代码的 r0-r3（用户 handler 可能改坏） */
+    uint32_t ip;         /* r12 同 r0-r3 */
+    uint32_t ret_pc;     /* 返回点 = 被打断指令地址 */
+    uint32_t saved_cpsr; /* 被打断时的 CPSR（含模式/I 位） */
+} irq_hle_ctx_t;
+
 /* ARM 处理器（ARM946E-S 或 ARM7TDMI）的可见状态。两核共用同一套结构，
    用 is_arm7 区分实例；阶段 3a 只实现「取指 + 推进」，指令语义在 exec.c。 */
 typedef struct arm_cpu {
@@ -21,6 +33,7 @@ typedef struct arm_cpu {
     uint64_t cycles; /* 已执行指令数（供主循环计数/验证） */
     int deadloop_reported; /* 死循环识别已打印过（避免每步刷屏） */
     int irq_dump_done;     /* 首中断现场快照已打印过（21-B9b，避免每次 IRQ 刷屏） */
+    irq_hle_ctx_t irq_hle; /* IRQ HLE 桩的现场保存区（21-B9f） */
 } arm_cpu_t;
 
 /* 创建 / 销毁 CPU 核。reset_pc：复位后开始执行的地址；is_arm7：实例身份。 */

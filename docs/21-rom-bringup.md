@@ -318,6 +318,22 @@ bne 循环                 ; 逐个分发所有挂起中断
 主等待循环（PC 在 0x02009EC4-ECC 间游走，等下一次 VBlank），8M 步内不再有
 固定单点卡死。下一步观察多次 VBlank 后启动流程是否继续前进。
 
+### 21-B9f（2026-09-05）：IRQ HLE 桩——被中断现场保存/恢复
+
+**做了什么**：
+
+- 跳用户 IRQ handler 前，把 r0-r3/r12/CPSR/返回点（被打断 PC）存入模拟器
+  私有槽；FFXII 分发器弹栈返回后，在取指前恢复现场、重执行被打断指令。
+- 修复异常 trace 参数顺序 bug；headless 打印前若干次 IRQ 触发/恢复点。
+- B9c 测试改为 FFXII 分发器风格（push lr → 破坏 r1 → pop pc），断言 r1/CPSR
+  恢复、被打断指令重执行（全量 **633 项 0 失败**）。
+
+真机：第一次 VBlank 完整处理链（含处理函数内嵌套的大块 memset）已执行完；
+但第二次 IRQ 前 ARM9 落入未映射区 0x0027xxxx。反汇编启动序列确认 FFXII 分别
+初始化了 SVC/IRQ/System 栈（0x027E3FC0 / 0x027E3F7C / 0x027E3AF8），
+而模拟器所有模式共用 SP——IRQ handler 在 System 栈上压栈嵌套会覆盖用户现场。
+**排 B9g：实现按模式独立的 r13/r14（banked registers）。**
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

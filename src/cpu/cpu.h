@@ -15,6 +15,8 @@ typedef struct arm_cpu {
                         [0]=FIQ [1]=IRQ [2]=SVC [3]=ABT [4]=UND；User/System 无 SPSR） */
     uint32_t swi_num;/* 最近一次 SWI 的 24 位编号（阶段 10.8 记录，阶段 11 BIOS HLE 用） */
     uint32_t cp15[16]; /* CP15 协处理器寄存器（阶段 10.10 MRC/MCR，按 CRn 索引；阶段 12.4 c1 控制向量基址） */
+    uint32_t cp15_dtcm; /* CP15 c9,c1,0：ARM9 DTCM 配置（阶段 21-B8） */
+    uint32_t cp15_itcm; /* CP15 c9,c1,1：ARM9 ITCM 配置（先存储，暂不建映射） */
     uint32_t vector_base; /* 异常向量基址：ARM9=0xFFFF0000（高）、ARM7=0x00000000（低） */
     uint64_t cycles; /* 已执行指令数（供主循环计数/验证） */
     int deadloop_reported; /* 死循环识别已打印过（避免每步刷屏） */

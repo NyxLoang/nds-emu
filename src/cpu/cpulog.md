@@ -294,4 +294,18 @@
 - 用它确认 B6 污染点：ARM9 LR 槽 0x027E3B34 在 ARM7 块拷贝时被写入 0xE1C010B0；
   修复（镜像仅 ARM9 可见）后 `BX r14` 正常返回，见 buslog 21-B6。
 
+## 2026-09-05 · 21-B8 — CP15 c9 子寄存器 + ARM9 DTCM 映射
+
+- FFXII 复位例程 `0x02000A6C` 的 CP15 配置不止 c1：
+  - `MCR p15,0,rX,c9,c1,0`：DTCM 配置（0x027E000A → 基址 0x027E0000、16KB）；
+  - `MCR p15,0,rX,c9,c1,1`：ITCM 配置（先存储）；
+  - c1 bit16 = DTCM 使能（复位在 0x02000B1C 写 0x0005707D 打开）。
+- `exec_coprocessor` 现在按 crm/op2 读 c9 子寄存器；写 c9,c1,0 或 c1 后调用
+  `exec_arm9_dtcm_update` 同步 bus 的 DTCM 窗口（大小编码
+  `0x200 << ((val>>1)&0x1F)`，最小 4KB、封顶 16KB）。
+- ARM9 ITCM 固定 0x01FF8000，由 bus 直接映射（见 buslog 21-B8），本步先不按
+  c9,c1,1 动态关开。
+- **验证**：21-B8 用例覆盖 ARM9 写 DTCM 不落主存、ARM7 同址写主存不碰 DTCM；
+  `test_nds.exe` 594 项 0 失败。
+
 

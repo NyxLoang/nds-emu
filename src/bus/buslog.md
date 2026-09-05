@@ -111,6 +111,25 @@
   `test_nds.exe` **587 项检查 0 失败**。
 - **结果**：✅ 自测通过；真 ROM 3 条未知 IO 消除，双核轮询卡点留给 B8。
 
+## 2026-09-05 · 21-B8 — ARM9 DTCM/ITCM + Main RAM 镜像双核别名
+
+- **解码结论（修正 B6）**：B7 后 ARM7 轮询 `0x027FFFBC==0x7F`、ARM9 轮询
+  `0x027FFF88/8C` 事件位，是 FFXII 自研信箱协议的正常握手。真正卡点是内存归属：
+  0x027E0000-0x027E3FFF 被复位例程配成 ARM9 DTCM（`MCR c9,c1,0` = 0x027E000A，
+  c1 bit16 使能），栈建在 DTCM 里；0x01FF8000 起 32KB 是 ARM9 ITCM，复位用
+  0x02078020 描述表把系统例程拷过去。ARM7 拷贝到 0x027E0000 实际写 Main RAM
+  镜像——真机/ melonDS 的 ARM7 都能命中 0x02000000-0x02FFFFFF 主存窗口，B6 的
+  “仅 ARM9 可见”只是在掩盖 DTCM 缺失。
+- **做了什么**：
+  - `bus` 新增 `arm9_dtcm[16KB]`（CP15 可配置）与 `arm9_itcm[32KB]`（固定
+    0x01FF8000）；`bus_resolve` 对 ARM9 先判 ITCM/DTCM，再走 Main RAM 镜像。
+  - `bus_set_arm9_dtcm()` 提供 CP15 写后的映射同步；镜像分支去掉
+    `!active_is_arm7`，ARM7 恢复访问 0x024-0x027 主存别名。
+  - `tests` 的 21-B3 用例改为“ARM7 写镜像落主存”，新增 21-B8 用例覆盖
+    DTCM/ITCM 隔离（594 项 0 失败）。
+- **真 ROM 效果**：`--headless 2000000` 越过旧信箱死等；ARM9 跑到 0x02009EC0
+  （打开中断），ARM7 首次调 SWI 0x0E；下一卡点是 BIOS/IRQ 高向量与 CRC16。
+
 ## 2026-09-05 · 21-B6 — Main RAM 无缓存镜像仅 ARM9 可见
 
 - **背景/定位**：B5 后 ARM9 在约 cycle 463,554 弹回 0xE1C010B0（`LDMFD sp!` 后

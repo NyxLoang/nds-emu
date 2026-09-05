@@ -116,3 +116,13 @@
   修复 cmd/Windows Terminal 直接运行时中文日志乱码（无需每次手动 `chcp 65001`）。
 - **怎么验证**：`cmake --build build --parallel` 编译通过；`test_nds.exe` 528 项检查 0 失败。
 - **结果**：✅ 编译与自动化测试通过（终端中文显示待用户按验收步骤确认）。
+
+## 2026-09-05 · 21-B8 — 直接启动 0x027FFxxx 卡带信息表
+
+- `main.c` 装载 ROM 后、写镜像前，按 melonDS `SetupDirectBoot` 口径把卡带头信息写进
+  ARM9 主存系统表：0x027FFE00 起 0x170 字节完整 ROM 头；0x027FF800/0x027FFC00 两组
+  「卡带 ID + 头 CRC + 安全区 CRC + 0x5835 签名 + 0xFFFF/0x0001」表。
+- FFXII 的启动/overlay 代码会读 0x027FFE60、0x027FFC00 等位置；缺表会走不到正常
+  初始化流程。headless 日志打印一行 `boot : direct-boot tables @ 027FFxxx written`。
+- **验证**：594 项单测 0 失败；FFXII headless 越过旧信箱轮询后能读到卡带信息并继续
+  boot 初始化（下一卡点见 docs/21-rom-bringup.md 21-B8）。

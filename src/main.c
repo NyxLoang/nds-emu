@@ -20,6 +20,47 @@
 #include "demo/demo.h"
 #include "runner/runner.h"
 
+/* 小端工具：装载阶段给 0x027FFxxx 直接启动表填 ROM 头信息时用
+   （melonDS SetupDirectBoot 口径，阶段 21-B8）。 */
+static uint32_t le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint16_t le16(const uint8_t *p)
+{
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+/* 把卡带头信息写进 ARM9 主存 0x027FFxxx 系统表（对应 melonDS SetupDirectBoot）：
+   0x027FFE00 起 0x170 字节 = 完整 ROM 头；0x027FF800/0x027FFC00 两组
+   「卡带 ID + CRC + 装载器签名」表。FFXII 的 ARM9/ARM7 启动代码会读这些表，
+   缺了会停在事件轮询上。 */
+static void direct_boot_tables(cart_t *cart, bus_t *bus)
+{
+    if (cart == NULL || cart->size < 0x170 || bus == NULL)
+        return;
+    uint32_t cartid = le32(cart->data + 0x00C); /* 游戏代码 4 字节 */
+    uint16_t hcrc = le16(cart->data + 0x0FC);   /* 头校验和 */
+    uint16_t scrc = le16(cart->data + 0x0FE);   /* 安全区校验和 */
+    for (uint32_t i = 0; i < 0x170; i += 4)
+        bus_write32(bus, 0x027FFE00u + i, le32(cart->data + i));
+    bus_write32(bus, 0x027FF800u, cartid);
+    bus_write32(bus, 0x027FF804u, cartid);
+    bus_write16(bus, 0x027FF808u, hcrc);
+    bus_write16(bus, 0x027FF80Au, scrc);
+    bus_write16(bus, 0x027FF850u, 0x5835u);
+    bus_write32(bus, 0x027FFC00u, cartid);
+    bus_write32(bus, 0x027FFC04u, cartid);
+    bus_write16(bus, 0x027FFC08u, hcrc);
+    bus_write16(bus, 0x027FFC0Au, scrc);
+    bus_write16(bus, 0x027FFC10u, 0x5835u);
+    bus_write16(bus, 0x027FFC30u, 0xFFFFu);
+    bus_write16(bus, 0x027FFC40u, 0x0001u);
+    printf("boot : direct-boot tables @ 027FFxxx written\n");
+}
+
 int main(int argc, char *argv[])
 {
     (void)argc;
@@ -93,6 +134,7 @@ int main(int argc, char *argv[])
         if (cart_parse_header(cart, &hdr) != 0) {
             printf("header: too short (%zu bytes), cannot parse\n", cart->size);
         } else {
+            direct_boot_tables(cart, nds->bus);
             printf("arm9  : offset=%08X entry=%08X ram=%08X size=%08X\n",
                    hdr.arm9.offset, hdr.arm9.entry, hdr.arm9.ram, hdr.arm9.size);
             printf("arm7  : offset=%08X entry=%08X ram=%08X size=%08X\n",

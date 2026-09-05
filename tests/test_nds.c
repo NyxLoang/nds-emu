@@ -969,7 +969,7 @@ static void test_ipcsync_irq(nds_t *nds)
     nds->bus->active_is_arm7 = 0; /* 恢复默认视角，避免污染后续用例 */
 }
 
-/* ---- 阶段 21-B3 用例：Main RAM 无缓存镜像（0x02400000 起 4MB 别名） ---- */
+/* ---- 阶段 21-B3/B8 用例：Main RAM 无缓存镜像 + ARM9 DTCM/ITCM ---- */
 static void test_main_ram_mirror(nds_t *nds)
 {
     /* 主区写 → 镜像区同偏移读到同一数据（别名） */
@@ -989,15 +989,15 @@ static void test_main_ram_mirror(nds_t *nds)
     CHECK_EQ("ffxii stack alias",
              bus_read32(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x1E3F80), 0x020008F8u);
 
-    /* ARM7 视角：镜像区不可见——真机该镜像是 ARM9 的缓存绕过通道，
-       ARM7 的写访问落空；若映射给 ARM7，FFXII 的 ARM7 块拷贝会覆盖
-       ARM9 放在镜像区的栈（21-B6 修复）。用 FFXII 实际栈槽偏移 0x3E3B34 验证。 */
+    /* ARM7 视角：0x024-0x027 仍是同一块 4MB 主存的解码窗口（melonDS 口径）。
+       21-B8 之前把 ARM7 拦在外面是因为模拟器没有 ARM9 DTCM——ARM7 拷贝会覆盖
+       “看似 ARM9 栈”的主存字节；真正原因是那些字节属于 ARM9 DTCM，见下方用例。 */
     nds->bus->active_is_arm7 = 1;
     bus_write32(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x3E3B34, 0xDEADBEEFu);
-    CHECK_EQ("mirror arm7 write dropped",
-             bus_read8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x3E3B34), 0x00u);
-    CHECK_EQ("mirror arm7 main intact",
-             bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x3E3B34), 0x00000000u);
+    CHECK_EQ("mirror arm7 write lands",
+             bus_read32(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + 0x3E3B34), 0xDEADBEEFu);
+    CHECK_EQ("mirror arm7 main sees",
+             bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x3E3B34), 0xDEADBEEFu);
     nds->bus->active_is_arm7 = 0;
 
     /* 镜像首字节与末字边界 */
@@ -1011,6 +1011,42 @@ static void test_main_ram_mirror(nds_t *nds)
     /* 越界：镜像上界 0x02800000 读 0 */
     CHECK_EQ("mirror beyond",
              bus_read8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + BUS_MAIN_RAM_SIZE), 0x00u);
+}
+
+/* ---- 阶段 21-B8 用例：ARM9 DTCM / ITCM 与 Main RAM 镜像互不覆盖 ---- */
+static void test_arm9_tcm(nds_t *nds)
+{
+    /* DTCM 配置到 FFXII 复位用的 0x027E0000-0x027E3FFF */
+    bus_set_arm9_dtcm(nds->bus, 1, 0x027E0000u, 0x4000u);
+    nds->bus->active_is_arm7 = 0;
+    bus_write32(nds->bus, 0x027E3B34u, 0xCAFEBABEu); /* ARM9 视角 → DTCM */
+    CHECK_EQ("dtcm arm9 write",
+             bus_read32(nds->bus, 0x027E3B34u), 0xCAFEBABEu);
+    CHECK_EQ("dtcm not in main ram",
+             bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x3E3B34u), 0x00000000u);
+
+    /* ARM7 写同一地址 → 主存镜像（不碰 DTCM） */
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, 0x027E3B34u, 0xDEADBEEFu);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("arm7 write under dtcm main",
+             bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x3E3B34u), 0xDEADBEEFu);
+    CHECK_EQ("arm7 write under dtcm intact",
+             bus_read32(nds->bus, 0x027E3B34u), 0xCAFEBABEu);
+
+    /* ITCM：ARM9 可读写 0x01FF8000，ARM7 访问落空 */
+    bus_write32(nds->bus, BUS_ARM9_ITCM_BASE, 0xEA00000Eu);
+    CHECK_EQ("itcm arm9 write",
+             bus_read32(nds->bus, BUS_ARM9_ITCM_BASE), 0xEA00000Eu);
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, BUS_ARM9_ITCM_BASE, 0xFFFFFFFFu);
+    CHECK_EQ("itcm arm7 write dropped",
+             bus_read32(nds->bus, BUS_ARM9_ITCM_BASE), 0x00u);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("itcm arm9 after arm7", 
+             bus_read32(nds->bus, BUS_ARM9_ITCM_BASE), 0xEA00000Eu);
+
+    bus_set_arm9_dtcm(nds->bus, 0, 0, 0); /* 恢复禁用，避免污染后续用例 */
 }
 
 /* ---- 阶段 21-B4 用例：ARM BX 奇地址应切 Thumb ---- */
@@ -3714,6 +3750,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_main_ram_mirror(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B8] ARM9 DTCM / ITCM 与主存镜像隔离\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_arm9_tcm(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B4] ARM BX 奇地址切 Thumb\n");

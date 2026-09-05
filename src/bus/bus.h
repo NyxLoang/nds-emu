@@ -6,9 +6,20 @@
 
 /* Main RAM：NDS 主内存，ARM9 镜像装载处，共 4MB。
    ARM9 还有一个无缓存镜像区 0x02400000-0x027FFFFF（同一物理内存、同偏移别名），
-   商业 ROM 常把栈放到该区（如 FFXII 用 0x027E0000 附近）以避开缓存；
-   ARM7 内存图里没有这段镜像（21-B6），其写访问应落空。 */
+   商业 ROM 常把栈放到该区（如 FFXII 用 0x027E0000 附近）以避开缓存。
+   镜像内的 0x027E0000-0x027E3FFF 在 FFXII 复位时被 CP15 配置成 ARM9 的 DTCM
+   （私有紧密耦合内存），因此 ARM7 对该地址的写访问仍会落到同一块 Main RAM，
+   不会碰 ARM9 的 DTCM 栈（21-B8 修正 21-B6 的“仅 ARM9 可见”简化）。 */
 #define BUS_MAIN_RAM_SIZE (4 * 1024 * 1024)
+
+/* ARM9 DTCM：16KB 私有数据内存，基址/使能由 CP15 c9,c1,0 + c1 bit16 配置
+   （ARM946E-S 的 Data TCM；NDS 上固定最大 16KB）。 */
+#define BUS_ARM9_DTCM_SIZE (16 * 1024)
+
+/* ARM9 ITCM：32KB 私有指令内存，固定映射在 0x01FF8000（ARM9 指令 TCM）。
+   FFXII 复位时把自己的系统例程从 ARM9 镜像 0x02070420 拷到此处。 */
+#define BUS_ARM9_ITCM_BASE 0x01FF8000u
+#define BUS_ARM9_ITCM_SIZE (32 * 1024)
 
 /* VRAM：显存，程序往这里写颜色字；本阶段先分配 656KB 区间。 */
 #define BUS_VRAM_SIZE (656 * 1024)
@@ -67,12 +78,17 @@ typedef struct io io_t;
    阶段 8 起加 ARM7 WRAM 与「当前访问者身份」（FIFO/中断按 CPU 分流）。 */
 typedef struct bus {
     uint8_t  main_ram[BUS_MAIN_RAM_SIZE]; /* Main RAM：4MB */
+    uint8_t  arm9_dtcm[BUS_ARM9_DTCM_SIZE]; /* ARM9 DTCM：16KB（CP15 可配置基址） */
+    uint8_t  arm9_itcm[BUS_ARM9_ITCM_SIZE]; /* ARM9 ITCM：32KB（0x01FF8000 起） */
     uint8_t  vram[BUS_VRAM_SIZE];         /* VRAM：656KB */
     uint8_t  arm7_wram[BUS_ARM7_WRAM_SIZE]; /* ARM7 WRAM：64KB */
     uint8_t  shared_wram[BUS_SHARED_WRAM_SIZE]; /* Shared WRAM：32KB（WRAMCNT 切分，见 bus.c） */
     uint8_t  palette[BUS_PALETTE_SIZE];   /* 调色板 RAM：2KB */
     uint8_t  oam[BUS_OAM_SIZE];           /* OAM：2KB（OBJ 属性） */
     io_t    *io;                          /* IO 寄存器区实现（由 nds 挂入） */
+    int      arm9_dtcm_on;                /* ARM9 DTCM 是否使能（CP15 c1 bit16） */
+    uint32_t arm9_dtcm_base;              /* ARM9 DTCM 基址（未使能为 0xFFFFFFFF） */
+    uint32_t arm9_dtcm_size;              /* ARM9 DTCM 大小 */
     int active_is_arm7;                   /* 当前访问者身份：0=ARM9, 1=ARM7 */
     int diag;                             /* 诊断开关：只打印异常事件（未知 SWI/未实现指令/未知 IO），供 bring-up 定位卡点 */
 } bus_t;
@@ -82,6 +98,10 @@ void bus_destroy(bus_t *bus);
 
 /* 诊断开关：on=1 时，未实现指令 / 未知 SWI / 未知 IO 访问打印一次日志（阶段 21 bring-up）。 */
 void bus_set_diag(bus_t *bus, int on);
+
+/* CP15 更新 ARM9 DTCM 映射（阶段 21-B8）：enabled=0 时 0x027E0000 等地址走 Main RAM
+   镜像；enabled=1 时 ARM9 对 [base, base+size) 的读写改走私有 DTCM。 */
+void bus_set_arm9_dtcm(bus_t *bus, int enabled, uint32_t base, uint32_t size);
 
 /* 按 8 位读写一个字节。
    地址换算规则：把总线地址减去区间基址，得到该数组的下标

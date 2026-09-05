@@ -410,26 +410,63 @@ static void exec_swp(arm_cpu_t *cpu, uint32_t insn)
                cpu->r[15], insn, b ? "B" : "", rd, rm, rn, old);
 }
 
-/* ---- 10.10/12.4 MRC/MCR 协处理器访问（CP15，按 CRn 索引存取） ----
+/* ---- 10.10/12.4/21-B8 MRC/MCR 协处理器访问（CP15） ----
    阶段 12.4：c1（系统控制寄存器）的 bit13(V) 控制异常向量基址（0=低 0x00000000，
-   1=高 0xFFFF0000），MCR 写 c1 后联动 vector_base；cache/MMU 使能位仅存储不生效。 */
+   1=高 0xFFFF0000）。
+   阶段 21-B8：FFXII 复位例程用 MCR p15,0,rX,c9,c1,0/1 配置 DTCM/ITCM，并在 c1
+   打开 bit16(DTCM enable)。按子寄存器保存 c9,c1,0/1，写后同步 bus 的 ARM9
+   DTCM 映射（0x027E0000 起 16KB，与 Main RAM 镜像分离）。 */
+static void exec_arm9_dtcm_update(arm_cpu_t *cpu)
+{
+    if (cpu->is_arm7)
+        return;
+    if ((cpu->cp15[1] >> 16) & 1u) {
+        uint32_t size = 0x200u << ((cpu->cp15_dtcm >> 1) & 0x1Fu);
+        uint32_t mask;
+        if (size < 0x1000u)
+            size = 0x1000u;
+        if (size > BUS_ARM9_DTCM_SIZE)
+            size = BUS_ARM9_DTCM_SIZE;
+        mask = ~(size - 1u);
+        bus_set_arm9_dtcm(cpu->nds->bus, 1, cpu->cp15_dtcm & mask, size);
+    } else {
+        bus_set_arm9_dtcm(cpu->nds->bus, 0, 0, 0);
+    }
+}
+
 static void exec_coprocessor(arm_cpu_t *cpu, uint32_t insn)
 {
     unsigned l = (insn >> 20) & 1u;
     unsigned crn = (insn >> 16) & 0xFu;
     unsigned rd = (insn >> 12) & 0xFu;
+    unsigned crm = insn & 0xFu;
+    unsigned op1 = (insn >> 21) & 0x7u;
+    unsigned op2 = (insn >> 5) & 0x7u;
     if (crn < 16) {
-        if (l) {
+        if (crn == 9 && op1 == 0 && crm == 1 && (op2 == 0 || op2 == 1)) {
+            /* c9,c1,0 = DTCM 配置，c9,c1,1 = ITCM 配置 */
+            if (l)
+                cpu->r[rd] = (op2 == 0) ? cpu->cp15_dtcm : cpu->cp15_itcm;
+            else if (op2 == 0)
+                cpu->cp15_dtcm = cpu->r[rd];
+            else
+                cpu->cp15_itcm = cpu->r[rd];
+            if (!l && op2 == 0)
+                exec_arm9_dtcm_update(cpu);
+        } else if (l) {
             cpu->r[rd] = cpu->cp15[crn];
         } else {
             cpu->cp15[crn] = cpu->r[rd];
-            if (crn == 1)
-                cpu->vector_base = (cpu->cp15[1] & (1u << 13)) ? 0xFFFF0000u : 0x00000000u;
+            if (crn == 1) {
+                cpu->vector_base = (cpu->cp15[1] & (1u << 13))
+                                       ? 0xFFFF0000u : 0x00000000u;
+                exec_arm9_dtcm_update(cpu);
+            }
         }
     }
     if (g_trace)
-        printf("cpu: PC=%08X insn=%08X %s p15, c%u, r%u\n",
-               cpu->r[15], insn, l ? "MRC" : "MCR", crn, rd);
+        printf("cpu: PC=%08X insn=%08X %s p15,0, r%u, c%u, c%u, %u\n",
+               cpu->r[15], insn, l ? "MRC" : "MCR", rd, crn, crm, op2);
 }
 
 /* 分支 B/BL 目标计算：PC+8 + 符号扩展(offset24<<2)。 */

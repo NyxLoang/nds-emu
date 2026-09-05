@@ -488,3 +488,11 @@
 - 全量 **552 项检查 0 失败**；真 ROM headless：ARM9 不再弹 PC=0、不再在零区漂移。
 - **结果**：✅ 用户验收通过（2026-09-05）。
 
+## 2026-09-05 · 21-B8 — ARM9 DTCM/ITCM 用例
+
+- `test_nds.c` 新增 `[case 21-B8]`：`test_arm9_tcm`——
+  ARM9 视角 0x027E3B34 写读走 DTCM；ARM7 同址写落到 Main RAM 0x3E3B34 且不碰
+  DTCM；ITCM 0x01FF8000 仅 ARM9 可写读、ARM7 写落空。共 7 项检查。
+- 21-B3 镜像用例同步修正：ARM7 写 0x024-0x027 别名现在落 Main RAM（melonDS 口径）。
+- 全量 **594 项检查 0 失败**；真 ROM headless 越过旧信箱死等，下一卡点排入 B9。
+

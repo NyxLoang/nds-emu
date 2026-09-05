@@ -19,6 +19,17 @@ void bus_set_diag(bus_t *bus, int on)
         bus->diag = on;
 }
 
+void bus_set_arm9_dtcm(bus_t *bus, int enabled, uint32_t base, uint32_t size)
+{
+    if (bus == NULL)
+        return;
+    if (size > BUS_ARM9_DTCM_SIZE)
+        size = BUS_ARM9_DTCM_SIZE;
+    bus->arm9_dtcm_on = enabled && size > 0;
+    bus->arm9_dtcm_base = bus->arm9_dtcm_on ? base : 0xFFFFFFFFu;
+    bus->arm9_dtcm_size = bus->arm9_dtcm_on ? size : 0;
+}
+
 /* Shared WRAM 按 WRAMCNT 低 2 位 + 当前访问者切分（阶段 21-B7）。
    真机整片 0x03xxxxxx 区域会按每个核的「基址指针 + 掩码」重复别名，
    这里只处理本项目映射的两个 32KB 口（0x03000000 主区 / 0x037F8000 镜像），
@@ -64,19 +75,39 @@ static int bus_shared_resolve(const bus_t *bus, uint32_t addr,
 static int bus_resolve(const bus_t *bus, uint32_t addr,
                        const uint8_t **region, size_t *off)
 {
+    /* ARM9 ITCM（阶段 21-B8）：固定 0x01FF8000-0x01FFFFFF，只有 ARM9 能访问。
+       FFXII 复位从 0x02070420 拷贝 0x6BC0 字节到此处作为系统例程。 */
+    if (!bus->active_is_arm7 &&
+        addr >= BUS_ARM9_ITCM_BASE &&
+        addr - BUS_ARM9_ITCM_BASE < BUS_ARM9_ITCM_SIZE) {
+        *region = bus->arm9_itcm;
+        *off = (size_t)(addr - BUS_ARM9_ITCM_BASE);
+        return 1;
+    }
     if (addr >= BUS_MAIN_RAM_BASE &&
         addr - BUS_MAIN_RAM_BASE < BUS_MAIN_RAM_SIZE) {
         *region = bus->main_ram;
         *off = (size_t)(addr - BUS_MAIN_RAM_BASE);
         return 1;
     }
+    /* ARM9 DTCM（阶段 21-B8）：FFXII 复位把 DTCM 配到 0x027E0000 并把栈建在
+       0x027E0000-0x027E3FFF。DTCM 在 ARM9 地址空间内优先于 Main RAM 镜像，
+       ARM7 看不到 DTCM，仍访问同一地址下的 Main RAM（两套物理内存不冲突）。 */
+    if (!bus->active_is_arm7 && bus->arm9_dtcm_on &&
+        addr >= bus->arm9_dtcm_base &&
+        addr - bus->arm9_dtcm_base < bus->arm9_dtcm_size) {
+        *region = bus->arm9_dtcm;
+        *off = (size_t)(addr - bus->arm9_dtcm_base);
+        return 1;
+    }
     /* Main RAM 无缓存镜像：0x02400000 起 4MB，与主区同一物理数组（别名，阶段 21-B3）。
        换算规则与主区相同：区间内下标 = addr - 镜像基址。
-       该镜像是 ARM9 的“绕过缓存”通道，ARM7 内存图里没有这一段（21-B6）：
-       FFXII 的 ARM7 会向该区做块拷贝，真机上同样落空；若给 ARM7 也映射，
-       拷贝会覆盖 ARM9 放在镜像区的栈，导致函数返回地址被指令字污染。 */
-    if (!bus->active_is_arm7 &&
-        addr >= BUS_MAIN_RAM_MIRROR_BASE &&
+       21-B8：镜像本身只是 ARM9 的“绕过缓存”通道，但同一段 0x024-0x027 地址
+       在 ARM7 总线也解码到这块 4MB 主存（melonDS ARM7 也命中 0x02000000/
+       0x02800000 两个窗口）。之前把 ARM7 拦在镜像外是因为没实现 DTCM——ARM7
+       拷贝会覆盖“看似 ARM9 栈”的主存字节；真正原因是那些字节应属于 ARM9
+       DTCM，与主存镜像无关。 */
+    if (addr >= BUS_MAIN_RAM_MIRROR_BASE &&
         addr - BUS_MAIN_RAM_MIRROR_BASE < BUS_MAIN_RAM_SIZE) {
         *region = bus->main_ram;
         *off = (size_t)(addr - BUS_MAIN_RAM_MIRROR_BASE);

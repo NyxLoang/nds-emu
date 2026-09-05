@@ -59,14 +59,14 @@ r15 读值 = (当前 PC & ~3) + 8
 |---|-----|------|
 | G1 | ARM r15 读缺 +8，PC 相对字面量池读错 | ✅ 已修 |
 | G2 | Shared WRAM（0x03000000-0x03007FFF）及镜像（0x037F8000 一带）未映射 | ✅ 已修（21-B1，2026-09-05） |
-| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2..B7 已修：IPCSYNC + Main RAM 镜像 + ARM BX 切 Thumb + Thumb BX 寄存器号 + 镜像仅 ARM9 可见 + EXMEMCNT/WRAMCNT；双核仍停在各自轮询，见 B8） |
-| G4 | 修完 G2/G3 后继续暴露的更多 gap（SWI/PPU/中断/内存等） | ⏳ Phase B 迭代 |
+| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ✅ 已过旧卡点（21-B2..B8：IPCSYNC/镜像/BX/Thumb/WRAMCNT + ARM9 DTCM/ITCM + 信箱解码；2026-09-05 起 ARM9 进 boot 初始化，下个 gap 见 G4/B9） |
+| G4 | 修完 G2/G3 后继续暴露的更多 gap（SWI/PPU/中断/内存等） | ⏳ Phase B（B9 起：ARM9 BIOS/IRQ 高向量 + ARM7 SWI 0x0E CRC16 + 一批未知 IO） |
 
 ---
 
 ## 3. 跑真 ROM 时看到的现象（读代码时可对照）
 
-用当前版本执行：
+这是 Phase A 版本的现象记录，后面每个微步都在改写：
 
 ```sh
 build/nds-emu.exe "tools/Z 最终幻想12…(1024Mb).nds" --headless 20000000
@@ -82,11 +82,11 @@ headless: done. ARM9 PC=132612F8 cyc=13333334 | ARM7 PC=037FFC44 cyc=6666666
 
 两个特征值得记住：
 
-1. **ARM7 的 PC 落在 0x037F8xxx**：这是 Shared WRAM 的镜像区，当前 bus 没映射，
+1. **ARM7 的 PC 落在 0x037F8xxx**：这是 Shared WRAM 的镜像区，当时 bus 没映射，
    读返回 0。0x00000000 恰好是一条合法但无意义的指令（`ANDEQ r0,r0,r0`），
    所以 CPU 不报错，只是一直“取 0 → 前进 4”，PC 从低地址往高地址漂。
-2. **ARM9 的 PC 也在按 4 字节递增漂移**：说明某条跳转把执行流送进了没有代码/
-   没有映射的地址区间，模拟器既没有崩也没有报未实现指令。
+2. **ARM9 的 PC 也在按 4 字节递增漂移**：说明某条跳转把执行流送进了没有代码/没有
+   映射的地址区间，模拟器既没有崩也没有报未实现指令。
 
 诊断口诀：真 ROM “跑飞”时先看两核 PC 落在哪个区间，再往回找最后一次合理的分支/BL。
 
@@ -166,6 +166,43 @@ headless: done. ARM9 PC=0200B840 cyc=2000000 | ARM7 PC=037FC0B0 cyc=1000000
 结论：B7 已把未知 IO 清零，双核当前卡在「ARM7 命令口 0x027FFFF0 → ARM9 事件
 状态区 0x027FFF8C」这条数据约定上，排入 B8 继续解码。
 
+### 21-B8 之后（2026-09-05）：根因是 ARM9 DTCM/ITCM，不是“镜像仅 ARM9 可见”
+
+解码 ARM7/ARM9 两侧代码后确认：B7 看到的两个轮询（ARM7 等 `0x027FFFBC==0x7F`、
+ARM9 等 `0x027FFF88/8C` 事件位）都是**自研信箱协议的正常握手**，不是模拟器缺
+寄存器。真正拦住握手的是内存归属：
+
+1. **0x027E0000-0x027E3FFF 是 ARM9 的 DTCM**。FFXII 复位例程 `0x02000A6C` 用
+   `MCR p15,0,rX,c9,c1,0`（值 0x027E000A）配置 16KB DTCM 到 0x027E0000，再把 SVC/
+   IRQ/User 栈建在这里。ARM7 同时把自己的镜像搬到主存 0x027E0000 起 0x182A0 字节；
+   ARM7 看不到 DTCM，写的是同一地址下的 Main RAM（真机按 0x02000000-0x02FFFFFF
+   窗口解码，melonDS 的 ARM7 也命中两个 8MB 窗口）。B6 把镜像“仅 ARM9 可见”其实是
+   掩盖了“DTCM 未实现”，ARM9 栈被写坏是因为它被错误地放在 Main RAM 里。
+2. **0x01FF8000 起 32KB 是 ARM9 的 ITCM**。复位代码 `0x020009F0` 用尾部描述表
+   `0x02078020`（目标 0x01FF8000、大小 0x6BC0；目标 0x027E0000、大小 0x1040）把
+   ARM9 镜像 0x02070420 起的系统例程拷进 ITCM/DTCM，随后清掉源区。ITCM 未映射时
+   ARM9 第一次 `BL 0x01FF81B4` 就取到 0，从 ITCM 零区一路漂进主存。
+3. 0x027FFxxx 的主存高 4KB 就是共享信箱区：ARM7 拷贝后按
+   `0x027FFFF0→0x027FFFB8/BC→0x027FFFBE` 的锁存/握手顺序运行，ARM9 事件位在
+   `0x027FFC00+0x388` 起（事件 n 的 bitn），不再卡死。
+
+**做了什么**：
+
+- `bus` 新增 ARM9 DTCM（16KB，CP15 可配基址）与 ARM9 ITCM（32KB，固定
+  0x01FF8000）；ARM9 优先命中 DTCM，ARM7 仍访问同地址的 Main RAM 镜像。
+- `exec_coprocessor` 按子寄存器保存 CP15 c9,c1,0/1，c1 bit16 使能后把 DTCM 映射
+  同步给 bus；ARM9 MRC c9 读回同一配置。
+- Main RAM 镜像恢复双核可访问（melonDS 口径），撤掉 B6 的“仅 ARM9”限制并修正
+  bus.h/buslog 里的错误结论；`direct-boot tables` 按 melonDS SetupDirectBoot 写
+  0x027FFxxx 卡带信息表。
+- 测试新增 `[case 21-B8]`：DTCM 与镜像互不覆盖、ARM7 在 DTCM 地址下写主存、ITCM
+  仅 ARM9 可访问。全量 **594 项检查 0 失败**。
+
+重跑 FFXII `--headless 2000000`：双核不再停在旧信箱轮询；ARM9 跑到 boot 初始化
+0x02009EC0（打开中断后被 IRQ 打断），ARM7 首次调 `SWI 0x0E`（GetCRC16）没有
+HLE 实现。下一卡点是 **ARM9 高向量 0xFFFF0000 的 BIOS/IRQ 分发 + ARM7 SWI 0x0E**，
+排入 B9。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误
@@ -198,10 +235,10 @@ Phase B 的验收口径：**hard_title**——FFXII 能进入标题画面。
 | B3 | 映射 Main RAM 无缓存镜像 0x02400000-0x027FFFFF（FFXII 栈放 0x027E0000 附近） | 单测 552 项 0 失败；headless：ARM9 稳定在 0x0200B9xx 主存代码区，不再弹 PC=0 |
 | B4 | 修 ARM BX 奇地址未切 Thumb（ARM7 0x038043C9 入口） | 单测 555 项 0 失败；ARM7 不再按 ARM 误译 Thumb 区，旧 0x0626D1xx 终点消失 |
 | B5 | 补 Thumb 逐条 trace，定位并修复 ARM7 跳进 IO 区的根因（Thumb BX/BLX Rm 解码错误） | Thumb trace + headless：IO 刷屏消失，ARM7 正常进出 SWI3/BX-lr 桩（557 项 0 失败） |
-| B6 | ARM9 栈 LR 污染定位与修复（Main RAM 无缓存镜像仅 ARM9 可见，ARM7 写访问落空） | LDM trace + 写监视：ARM9 过 0x0200B9B4 返回点、不再弹 0xE1C010B0（559 项 0 失败） |
+| B6 | ARM9 栈 LR 污染定位（当时以“镜像仅 ARM9 可见”临时修复；B8 修正为 ARM9 DTCM 未实现） | LDM trace + 写监视：ARM9 过 0x0200B9B4 返回点、不再弹 0xE1C010B0（559 项 0 失败） |
 | B7 | ✅ 排查 ARM9 新未知 IO（0x04000204/205、0x04000247）并实现 EXMEMCNT/WRAMCNT + Shared WRAM 双核切分 | 587 项单测 0 失败；headless 3 条未知 IO 消除 |
-| B8 | 解码 ARM7 0x027FFFF0 命令口与 ARM9 0x027FFF8C 事件位约定，让双核握手继续前移 | 每轮 headless 重跑观察下一卡点 |
-| B9… | 继续按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
+| B8 | ✅ 解码 ARM7 0x027FFFF0 命令口与 ARM9 0x027FFF8C 事件位约定；实现 ARM9 DTCM/ITCM、镜像双核别名、direct-boot 表 | 594 项单测 0 失败；headless 越过旧轮询，ARM9 到 0x02009EC0、ARM7 到 SWI 0x0E |
+| B9… | ARM9 BIOS/IRQ 高向量 + ARM7 SWI 0x0E（GetCRC16）等新 gap | 每个 gap 一次提交 |
 
 > 后续步骤只有在真机现象出现后才能精确拆解，这也是本项目“一次一个微步”的原因——
 > bring-up 阶段不预先猜十步，而是一步一个证据地往前走。

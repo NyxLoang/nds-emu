@@ -28,6 +28,7 @@ typedef struct io {
     keypad_t keypad;                  /* KEYINPUT */
     dma_t dma;                        /* DMA：阶段 15 补齐 4 通道 */
     ipc_fifo_t fifo;                  /* IPC FIFO（阶段 8：双核通信） */
+    ipc_sync_t sync;                  /* IPCSYNC（阶段 21-B2：双核同步寄存器） */
     disp_t disp;                      /* 2D 显示控制（阶段 9：DISPCNT/BGxCNT/滚动） */
     touch_t touch;                    /* 触摸屏 SPI（阶段 17：SPICNT/SPIDATA + TSC） */
     snd_t snd;                        /* 音频（阶段 18：16 通道 + SOUNDCNT/SOUNDBIAS） */

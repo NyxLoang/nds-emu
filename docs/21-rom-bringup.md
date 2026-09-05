@@ -59,7 +59,7 @@ r15 读值 = (当前 PC & ~3) + 8
 |---|-----|------|
 | G1 | ARM r15 读缺 +8，PC 相对字面量池读错 | ✅ 已修 |
 | G2 | Shared WRAM（0x03000000-0x03007FFF）及镜像（0x037F8000 一带）未映射 | ✅ 已修（21-B1，2026-09-05） |
-| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B |
+| G3 | 双核启动握手时序（ARM7 挂起/释放 + IPC FIFO 在真实 ROM 上验证） | ⏳ Phase B（21-B2 已实现 IPCSYNC，握手仍未通；新卡点见 Phase B 表 B3/B4） |
 | G4 | 修完 G2/G3 后继续暴露的更多 gap（SWI/PPU/中断/内存等） | ⏳ Phase B 迭代 |
 
 ---
@@ -90,6 +90,21 @@ headless: done. ARM9 PC=132612F8 cyc=13333334 | ARM7 PC=037FFC44 cyc=6666666
 
 诊断口诀：真 ROM “跑飞”时先看两核 PC 落在哪个区间，再往回找最后一次合理的分支/BL。
 
+### 21-B2 之后（2026-09-05）：trace 定位两个具体跑飞点
+
+修完 IPCSYNC 后 headless 不再报 `0x04000180/81` 未知 IO，但两核终点不变。逐条 trace
+定位到两个明确原因：
+
+1. **ARM9 在约 cycle 126,634 弹 PC=0**：调用 `0x0201A9B8` 时函数用
+   `STMFD/LDMFD sp!, {r4,pc}` 保存/恢复返回地址，而 SP≈0x027E3Fxx。该地址落在
+   Main RAM 的**无缓存镜像区 0x02400000-0x027FFFFF**（真机存在、当前 bus 未映射），
+   栈写入丢失 → 弹回 0 → 在零区逐 4 漂移。
+2. **ARM7 在约 cycle 231,180 起按 ARM 码跑飞**：`BX r12 -> 0x038043C9`（LSB=1，
+   真机应切 Thumb 并把 PC 对齐到 0x038043C8）没有更新 T 位，CPU 把 0x038044xx 的
+   Thumb 数据当 ARM 指令译码，最终 `B 0x049E07B5` 离开可执行区。
+
+这两个点成为 B3/B4 的直接依据；每修一个就重跑一次，直到 hard_title。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误
@@ -117,9 +132,11 @@ Phase B 的验收口径：**hard_title**——FFXII 能进入标题画面。
 
 | 微步 | 做什么 | 验证 |
 |------|--------|------|
-| B1 | 映射 Shared WRAM：0x03000000 起 32KB + 0x037F8000 镜像 | 单测 + headless 重跑，确认 ARM7 不再在镜像区逐 0 漂移 |
-| B2 | 重跑真 ROM，产出第二个 gap 清单（重点看双核启动握手 G3） | headless + trace 日志 |
-| B3… | 按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
+| B1 | 映射 Shared WRAM：0x03000000 起 32KB + 0x037F8000 镜像（✅ 已提交 bf8899b） | 单测 + headless 重跑，确认 ARM7 不再在镜像区逐 0 漂移 |
+| B2 | 实现 IPCSYNC（0x04000180/81）：双核 out 交叉读写、bit13 → 对端 IF16、bit14 门控 | 单测 544 项 0 失败；headless 不再报 IPCSYNC 未知 IO |
+| B3 | 映射 Main RAM 无缓存镜像 0x02400000-0x027FFFFF（FFXII 栈放 0x027E0000 附近） | 单测 + headless 重跑，ARM9 能过 0x0201A9DC 返回点、不再弹 PC=0 |
+| B4 | 修 ARM BX 奇地址未切 Thumb（ARM7 0x038043C9 入口） | 单测（ARM BX 奇地址 T=1）+ headless，ARM7 进 Thumb 区不跑飞 |
+| B5… | 继续按新 gap 逐个修，直到 hard_title | 每个 gap 一次提交 |
 
 > 后续步骤只有在真机现象出现后才能精确拆解，这也是本项目“一次一个微步”的原因——
 > bring-up 阶段不预先猜十步，而是一步一个证据地往前走。

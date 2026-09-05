@@ -138,3 +138,52 @@ void fifo_update_irq(ipc_fifo_t *f, int is_arm7, struct irq *irq)
     *psend = send_empty;
     *precv = recv_nempty;
 }
+
+/* ---- IPCSYNC（阶段 21-B2） ---- */
+
+int ipc_sync_is_addr(uint32_t addr)
+{
+    return addr == IO_IPCSYNC || addr == IO_IPCSYNC + 1;
+}
+
+/* 按访问者拼 16 位读值：
+   低 4 位 = 对端 out（对端存的 bit8-11 右移到 bit0-3）；
+   高字节 = 本核存的 out/enable（bit13 只写，读回恒 0）。 */
+static uint16_t ipc_sync_read16(const ipc_sync_t *s, int is_arm7)
+{
+    const uint16_t *loc = is_arm7 ? &s->v[1] : &s->v[0];
+    const uint16_t *rem = is_arm7 ? &s->v[0] : &s->v[1];
+    return (uint16_t)(((*rem & IPCSYNC_OUT_MASK) >> 8)
+                    | (*loc & (IPCSYNC_OUT_MASK | IPCSYNC_ENABLE)));
+}
+
+uint8_t ipc_sync_read8(const ipc_sync_t *s, uint32_t addr, int is_arm7)
+{
+    uint16_t v = ipc_sync_read16(s, is_arm7);
+    if (addr == IO_IPCSYNC)
+        return (uint8_t)(v & 0xFFu);
+    return (uint8_t)(v >> 8);
+}
+
+void ipc_sync_write8(ipc_sync_t *s, uint32_t addr, uint8_t val, int is_arm7,
+                     struct irq *remote)
+{
+    uint16_t *loc = is_arm7 ? &s->v[1] : &s->v[0];
+    const uint16_t *rem = is_arm7 ? &s->v[0] : &s->v[1];
+    /* 用当前可见读值做字节合并（与 FIFO CNT 同样按 16 位小端读写） */
+    uint16_t merged = ipc_sync_read16(s, is_arm7);
+    if (addr == IO_IPCSYNC)
+        merged = (uint16_t)((merged & 0xFF00u) | val);
+    else
+        merged = (uint16_t)((merged & 0x00FFu) | ((uint16_t)val << 8));
+
+    /* 本核视图只落可写位：out(bit8-11) + enable(bit14)。
+       低 4 位是对端数据（只读）、bit13 是请求（只写），都不许落盘。 */
+    *loc = (uint16_t)((*loc & ~(IPCSYNC_OUT_MASK | IPCSYNC_ENABLE))
+                    | (merged & (IPCSYNC_OUT_MASK | IPCSYNC_ENABLE)));
+
+    /* 请求位在 16 位寄存器里是 bit13 → 高字节第 5 位（0x20）。
+       写 1 且对端 enable=1 时置对端 IF bit16（沿触发，类似 FIFO 中断门控）。 */
+    if (addr == IO_IPCSYNC + 1 && (val & 0x20u) && (*rem & IPCSYNC_ENABLE))
+        remote->ifl |= IO_IF_IPC_SYNC;
+}

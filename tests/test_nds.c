@@ -782,6 +782,86 @@ static void test_shared_wram(nds_t *nds)
              0xAABBCCDDu);
 }
 
+/* ---- 阶段 21-B2 用例：IPCSYNC 同步寄存器（双核数据交叉 + 只读/只写位） ---- */
+static void test_ipcsync_regs(nds_t *nds)
+{
+    /* 初始两核都 out=0、enable=0 */
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("ipcsync arm9 init", bus_read16(nds->bus, IO_IPCSYNC), 0x0000u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("ipcsync arm7 init", bus_read16(nds->bus, IO_IPCSYNC), 0x0000u);
+
+    /* ARM9 写 out=A + enable=1（0x4A00）：自己读回高字节 0x4A；ARM7 在 bit0-3 读到 A */
+    nds->bus->active_is_arm7 = 0;
+    bus_write16(nds->bus, IO_IPCSYNC, 0x0A00u | IPCSYNC_ENABLE);
+    CHECK_EQ("ipcsync arm9 local", bus_read16(nds->bus, IO_IPCSYNC), 0x4A00u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("ipcsync arm7 reads A", bus_read16(nds->bus, IO_IPCSYNC), 0x000Au);
+
+    /* ARM7 写 out=5 + enable=1（0x4500）：ARM7 读 0x450A（含 ARM9 的 A）；
+       ARM9 的低 4 位变成 5（读到 ARM7 的 out） */
+    bus_write16(nds->bus, IO_IPCSYNC, 0x0500u | IPCSYNC_ENABLE);
+    CHECK_EQ("ipcsync arm7 local", bus_read16(nds->bus, IO_IPCSYNC), 0x450Au);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("ipcsync arm9 reads 5", bus_read16(nds->bus, IO_IPCSYNC), 0x4A05u);
+
+    /* 字节访问：低字节=对端数据，高字节=本核 out/enable */
+    CHECK_EQ("ipcsync arm9 low byte", bus_read8(nds->bus, IO_IPCSYNC), 0x05u);
+    CHECK_EQ("ipcsync arm9 high byte", bus_read8(nds->bus, IO_IPCSYNC + 1), 0x4Au);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("ipcsync arm7 low byte", bus_read8(nds->bus, IO_IPCSYNC), 0x0Au);
+    CHECK_EQ("ipcsync arm7 high byte", bus_read8(nds->bus, IO_IPCSYNC + 1), 0x45u);
+
+    /* ARM9 尝试写低字节（本应是对端只读数据 + 未用位）：out/enable 不变 */
+    nds->bus->active_is_arm7 = 0;
+    bus_write8(nds->bus, IO_IPCSYNC, 0xFFu);
+    CHECK_EQ("ipcsync low-byte read-only", bus_read16(nds->bus, IO_IPCSYNC), 0x4A05u);
+}
+
+/* ---- 阶段 21-B2 用例：IPCSYNC bit13 请求 → 对端 IF bit16 ---- */
+static void test_ipcsync_irq(nds_t *nds)
+{
+    /* 清两端 IF，并把 enable/out 全清成初始态 */
+    nds->bus->active_is_arm7 = 0;
+    bus_write32(nds->bus, IO_IF_ADDR, 0xFFFFFFFFu); /* IF 写 1 清除全部挂起位 */
+    bus_write16(nds->bus, IO_IPCSYNC, 0x0000u);
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, IO_IF_ADDR, 0xFFFFFFFFu);
+    bus_write16(nds->bus, IO_IPCSYNC, 0x0000u);
+
+    /* ARM9 未使能接收：ARM7 写 bit13（高字节 0x20）→ ARM9 IF16 不置位 */
+    nds->bus->active_is_arm7 = 1;
+    bus_write8(nds->bus, IO_IPCSYNC + 1, 0x20u);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("ipcsync disabled no IF16",
+             bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_IPC_SYNC, 0u);
+
+    /* ARM9 使能接收后再发请求 → IF16 置位；请求位只写不存，读回不带 bit13 */
+    bus_write16(nds->bus, IO_IPCSYNC, IPCSYNC_ENABLE);
+    nds->bus->active_is_arm7 = 1;
+    bus_write8(nds->bus, IO_IPCSYNC + 1, 0x20u);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("ipcsync request IF16",
+             bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_IPC_SYNC, IO_IF_IPC_SYNC);
+    CHECK_EQ("ipcsync request not stored", bus_read16(nds->bus, IO_IPCSYNC),
+             IPCSYNC_ENABLE);
+
+    /* IF 写 1 清 0：软件应答后 IF16 应消失 */
+    bus_write32(nds->bus, IO_IF_ADDR, 0xFFFFFFFFu);
+    CHECK_EQ("ipcsync IF16 cleared",
+             bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_IPC_SYNC, 0u);
+
+    /* 反向：ARM7 使能后，ARM9 发请求 → ARM7 IF16 置位 */
+    nds->bus->active_is_arm7 = 1;
+    bus_write16(nds->bus, IO_IPCSYNC, IPCSYNC_ENABLE);
+    nds->bus->active_is_arm7 = 0;
+    bus_write8(nds->bus, IO_IPCSYNC + 1, 0x20u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("ipcsync reverse IF16",
+             bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_IPC_SYNC, IO_IF_IPC_SYNC);
+    nds->bus->active_is_arm7 = 0; /* 恢复默认视角，避免污染后续用例 */
+}
+
 /* ---- 8.4 用例：交错调度 2:1 ---- */
 static void test_interleave(nds_t *nds)
 {
@@ -3424,6 +3504,14 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_shared_wram(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B2] IPCSYNC 同步寄存器（双核数据 + bit13 中断请求）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_ipcsync_regs(nds);
+        test_ipcsync_irq(nds);
         nds_destroy(nds);
     }
     printf("\n[case 8.4] 交错调度 2:1\n");

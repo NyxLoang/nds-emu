@@ -184,4 +184,5 @@
 | 2026-08-15 | 21-A3 | CPU | 修 ARM r15 读缺 +8（`read_reg` 统一修正 PC 相对字面量池）；跑 FFXII 定位首个 gap：Shared WRAM 未映射 | [cpu](src/cpu/cpulog.md) |
 | 2026-09-05 | 21-B0 | 预习/文档 | 新增 `docs/21-rom-bringup.md`：Phase A 总结 + Phase B 路线（真实 ROM 兼容性验收学习文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B1 | 内存总线 | Shared WRAM 映射：0x03000000 主区 + 0x037F8000 镜像区（32KB 同一物理内存）；ARM7 不再卡 0x037F8xxx | [bus](src/bus/buslog.md) |
+| 2026-09-05 | 21-B2 | IO/IPC | IPCSYNC（0x04000180/81）同步寄存器：双核 out 交叉读写 + bit13 请求→对端 IF16 + bit14 门控；真 ROM 不再报未知 IO（544 项检查 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) |
 | 2026-09-05 | — | 工程管理 | 程序入口自动切控制台 UTF-8（`SetConsoleOutputCP(CP_UTF8)`），修复中文日志乱码 | [main](src/mainlog.md) · [tests](tests/testlog.md) |

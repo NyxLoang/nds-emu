@@ -17,6 +17,9 @@
 #define IO_IF_FIFO_SEND_EMPTY    (1u << 17)
 #define IO_IF_FIFO_RECV_NOT_EMPTY (1u << 18)
 
+/* IPC 同步中断位（阶段 21-B2）：bit16 = 对端经 IPCSYNC.bit13 发来的请求 */
+#define IO_IF_IPC_SYNC (1u << 16)
+
 /* 卡带中断位（阶段 15）：bit19 = 卡带数据传输完成 */
 #define IO_IF_CARD_DONE (1u << 19)
 

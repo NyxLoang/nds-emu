@@ -194,3 +194,27 @@
 - **踩坑修复**：`disp_reg16` 原按寄存器基址精确匹配，`bus_write16` 写高字节（奇地址）时匹配失败导致高字节丢失；
   改为 `addr & ~1u` 对齐基址后，低/高字节都能正确写入对应字段。
 - **怎么验证**：`test_blend_regs`（主/副混合三件套 + 主亮度 + 窗口 + 捕获全读写回）全过。
+
+## 2026-09-05 · 21-B2 — IPCSYNC 同步寄存器（0x04000180/81）
+
+- **做了什么**：
+  - `irq.h` 新增 `IO_IF_IPC_SYNC`（bit16）：真机里对端经 IPCSYNC.bit13 发来的请求对应
+    IF bit16。
+  - `fifo.h` 新增 IPCSYNC 常量与 `ipc_sync_t`（v[0]=ARM9、v[1]=ARM7，每核只存
+    bit8-11 out + bit14 enable）；`fifo.c` 实现按访问者视角的读写：读时低 4 位 = 对端
+    out（右移），高字节 = 本核 out/enable，bit13 只写不落盘；写时按 16 位小端字节合并，
+    bit13 写 1 且对端 enable=1 时置对端 IF16（沿触发，与 FIFO 的 IRQ 使能门控一致）。
+  - `io_t` 增 `sync` 字段；`io_read8/io_write8` 命中 0x04000180/81 时按访问者转发，
+    请求目标取对端核的 irq（ARM9 请求 → ARM7 IF，ARM7 请求 → ARM9 IF）。
+  - `tests/test_nds.c` 新增 `[case 21-B2]`：`test_ipcsync_regs`（双核 out 交叉读取、
+    字节访问、低字节只读）+ `test_ipcsync_irq`（enable=0 不置 IF16、enable=1 置位、
+    请求位不落盘、IF 写 1 清除、反向请求）。
+- **怎么验证**：编译通过；`test_nds.exe` **544 项检查 0 失败**；真 ROM
+  `--headless 20000000` 不再打印 `io: ... unknown addr=04000180/81`。
+- **观察/遗留**：headless 终点仍与 B1 后相同（ARM7 PC=0626D1C1），说明真 ROM 对 IPCSYNC
+  的访问是写 out 数据（0x0800）而非请求，未落在关键握手路径。用 `--trace` 定位到两个
+  新卡点：① ARM9 栈在 0x027E3Fxx（0x02400000-0x027FFFFF 主存无缓存镜像未映射，写丢
+  失），函数 `LDMFD sp!, {r4,pc}` 弹回 PC=0（约 cycle 126,634）；② ARM7 `BX r12 ->
+  0x038043C9` 奇地址本应切 Thumb 却没切，随后把数据区当 ARM 码执行跑飞（约
+  cycle 231,180）。两点分别排入 B3/B4。
+- **结果**：✅ 用户验收通过（2026-09-05）。

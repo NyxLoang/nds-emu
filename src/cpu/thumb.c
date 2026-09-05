@@ -78,6 +78,11 @@ int thumb_step(arm_cpu_t *cpu, uint16_t insn)
     uint32_t pc_word = pc & ~3u;       /* PC 相对寻址的字对齐基址 */
     unsigned rd, rs, rn, rm, imm, op;
 
+    /* 逐条 trace（21-B5）：bring-up 阶段普通 Thumb 指令也要能看见，
+       否则无法定位真 ROM 在 Thumb 段内跳到哪一步出错。 */
+    if (g_trace)
+        printf("thumb: PC=%08X insn=%04X\n", cpu->r[15], insn);
+
     /* ---- 格式 1/2：bits15-13 = 000：移位 / 加减 ---- */
     if ((insn >> 13) == 0) {
         op = (insn >> 11) & 3u;
@@ -159,9 +164,10 @@ int thumb_step(arm_cpu_t *cpu, uint16_t insn)
     if ((insn >> 10) == 0x11u) {
         op = (insn >> 8) & 3u;
         if (op == 3) {
-            /* BX/BLX Rm：Rm = bit6:bits2-0（bits5-3 恒 0）；bit7=0 BX / 1 BLX。
-               T=Rm[0]，PC=Rm&~1；BLX 先 lr=当前 pc|1。 */
-            unsigned bx_rm = (insn & 7u) | ((insn >> 6) & 1u ? 8u : 0u);
+            /* BX/BLX Rm：寄存器号在 bit6:3（如 BX lr=0x4770 → Rm=14），
+               低 3 位固定为 0；bit7=0 BX / 1 BLX。T=Rm[0]，PC=Rm&~1；
+               BLX 先 lr=当前 pc|1。 */
+            unsigned bx_rm = (insn >> 3) & 0xFu;
             if (insn & (1u << 7)) /* BLX */
                 cpu->r[14] = (pc | 1u);
             cpu->cpsr = (cpu->r[bx_rm] & 1u) ? (cpu->cpsr | CPSR_T) : (cpu->cpsr & ~CPSR_T);

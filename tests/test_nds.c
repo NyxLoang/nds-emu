@@ -919,9 +919,11 @@ static void test_arm_bx_thumb(nds_t *nds)
         bus_write32(nds->bus, arm_base + 4 * i, prog[i]);
     cpu_reset(nds->cpu, arm_base);
     exec_set_trace(0);
+    thumb_set_trace(0); /* 本用例内部会切 Thumb，关逐条打印避免噪音 */
     int steps = 0;
     while (steps++ < 12 && nds->cpu->r[15] != thumb_base + 2)
         cpu_step(nds->cpu);
+    thumb_set_trace(1);
     exec_set_trace(1);
 
     CHECK_EQ("arm bx odd T=1", nds->cpu->cpsr & CPSR_T, CPSR_T);
@@ -2195,9 +2197,17 @@ static void test_thumb_branch(nds_t *nds)
 
     /* BX r1（奇地址）→ 保持 Thumb（T=1），PC = 目标 & ~1 */
     cpu->r[1] = (base + 0x20) | 1u;
-    thumb_start(nds, base); bus_write16(nds->bus, base, 0x4701); cpu_step(cpu);
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x4708); cpu_step(cpu);
     CHECK_EQ("thumb BX odd T=1", (cpu->cpsr & CPSR_T) ? 1u : 0u, 1u);
     CHECK_EQ("thumb BX odd PC", cpu->r[15], base + 0x20);
+    thumb_stop(nds);
+
+    /* BX lr（0x4770，Rm=14）：高寄存器返回路径。21-B5 真 ROM 暴露——
+       旧解码把 Rm 按 bit2:0+bit6 拼成 r8，导致 0x4770 跳到 r8 的 0x04000180。 */
+    cpu->r[14] = base + 0x20;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x4770); cpu_step(cpu);
+    CHECK_EQ("thumb BX lr T=0", (cpu->cpsr & CPSR_T) ? 1u : 0u, 0u);
+    CHECK_EQ("thumb BX lr PC", cpu->r[15], base + 0x20);
     thumb_stop(nds);
 
     /* 条件分支 BEQ 命中：Z=1 → PC=base+8 */

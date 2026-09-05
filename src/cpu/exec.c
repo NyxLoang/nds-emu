@@ -197,7 +197,7 @@ static void exec_dataop(arm_cpu_t *cpu, uint32_t insn, uint32_t op2, uint32_t ca
        真机此时不更新标志，而是把当前模式的 SPSR 拷回 CPSR（模式/中断位恢复）。 */
     if (s && rd == 15) {
         int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
-        if (idx >= 0) cpu->cpsr = cpu->spsr[idx];
+        if (idx >= 0) exec_apply_cpsr(cpu, cpu->spsr[idx]);
     }
 }
 
@@ -211,7 +211,8 @@ static void msr_write(arm_cpu_t *cpu, uint32_t value, unsigned field_mask)
     if (field_mask & 0x2) mask |= 0x0000FF00u;
     if (field_mask & 0x4) mask |= 0x00FF0000u;
     if (field_mask & 0x8) mask |= 0xFF000000u;
-    cpu->cpsr = (cpu->cpsr & ~mask) | (value & mask);
+    /* 控制字段（低 8 位含模式位）可能被改写：必须经模式同步入口替换 CPSR */
+    exec_apply_cpsr(cpu, (cpu->cpsr & ~mask) | (value & mask));
 }
 
 /* ---- 12.3 特权模式 → spsr[5] 下标 ----
@@ -228,6 +229,32 @@ int exec_spsr_index(unsigned mode)
     }
 }
 
+/* ---- 21-B9g 模式私有 r13/r14 同步 ---- */
+void exec_apply_cpsr(arm_cpu_t *cpu, uint32_t new_cpsr)
+{
+    unsigned old_mode = cpu->cpsr & CPSR_MODE_MASK;
+    unsigned new_mode = new_cpsr & CPSR_MODE_MASK;
+    /* 先把“当前可见”的 r13/r14 存入所属模式（User/System 存主寄存器槽） */
+    int old_idx = exec_spsr_index(old_mode);
+    if (old_idx >= 0) {
+        cpu->r13_bank[old_idx] = cpu->r[13];
+        cpu->r14_bank[old_idx] = cpu->r[14];
+    } else {
+        cpu->r13_sys = cpu->r[13];
+        cpu->r14_sys = cpu->r[14];
+    }
+    cpu->cpsr = new_cpsr;
+    /* 再加载新模式的私有 r13/r14 到可见 r[]（User/System 加载主槽） */
+    int new_idx = exec_spsr_index(new_mode);
+    if (new_idx >= 0) {
+        cpu->r[13] = cpu->r13_bank[new_idx];
+        cpu->r[14] = cpu->r14_bank[new_idx];
+    } else {
+        cpu->r[13] = cpu->r13_sys;
+        cpu->r[14] = cpu->r14_sys;
+    }
+}
+
 /* ---- 12.2 异常入口 ----
    硬件动作：SPSR_<新模式> = 当前 CPSR → 写模式位 → IRQ/FIQ 置 I（FIQ 再置 F）→
    LR = PC + lr_adjust → PC = vector_base + offset。 */
@@ -237,9 +264,10 @@ void arm_exception(arm_cpu_t *cpu, uint32_t vector_offset, unsigned new_mode,
     int idx = exec_spsr_index(new_mode);
     if (idx >= 0)
         cpu->spsr[idx] = cpu->cpsr;
-    cpu->cpsr = (cpu->cpsr & ~(uint32_t)CPSR_MODE_MASK) | new_mode;
-    if (new_mode == ARM_MODE_IRQ)      cpu->cpsr |= CPSR_I;      /* IRQ 入口关 IRQ */
-    else if (new_mode == ARM_MODE_FIQ) cpu->cpsr |= CPSR_I | CPSR_F; /* FIQ 关 IRQ+FIQ */
+    uint32_t new_cpsr = (cpu->cpsr & ~(uint32_t)CPSR_MODE_MASK) | new_mode;
+    if (new_mode == ARM_MODE_IRQ)      new_cpsr |= CPSR_I;       /* IRQ 入口关 IRQ */
+    else if (new_mode == ARM_MODE_FIQ) new_cpsr |= CPSR_I | CPSR_F; /* FIQ 关 IRQ+FIQ */
+    exec_apply_cpsr(cpu, new_cpsr);
     cpu->r[14] = cpu->r[15] + lr_adjust;
     cpu->r[15] = cpu->vector_base + vector_offset;
     if (g_trace)
@@ -278,7 +306,7 @@ static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
     /* LDM ... ^（S=1 且列表含 PC）：加载 PC 后，再用当前模式的 SPSR 恢复 CPSR（12.3 异常返回） */
     if (l && s && (list & (1u << 15))) {
         int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
-        if (idx >= 0) cpu->cpsr = cpu->spsr[idx];
+        if (idx >= 0) exec_apply_cpsr(cpu, cpu->spsr[idx]);
     }
     if (g_trace) {
         /* 21-B6：LDM/STM trace 附上基址（rn=13 即 SP 变化前）与弹出 PC，

@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-05 | 21-B9g | CPU | 模式私有 r13/r14（banked registers）：MSR/异常/返回统一走模式同步；FFXII 三栈隔离，ARM9 不再跑飞（643 项 0 失败） | [cpu](src/cpu/cpulog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B9f | CPU | IRQ HLE 桩：跳 handler 前保存 r0-r3/r12/CPSR/返回点，返回后恢复；第一次 VBlank 链执行完，新卡点=模式共用 SP（633 项 0 失败） | [cpu](src/cpu/cpulog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B9e | CPU | ARM BLX Rm 寄存器间接调用；ARM9 越过 0x02006488 回到主等待循环，8M 步无固定卡点（628 项 0 失败） | [cpu](src/cpu/cpulog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-05 | 21-B9d | CPU | CLZ 前导零指令（ARMv5）；FFXII IRQ 分发循环跑完，ARM9 前进到 0x02006488，新卡点=ARM BLX Rm（618 项 0 失败） | [cpu](src/cpu/cpulog.md) · [21](docs/21-rom-bringup.md) |

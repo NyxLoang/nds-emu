@@ -25,6 +25,10 @@ typedef struct arm_cpu {
     uint32_t cpsr;   /* 当前程序状态寄存器（条件码 + 中断/模式位） */
     uint32_t spsr[5];/* 备份程序状态寄存器（阶段 12.3 起按特权模式各一份：
                         [0]=FIQ [1]=IRQ [2]=SVC [3]=ABT [4]=UND；User/System 无 SPSR） */
+    uint32_t r13_sys;   /* User/System 模式的 r13（主 SP）；当前可见值在 r[13] */
+    uint32_t r14_sys;   /* User/System 模式的 r14（主 LR）；当前可见值在 r[14] */
+    uint32_t r13_bank[5]; /* FIQ/IRQ/SVC/ABT/UND 私有 r13（下标同 spsr；21-B9g） */
+    uint32_t r14_bank[5]; /* FIQ/IRQ/SVC/ABT/UND 私有 r14（下标同 spsr；21-B9g） */
     uint32_t swi_num;/* 最近一次 SWI 的 24 位编号（阶段 10.8 记录，阶段 11 BIOS HLE 用） */
     uint32_t cp15[16]; /* CP15 协处理器寄存器（阶段 10.10 MRC/MCR，按 CRn 索引；阶段 12.4 c1 控制向量基址） */
     uint32_t cp15_dtcm; /* CP15 c9,c1,0：ARM9 DTCM 配置（阶段 21-B8） */

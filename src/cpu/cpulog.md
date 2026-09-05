@@ -386,4 +386,18 @@
   模拟器所有模式仍共用 SP，IRQ handler 用 System 栈压栈/嵌套，覆盖了用户现场
   （真机 IRQ 有独立 r13_irq）。排 B9g：实现按模式独立的 r13/r14。
 
+## 2026-09-05 · 21-B9g — 模式私有 r13/r14（banked registers）
+
+- **做了什么**：`arm_cpu_t` 增加 User/System 主 r13/r14 槽与 FIQ/IRQ/SVC/ABT/UND
+  私有 r13/r14 槽；新增 `exec_apply_cpsr`：替换 CPSR 时先把当前可见 r13/r14
+  存入所属模式，再加载新模式的私有值。所有模式切换入口统一改走它——MSR 写
+  CPSR、异常入口、SUBS pc/LDM ^ 异常返回、IRQ HLE 现场恢复。
+- **启动序列验证**：FFXII 0x0200080C 起分别切 SVC/IRQ/System 设置栈
+  （0x027E3FC0 / 0x027E3F7C / 0x027E3AF8），现在三者真正隔离；B9c 用例改为
+  先配置 IRQ 专用 SP 再触发中断。新增 `[case 21-B9g]`：SVC/IRQ/System 往返
+  各栈值保留不串（10 项）。全量 **643 项检查 0 失败**。
+- **真 ROM 效果**：ARM9 不再落入未映射区跑飞；第一次 IRQ 后主程序继续执行，
+  停在 0x02007CE0 的链表遍历（与 ARM7 0x037FC8A0 轮询配合）。日志新露出
+  ARM9 读 0x04000280-2BF 区域未知 IO，排 B9h 查这批寄存器。
+
 

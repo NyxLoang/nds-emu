@@ -61,7 +61,8 @@ static void irq_hle_restore(arm_cpu_t *cpu)
     for (int i = 0; i < 4; i++)
         cpu->r[i] = cpu->irq_hle.r[i];
     cpu->r[12] = cpu->irq_hle.ip;
-    cpu->cpsr = cpu->irq_hle.saved_cpsr;
+    /* 恢复 CPSR 也要切回 User/System：经模式同步把 IRQ 私有 r13/r14 存回槽 */
+    exec_apply_cpsr(cpu, cpu->irq_hle.saved_cpsr);
     cpu->irq_hle.active = 0;
     if (cpu->nds->bus->diag && cpu->irq_hle.log_count < 16) {
         printf("irq: #%d %s restore ret_pc=%08X cpsr=%08X\n",

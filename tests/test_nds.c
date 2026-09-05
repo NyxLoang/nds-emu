@@ -1074,9 +1074,13 @@ static void test_irq_slot_jump(nds_t *nds)
     for (size_t i = 0; i < sizeof prog / sizeof prog[0]; i++)
         bus_write32(nds->bus, base + 4 * i, prog[i]);
 
-    cpu->cpsr = ARM_MODE_USER;                  /* I=0 允许 IRQ */
+    /* 模拟启动代码：先分别配置 System 与 IRQ 私有 SP，再回到 System 开中断 */
+    cpu->cpsr = ARM_MODE_SYS;
+    cpu->r[13] = base + 0x1000;                  /* System SP */
+    exec_apply_cpsr(cpu, ARM_MODE_IRQ | CPSR_I);
+    cpu->r[13] = base + 0x2000;                  /* IRQ 专用 SP（与 System 栈隔离） */
+    exec_apply_cpsr(cpu, ARM_MODE_USER);         /* I=0 允许 IRQ */
     cpu->r[1] = 0xAB;                           /* 被中断代码的“活”寄存器值 */
-    cpu->r[13] = base + 0x1000;                  /* handler 压栈/弹栈用的 SP */
     nds->io->irq[0].ie  = IO_IF_VBLANK;
     nds->io->irq[0].ifl = IO_IF_VBLANK;
     nds->io->irq[0].ime = 1;
@@ -1173,6 +1177,40 @@ static void test_arm_blx_reg(nds_t *nds)
     CHECK_EQ("blxr arm r0", cpu->r[0], 42u);
     CHECK_EQ("blxr arm PC2", cpu->r[15], arm_fn + 4);
     exec_set_trace(1);
+}
+
+/* ---- 21-B9g 用例：模式私有 r13/r14（SVC/IRQ/System 栈互不覆盖） ---- */
+static void test_banked_r13_r14(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+
+    /* FFXII 启动值：System sp=0x027E3AF8，SVC sp=0x027E3FC0，IRQ sp=0x027E3F7C */
+    cpu->cpsr = ARM_MODE_SYS;
+    cpu->r[13] = 0x027E3AF8u;
+    cpu->r[14] = 0x11111111u;
+    exec_apply_cpsr(cpu, ARM_MODE_SVC);
+    CHECK_EQ("bank svc fresh sp", cpu->r[13], 0u);
+    CHECK_EQ("bank svc fresh lr", cpu->r[14], 0u);
+
+    cpu->r[13] = 0x027E3FC0u;
+    cpu->r[14] = 0x22222222u;
+    exec_apply_cpsr(cpu, ARM_MODE_SYS);
+    CHECK_EQ("bank sys sp kept", cpu->r[13], 0x027E3AF8u);
+    CHECK_EQ("bank sys lr kept", cpu->r[14], 0x11111111u);
+
+    exec_apply_cpsr(cpu, ARM_MODE_SVC);
+    CHECK_EQ("bank svc sp kept", cpu->r[13], 0x027E3FC0u);
+    CHECK_EQ("bank svc lr kept", cpu->r[14], 0x22222222u);
+
+    exec_apply_cpsr(cpu, ARM_MODE_IRQ | CPSR_I);
+    CHECK_EQ("bank irq fresh sp", cpu->r[13], 0u);
+    cpu->r[13] = 0x027E3F7Cu;
+    cpu->r[14] = 0x44444444u;
+    exec_apply_cpsr(cpu, ARM_MODE_SYS);
+    exec_apply_cpsr(cpu, ARM_MODE_IRQ | CPSR_I);
+    CHECK_EQ("bank irq sp kept", cpu->r[13], 0x027E3F7Cu);
+    CHECK_EQ("bank irq lr kept", cpu->r[14], 0x44444444u);
+    CHECK_EQ("bank mode", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_IRQ);
 }
 
 /* ---- 21-B9a: BIOS SWI 0x0E GetCRC16 (CRC-16/IBM) ---- */
@@ -3958,6 +3996,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_arm_blx_reg(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9g] 模式私有 r13/r14（System/SVC/IRQ 栈互不覆盖）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_banked_r13_r14(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");

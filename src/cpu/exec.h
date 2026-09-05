@@ -48,6 +48,10 @@ void arm_exception(arm_cpu_t *cpu, uint32_t vector_offset, unsigned new_mode,
 /* 特权模式 → spsr[5] 下标（FIQ/IRQ/SVC/ABT/UND = 0..4）；User/System 无 SPSR 返回 -1。 */
 int exec_spsr_index(unsigned mode);
 
+/* 21-B9g：整字替换 CPSR 并同步模式私有 r13/r14。
+   先保存旧模式的可见 r13/r14，再加载新模式的私有值（User/System 用主寄存器）。 */
+void exec_apply_cpsr(arm_cpu_t *cpu, uint32_t new_cpsr);
+
 /* 指令级跟踪日志开关：默认开。批量跑 LDR/STR 循环时（如 4.5 写屏测试码）
    临时关闭，避免每条指令 printf 刷屏并拖慢模拟。 */
 void exec_set_trace(int on);

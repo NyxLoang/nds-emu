@@ -334,6 +334,21 @@ bne 循环                 ; 逐个分发所有挂起中断
 而模拟器所有模式共用 SP——IRQ handler 在 System 栈上压栈嵌套会覆盖用户现场。
 **排 B9g：实现按模式独立的 r13/r14（banked registers）。**
 
+### 21-B9g（2026-09-05）：模式私有 r13/r14——ARM9 停止跑飞
+
+**做了什么**：
+
+- CPU 增加 User/System 主 r13/r14 与 FIQ/IRQ/SVC/ABT/UND 私有 r13/r14 槽；
+  新增 `exec_apply_cpsr` 统一处理“切模式时保存旧栈/加载新栈”。MSR、异常
+  入口、异常返回、IRQ HLE 恢复全部走该入口。
+- 启动代码中 FFXII 分别配置的 SVC/IRQ/System 三个栈真正隔离；B9c 用例先配置
+  IRQ 专用 SP 再中断。新增 B9g 用例验证三模式往返栈值互不串扰
+  （全量 **643 项 0 失败**）。
+
+重跑 FFXII：ARM9 不再落未映射区，第一次 IRQ 后继续执行至 **0x02007CE0**
+链表遍历（ARM7 在 0x037FC8A0 轮询配合）。日志新露出 ARM9 读
+0x04000280-2BF 未知 IO——排 B9h 查这批寄存器（IPC/中断扩展区）。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

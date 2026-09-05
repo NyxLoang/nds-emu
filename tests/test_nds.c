@@ -1120,6 +1120,46 @@ static void test_clz(nds_t *nds)
     exec_set_trace(1);
 }
 
+/* ---- 21-B9e 用例：ARM BLX Rm（寄存器间接调用，FFXII 0x02006488 依赖） ---- */
+static void test_arm_blx_reg(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t thumb_fn = 0x02001000u;
+    const uint32_t arm_fn   = 0x02001100u;
+
+    /* BLX r1（编码 0xE12FFF31，rm=r1）：lr=PC+4，目标按 LSB 切 Thumb/ARM */
+    bus_write32(nds->bus, base, 0xE12FFF31u);
+    bus_write16(nds->bus, thumb_fn, 0x2000); /* Thumb: MOVS r0, #0 */
+    bus_write32(nds->bus, arm_fn, 0xE3A0002Au); /* ARM: MOV r0, #42 */
+
+    /* ARM → Thumb：r1=0x02001001 */
+    cpu->cpsr = 0;
+    cpu->r[1] = thumb_fn | 1u;
+    cpu_reset(cpu, base);
+    exec_set_trace(0);
+    cpu_step(cpu);
+    CHECK_EQ("blxr thumb lr", cpu->r[14], base + 4);
+    CHECK_EQ("blxr thumb T", (cpu->cpsr & CPSR_T) ? 1u : 0u, 1u);
+    CHECK_EQ("blxr thumb PC", cpu->r[15], thumb_fn);
+    cpu_step(cpu); /* 执行目标函数第一条 Thumb */
+    CHECK_EQ("blxr thumb r0", cpu->r[0], 0u);
+    CHECK_EQ("blxr thumb PC2", cpu->r[15], thumb_fn + 2);
+
+    /* ARM → ARM：r1=0x02001100（bit0=0，留在 ARM） */
+    cpu->cpsr = 0;
+    cpu->r[1] = arm_fn;
+    cpu_reset(cpu, base);
+    cpu_step(cpu);
+    CHECK_EQ("blxr arm lr", cpu->r[14], base + 4);
+    CHECK_EQ("blxr arm T", (cpu->cpsr & CPSR_T) ? 1u : 0u, 0u);
+    CHECK_EQ("blxr arm PC", cpu->r[15], arm_fn);
+    cpu_step(cpu);
+    CHECK_EQ("blxr arm r0", cpu->r[0], 42u);
+    CHECK_EQ("blxr arm PC2", cpu->r[15], arm_fn + 4);
+    exec_set_trace(1);
+}
+
 /* ---- 21-B9a: BIOS SWI 0x0E GetCRC16 (CRC-16/IBM) ---- */
 static void test_bios_crc16(nds_t *nds)
 {
@@ -3896,6 +3936,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_clz(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9e] ARM BLX Rm 寄存器间接调用（Thumb/ARM 双路径）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_arm_blx_reg(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9a] BIOS SWI 0x0E GetCRC16 (CRC-16/IBM)\n");

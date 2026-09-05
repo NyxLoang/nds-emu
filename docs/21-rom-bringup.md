@@ -305,6 +305,19 @@ bne 循环                 ; 逐个分发所有挂起中断
 0x01FF8028 前进到 **0x02006488**；反汇编该处是 `blx r1`（ARM 态寄存器间接
 调用），模拟器未实现 ARM `BLX Rm`，排入 B9e。
 
+### 21-B9e（2026-09-05）：ARM BLX Rm——ARM9 回到主等待循环
+
+**做了什么**：
+
+- `exec.c` 补 `BLX Rm`（0x012FFF3x）：`r14 = PC+4` 后按目标 LSB 切换
+  Thumb/ARM 并跳转（与 BX 相同的 T/PC 规则，额外保存返回地址）。
+- 测试新增 `[case 21-B9e]`：ARM→Thumb 与 ARM→ARM 两条路径，各验证
+  LR/T/PC 与目标函数首条指令执行（全量 **628 项 0 失败**）。
+
+重跑 FFXII `--headless 8000000`：ARM9 越过 0x02006488，回到 0x02009EC0
+主等待循环（PC 在 0x02009EC4-ECC 间游走，等下一次 VBlank），8M 步内不再有
+固定单点卡死。下一步观察多次 VBlank 后启动流程是否继续前进。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

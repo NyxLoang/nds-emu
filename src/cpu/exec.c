@@ -555,6 +555,21 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         return 1;
     }
 
+    /* BLX Rm（ARMv5）：模式 0x012FFF3x。与 BX 一样按目标 LSB 置/清 T 并清 PC
+       最低位，区别是先保存返回地址 r14 = 下一条 ARM 指令（PC+4）。FFXII 主流程
+       用它做寄存器间接调用（如回调表），此前未实现导致调用目标不可达。 */
+    if ((insn & 0x0FFFFFF0u) == 0x012FFF30u) {
+        unsigned rm = insn & 0xFu;
+        cpu->r[14] = cpu->r[15] + 4;
+        if (g_trace)
+            printf("cpu: PC=%08X insn=%08X BLX r%u -> %08X (lr=%08X) cycles=%llu\n",
+                   cpu->r[15], insn, rm, cpu->r[rm], cpu->r[14],
+                   (unsigned long long)cpu->cycles);
+        cpu->cpsr = (cpu->r[rm] & 1u) ? (cpu->cpsr | CPSR_T) : (cpu->cpsr & ~CPSR_T);
+        cpu->r[15] = cpu->r[rm] & ~1u;
+        return 1;
+    }
+
     /* CLZ（ARMv5）：bit27-4 固定为 0001 0110 1111 1111 0001（掩码 0x0FFFFFF0），
        Rd 在 bit15-12、Rm 在 bit3-0。结果 = Rm 的二进制前导零个数（0 的前导零
        定义为 32）。FFXII 的 IRQ 分发器用它找“最高优先级的挂起中断位”。 */

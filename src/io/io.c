@@ -50,12 +50,12 @@ static void io_fifo_update_irq_all(io_t *io)
     fifo_update_irq(&io->fifo, 1, &io->irq[1]); /* ARM7 视角 */
 }
 
-/* 卡带就绪时触发等待卡带数据的 DMA（start mode = card）。
+/* 卡带就绪时触发指定核等待卡带数据的 DMA（start mode = card）。
    幂等：dma_fire 只搬已使能且模式匹配的通道，搬完自动清使能。 */
-static void io_card_dma_check(io_t *io)
+static void io_card_dma_check(io_t *io, int is_arm7)
 {
     if (cartbus_ready(&io->cartbus))
-        dma_fire(&io->dma, io->bus, DMA_START_CARD);
+        dma_fire(&io->dma[is_arm7 ? 1 : 0], io->bus, DMA_START_CARD);
 }
 
 /* 诊断：记录「首次访问的未知 IO 地址」，避免游戏轮询同一寄存器（如 VCOUNT）刷屏。 */
@@ -92,7 +92,7 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
     if (addr >= IO_KEYINPUT_ADDR && addr < IO_KEYINPUT_END)
         return key_read8(&io->keypad, addr);
     if (dma_is_addr(addr))
-        return dma_read8(&io->dma, addr);
+        return dma_read8(&io->dma[is_arm7 ? 1 : 0], addr);
     if (cartbus_is_addr(addr))
         return cartbus_read8((cartbus_t *)&io->cartbus, addr);
     if (disp_is_addr(addr))
@@ -153,8 +153,8 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     if (dma_is_addr(addr)) {
         /* 写 CNT_H 且使能=1 时在 dma_write8 内同步触发立即搬运；
            若卡带已就绪且本条是卡带触发源，则在写完后补触发。 */
-        dma_write8(&io->dma, addr, val, io->bus);
-        io_card_dma_check(io);
+        dma_write8(&io->dma[is_arm7 ? 1 : 0], addr, val, io->bus);
+        io_card_dma_check(io, is_arm7);
         return;
     }
     if (cartbus_is_addr(addr)) {
@@ -164,7 +164,8 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         if (!was_ready && cartbus_ready(&io->cartbus)) {
             irq_set_card(&io->irq[0]);
             irq_set_card(&io->irq[1]);
-            io_card_dma_check(io);
+            io_card_dma_check(io, 0);
+            io_card_dma_check(io, 1);
         }
         return;
     }
@@ -240,7 +241,8 @@ void io_set_vblank(io_t *io)
        service6 的完成状态机才会推进。 */
     irq_set_vblank(&io->irq[0]);
     irq_set_vblank(&io->irq[1]);
-    dma_fire(&io->dma, io->bus, DMA_START_VBLANK); /* 阶段 15：触发 VBlank DMA */
+    dma_fire(&io->dma[0], io->bus, DMA_START_VBLANK); /* 双核各自 VBlank DMA */
+    dma_fire(&io->dma[1], io->bus, DMA_START_VBLANK);
 }
 
 int io_irq_pending(const io_t *io)

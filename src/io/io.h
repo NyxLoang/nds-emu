@@ -29,7 +29,7 @@ typedef struct io {
     irq_t irq[2];                     /* 中断：IME/IE/IF 各一套（ARM9/ARM7） */
     nds_timer_t timer[2][IO_TIMER_COUNT]; /* 定时器：ARM9/ARM7 各 0-3（真机两套） */
     keypad_t keypad;                  /* KEYINPUT */
-    dma_t dma;                        /* DMA：阶段 15 补齐 4 通道 */
+    dma_t dma[2];                     /* DMA：ARM9/ARM7 各 4 通道（真机两套） */
     ipc_fifo_t fifo;                  /* IPC FIFO（阶段 8：双核通信） */
     ipc_sync_t sync;                  /* IPCSYNC（阶段 21-B2：双核同步寄存器） */
     disp_t disp;                      /* 2D 显示控制（阶段 9：DISPCNT/BGxCNT/滚动） */

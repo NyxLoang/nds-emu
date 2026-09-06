@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9zq（分析） | 工程 | FIFO 队列计数复测：ARM7 发送后 ARM9 立即读走、无积压，排除第二次 6B 的 C024 积压猜测（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zp（分析） | 工程 | 第二次 6B 唤醒后 ITCM 已把 F18 切回 0x76FE4，但本地随后在 077D4 又切回空闲 0x76F24；参考直接续发下一条 service11（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zo | 卡带/测试 | ROMCTRL 块长按 melonDS `0x100<<n` 修正（旧 0x100<<(n-1) 导致 B7 每块只读一半）：FFXII 主存缓冲与参考 frame30 逐字节一致，751 项 0 失败 | [cart](src/cart/cartlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zn | CPU/测试 | melonDS A_STM “基址在列表内保存当前写地址”补到 ARM9（B9zg 只修了 ARM7）：751 项 0 失败；发送点探针复测确认本地已能发 2B/E3E82B/AB 三次 service11 后停回空闲 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

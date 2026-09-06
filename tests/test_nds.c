@@ -23,6 +23,7 @@
 #include "snd/snd.h"
 #include "gx/gx.h"
 #include "ppu/render.h"
+#include "timing/timing.h"
 #include "cart/cart.h"
 #include "cart/key1.h"
 #include "cart/cartbus.h"
@@ -2314,6 +2315,36 @@ static void test_step_cycles(nds_t *nds)
     cpu_step(cpu);
     CHECK_EQ("normal step_cycles", cpu->step_cycles, 1u);
     CHECK_EQ("normal instruction", (uint32_t)cpu->cycles, 1u);
+}
+
+/* ---- 21-B9vw：事件目标调度最小事件表 ---- */
+static int timing_hit_a, timing_hit_b;
+static void timing_cb_a(void *ctx) { (void)ctx; timing_hit_a++; }
+static void timing_cb_b(void *ctx) { (void)ctx; timing_hit_b++; }
+
+static void test_timing_events(nds_t *nds)
+{
+    (void)nds;
+    timing_t t;
+    timing_init(&t);
+    timing_hit_a = 0;
+    timing_hit_b = 0;
+
+    timing_arm(&t, 0, 20, timing_cb_a, NULL);
+    timing_arm(&t, 1, 10, timing_cb_b, NULL);
+    CHECK_EQ("timing next earliest", (uint32_t)timing_next(&t), 10u);
+    timing_advance(&t, 5);
+    CHECK_EQ("timing before b", timing_hit_b, 0);
+    timing_advance(&t, 10);
+    CHECK_EQ("timing hit b", timing_hit_b, 1);
+    CHECK_EQ("timing not hit a", timing_hit_a, 0);
+    timing_advance(&t, 20);
+    CHECK_EQ("timing hit a", timing_hit_a, 1);
+    CHECK_EQ("timing no armed", (uint32_t)timing_next(&t), 0xFFFFFFFFu);
+
+    timing_arm(&t, 2, 5, timing_cb_a, NULL);
+    timing_advance(&t, 26);
+    CHECK_EQ("timing rearm hit", timing_hit_a, 2);
 }
 
 /* ---- 10.6 用例：乘法 MUL/MLA + 长乘 UMULL/UMLAL/SMULL ---- */
@@ -4757,6 +4788,7 @@ int main(void)
         test_arm7_stm_base_in_list(nds);
         test_arm9_stm_base_in_list(nds);
         test_step_cycles(nds);
+        test_timing_events(nds);
         nds_destroy(nds);
     }
     printf("\n[case 10.6] 乘法 MUL/MLA + 长乘\n");

@@ -19,11 +19,13 @@
 | 音频 | [`src/snd/sndlog.md`](src/snd/sndlog.md) | 16 通道音频寄存器 + 混音合成（PCM8/PCM16/IMA-ADPCM/PSG），`snd_render` 输出 32768Hz 立体声（`src/snd/snd.h/.c`） |
 | 3D 几何 | [`src/gx/gxlog.md`](src/gx/gxlog.md) | 3D 几何引擎：DISP3DCNT/GXSTAT/GXFIFO 寄存器 + 命令解码 + 矩阵/顶点变换 + 软件光栅化（`src/gx/gx.h/.c`） |
 | 测试 | [`tests/testlog.md`](tests/testlog.md) | 统一测试入口 `tests/test_nds.c`（bus/指令/显示/清屏/矩形/死循环/中断/定时器/按键/DMA/双核/FIFO/2D PPU/触摸/音频/3D） |
+| 时序 | [`src/timing/timinglog.md`](src/timing/timinglog.md) | 事件目标调度：系统时间戳与最小事件表（`src/timing/timing.h/.c`） |
 
 ## 按时间索引
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9vw | 时序/测试 | 新增最小事件目标调度表 timing（arm/disarm/next/advance），762 项 0 失败 | [timing](src/timing/timinglog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9vv | CPU/测试 | 周期成本模型骨架：arm_cpu_t.step_cycles（普通=1、WFI 等待=0），755 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zu（路线） | 工程 | 确定大改造路线：周期成本模型 → 事件目标调度器 → 双核驱动迁移 → 回到第二次 6B 校准（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zr（分析） | 工程 | 第二次唤醒后 F18=0x76F24 的回写前没有新扫描：ITCM 切换只写了 F18，未真正把 0x76FE4 恢复为当前任务（仅文档） | [21](docs/21-rom-bringup.md) |

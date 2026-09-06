@@ -64,6 +64,7 @@ add_library(ndscore STATIC
     src/snd/snd.c
     src/gx/gx.c
     src/ppu/render.c
+    src/timing/timing.c
             src/cart/cart.c
             src/cart/cartbus.c
             src/cart/save.c

@@ -65,6 +65,9 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch)
     int dst_mode = (dma->cnt_h >> 5) & 3u; /* CNT bit21-22 */
 
     for (uint32_t i = 0; i < n; i++) {
+        /* 21-B9zb: DMA 从 CARD_DATA 取数时按卡带就绪时钟等待 */
+        if (src == BUS_CARD_DATA && bus != NULL && bus->io != NULL)
+            cartbus_advance(&bus->io->cartbus, 100000u);
         if (is32)
             bus_write32(bus, dst, bus_read32(bus, src));
         else

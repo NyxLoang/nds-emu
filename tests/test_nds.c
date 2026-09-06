@@ -3278,6 +3278,10 @@ static void test_cartbus_read(nds_t *nds)
     /* 激活 ROMCTRL（写 bit31） */
     bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80);
 
+    /* 21-B9zb: 激活后要等 melonDS 首字延迟 DRQ 才就绪 */
+    CHECK_EQ("cart romctrl not yet DRQ",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ, 0u);
+    cartbus_advance(&nds->io->cartbus, 100000u);
     /* DRQ 就绪 */
     CHECK_EQ("cart romctrl DRQ", bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
              CART_ROMCTRL_DRQ);
@@ -3288,6 +3292,7 @@ static void test_cartbus_read(nds_t *nds)
 
     /* 从 0x8100 读 4 字：每次读自动 +4 */
     for (int i = 0; i < 4; i++) {
+        cartbus_advance(&nds->io->cartbus, 100000u);
         uint32_t want = (uint32_t)rom[0x8100 + 4 * i]
                       | ((uint32_t)rom[0x8100 + 4 * i + 1] << 8)
                       | ((uint32_t)rom[0x8100 + 4 * i + 2] << 16)
@@ -3299,6 +3304,7 @@ static void test_cartbus_read(nds_t *nds)
 
     /* 块大小=4（ROMCTRL bit24-26=7）：读完 1 字后 DRQ 与 busy 同时回落 */
     bus_write8(nds->bus, CART_ROMCTRL + 3, 0x87u);
+    cartbus_advance(&nds->io->cartbus, 100000u);
     CHECK_EQ("cart 4B busy",
              bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_ACTIVATE,
              CART_ROMCTRL_ACTIVATE);
@@ -3313,6 +3319,7 @@ static void test_cartbus_read(nds_t *nds)
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd2[i]);
     bus_write8(nds->bus, CART_ROMCTRL + 3, 0x87u); /* 4 字节块，读完即回落 */
+    cartbus_advance(&nds->io->cartbus, 100000u);
     uint32_t w0 = (uint32_t)rom[0x8FFC] | ((uint32_t)rom[0x8FFD] << 8)
                 | ((uint32_t)rom[0x8FFE] << 16) | ((uint32_t)rom[0x8FFF] << 24);
     CHECK_EQ("cart tail word", bus_read32(nds->bus, BUS_CARD_DATA), w0);
@@ -3325,6 +3332,7 @@ static void test_cartbus_read(nds_t *nds)
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, chipcmd[i]);
     bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80u);
+    cartbus_advance(&nds->io->cartbus, 100000u);
     CHECK_EQ("cart chipid DRQ",
              bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
              CART_ROMCTRL_DRQ);
@@ -3410,6 +3418,9 @@ static void test_card_dma(nds_t *nds)
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
     bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80);
+    /* 21-B9zb: 等卡带首字就绪；就绪边沿会让卡带 DMA 自动触发 */
+    for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
+        io_advance_cart(nds->io, 0);
 
     /* 8 字应从 CARD_DATA 按序搬进 dest */
     for (int i = 0; i < 8; i++) {
@@ -3424,8 +3435,9 @@ static void test_card_dma(nds_t *nds)
 
     /* 搬完自动清使能 */
     CHECK_EQ("card dma enable cleared", bus_read16(nds->bus, dma0 + 10) & DMA_CNT_ENABLE, 0u);
-    /* ROMCTRL bit23 DRQ 仍就绪（块未耗尽）+ 卡带完成中断 bit19 */
-    CHECK_EQ("card romctrl DRQ", bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
+    /* 21-B9zb: DMA 触发后硬件继续预取下一字，DRQ 仍就绪；块未耗尽 */
+    CHECK_EQ("card romctrl DRQ after dma",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
              CART_ROMCTRL_DRQ);
     CHECK_EQ("card irq bit19", bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_CARD_DONE,
              IO_IF_CARD_DONE);
@@ -3473,6 +3485,9 @@ static void test_card_program(nds_t *nds)
     run_program(nds, base, prog, sizeof prog / sizeof prog[0],
                 base, base + 0x44, 64);
     CHECK_EQ("card prog PC halt", nds->cpu->r[15], base + 0x44);
+    /* 21-B9zb: CPU 程序已停在自旋点，硬件侧继续等卡带首字就绪并触发 DMA */
+    for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
+        io_advance_cart(nds->io, 0);
 
     /* dest 收到 rom[0x8100..0x810F]（4 字） */
     for (int i = 0; i < 4; i++) {

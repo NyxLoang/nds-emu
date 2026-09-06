@@ -47,6 +47,9 @@ typedef struct cartbus {
     uint32_t       chip_id;    /* 21-B9w: 0xB8 命令返回的芯片 ID（由补力散后 ROM 大小算出） */
     int            chip_read;  /* 当前传输是否为 B8 ChipID 读取 */
     uint32_t       rom_mask;   /* 21-B9z: 补成 2 的幂后的 ROM 掩码（melonDS B7 使用） */
+    uint32_t wait_cycles; /* 21-B9zb: next CARD_DATA ready delay in ARM9 cycles */
+    uint32_t xfer_pos;    /* 21-B9zb: bytes transferred in current command */
+    int      wait_phase;  /* 21-B9zb: 0=idle 1=waiting data 2=data ready */
 } cartbus_t;
 
 /* 清零初始化。 */
@@ -72,6 +75,8 @@ void    cartbus_write8(cartbus_t *cb, uint32_t addr, uint8_t val);
 /* 数据端口 CARD_DATA 32 位读（小端拼 4 字节，读后 xfer_addr += 4）。
    未装载 ROM 或越界返回 0xFFFFFFFF。 */
 uint32_t cartbus_read32(cartbus_t *cb);
+/* 21-B9zb: advance N ARM9 cycles; returns 1 when CARD_DATA becomes ready */
+int cartbus_advance(cartbus_t *cb, uint32_t cycles);
 
 /* 卡带是否处于「数据就绪」（ROMCTRL bit23）。DMA 卡带触发源据此点火。 */
 static inline int cartbus_ready(const cartbus_t *cb)

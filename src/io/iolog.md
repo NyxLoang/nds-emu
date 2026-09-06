@@ -369,3 +369,7 @@
 ## 2026-09-06 · 21-B9za — IF bit21（GX FIFO）接线
 - irq.h 增加 `IO_IF_GXFIFO`（bit21）；GXSTAT bits30-31 写模式后，io 层在
   GX 写操作后按“FIFO 空”同步置/清 IF21（参考 ARM9 IF9 的 0x200000）。
+## 2026-09-06 · 21-B9zc — io_advance_cart（卡带就绪时钟接入 cpu_step）
+
+- ARM9 每个指令周期推进 `cartbus_advance`；就绪边沿复用现有卡带 IRQ/DMA 接线。
+- 原“写 ROMCTRL 立即可用”的边沿判断保留在写入路径，真正就绪由时钟推进触发。

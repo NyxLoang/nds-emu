@@ -103,6 +103,26 @@ static void cartbus_activate(cartbus_t *cb)
     }
 }
 
+/* 21-B9zb: B7/B8 改为按 melonDS 周期时序就绪；覆盖上面的瞬时 DRQ */
+static void cartbus_schedule_delay(cartbus_t *cb)
+{
+    if (cb->xfer_remaining == 0) {
+        cb->wait_phase = 0;
+        cb->wait_cycles = 0;
+        cb->romctrl &= ~CART_ROMCTRL_DRQ;
+        return;
+    }
+    uint32_t blk2 = (cb->romctrl & CART_ROMCTRL_BLOCK_MASK) >> 24;
+    uint32_t xfercycle = (cb->romctrl & (1u << 27)) ? 8u : 5u;
+    uint32_t cmddelay = 8u + (cb->romctrl & 0x1FFFu);
+    if (blk2 != 0u)
+        cmddelay += ((cb->romctrl >> 16) & 0x3Fu);
+    cb->romctrl &= ~CART_ROMCTRL_DRQ;
+    cb->wait_cycles = xfercycle * (cmddelay + 4u);
+    cb->wait_phase  = 1;
+    cb->xfer_pos    = 0;
+}
+
 uint8_t cartbus_read8(cartbus_t *cb, uint32_t addr)
 {
     if (addr >= CART_AUXSPICNT && addr < CART_AUXSPICNT + 2)
@@ -153,14 +173,31 @@ void cartbus_write8(cartbus_t *cb, uint32_t addr, uint8_t val)
         uint32_t shift = (addr - CART_ROMCTRL) * 8;
         cb->romctrl = (cb->romctrl & ~(0xFFu << shift)) | ((uint32_t)val << shift);
         /* 写 bit31（最高字节的最高位）= 启动传输：锁存命令并置 DRQ */
-        if (addr == CART_ROMCTRL + 3 && (val & 0x80u))
+        if (addr == CART_ROMCTRL + 3 && (val & 0x80u)) {
             cartbus_activate(cb);
+            cartbus_schedule_delay(cb);
+        }
         return;
     }
     if (addr >= CART_COMMAND && addr < CART_COMMAND + 8) {
         cb->cmd[addr - CART_COMMAND] = val;
         return;
     }
+}
+
+/* 21-B9zb: 推进 N 个 ARM9 周期；数据从等待变为就绪时返回 1 */
+int cartbus_advance(cartbus_t *cb, uint32_t cycles)
+{
+    if (cb->wait_phase == 1) {
+        if (cycles >= cb->wait_cycles) {
+            cb->wait_cycles = 0;
+            cb->wait_phase  = 2;
+            cb->romctrl |= CART_ROMCTRL_DRQ;
+            return 1;
+        }
+        cb->wait_cycles -= cycles;
+    }
+    return 0;
 }
 
 uint32_t cartbus_read32(cartbus_t *cb)
@@ -175,6 +212,10 @@ uint32_t cartbus_read32(cartbus_t *cb)
         cb->romctrl &= ~CART_ROMCTRL_ACTIVATE;
         return 0xFFFFFFFFu;
     }
+    if (cb->wait_phase != 2) {
+        /* 21-B9zb: 数据还没就绪时读数据端口不算消费 */
+        return 0xFFFFFFFFu;
+    }
 
     uint32_t v;
     if (cb->chip_read)
@@ -185,6 +226,20 @@ uint32_t cartbus_read32(cartbus_t *cb)
     cb->xfer_remaining = (cb->xfer_remaining > 4) ? cb->xfer_remaining - 4 : 0;
     if (cb->xfer_remaining == 0)
         cb->chip_read = 0;
+    cb->xfer_pos += 4;
+    if (cb->xfer_remaining > 0) {
+        /* 21-B9zb: 读走一个字后清 DRQ，按逐字/0x200 块边界排下一次就绪 */
+        cb->romctrl &= ~CART_ROMCTRL_DRQ;
+        cb->wait_phase = 1;
+        uint32_t xfercycle = (cb->romctrl & (1u << 27)) ? 8u : 5u;
+        uint32_t delay = xfercycle * 4u;
+        if ((cb->xfer_pos & 0x1FFu) == 0u)
+            delay += xfercycle * ((cb->romctrl >> 16) & 0x3Fu);
+        cb->wait_cycles = delay;
+    } else {
+        cb->wait_phase  = 0;
+        cb->wait_cycles = 0;
+    }
     if (cb->xfer_remaining == 0) {
         cb->romctrl &= ~CART_ROMCTRL_DRQ; /* 本块读完，清就绪 */
         cb->romctrl &= ~CART_ROMCTRL_ACTIVATE; /* 传输结束，bit31 回落 0 */

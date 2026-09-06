@@ -315,3 +315,15 @@ void io_advance_timers(io_t *io, int is_arm7)
             io->irq[idx].ifl |= (uint32_t)(1u << (3 + i));
     }
 }
+void io_advance_cart(io_t *io, int is_arm7)
+{
+    /* 21-B9zb: 卡带时钟只在 ARM9 指令周期推进；数据就绪边沿触发卡带 IRQ/DMA */
+    if (is_arm7)
+        return;
+    if (cartbus_advance(&io->cartbus, 1u)) {
+        irq_set_card(&io->irq[0]);
+        irq_set_card(&io->irq[1]);
+        io_card_dma_check(io, 0);
+        io_card_dma_check(io, 1);
+    }
+}

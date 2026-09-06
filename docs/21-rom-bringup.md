@@ -734,3 +734,24 @@ Phase B 的验收口径：**hard_title**——FFXII 能进入标题画面。
 任务尚未建立完整对象队列前就提前完成，后续 ARM7 反复入队、ARM9 不再消费，最终
 双核僵在“worker ready 但无人调度”。下一步实现 cartbus 按 ROMCTRL 的周期延迟
 （首字/cmd/gap/逐字），再与第 539 帧参考快照对齐。
+### 21-B9zc（2026-09-06）：卡带 B7/B8 周期时序
+
+按 21-B9zb 的分析实现 melonDS 口径的卡带就绪延迟：
+
+- `cartbus_t` 增加 `wait_cycles/xfer_pos/wait_phase`；命令激活后先清 DRQ，
+  首字延迟 = xfercycle×(8 + ROMCTRL 低 13bit + 数据间隙 + 4)，逐字延迟 =
+  xfercycle×4，每 0x200 块边界再叠加 ROMCTRL bit16-21 间隙（NDSCart.cpp
+  `ROMAdvanceReceive` 同款算法）。
+- `io_advance_cart()` 每个 ARM9 指令周期推进卡带时钟；就绪边沿置卡带中断并触发
+  卡带 DMA；DMA 从 CARD_DATA 取数前也按就绪时钟等待。
+- 单测改为激活后先验证“未就绪”，再推进足够周期后读数据；新增 1 项检查，
+  全量 **743 项 0 失败**。
+
+**FFXII 效果**：ARM9 不再 2M 步就提前空闲，而是在 0x020119xx 卡带读循环停留到约
+39.8M 步（ARM7 tick 约 46 帧）才进入空闲，第一阶段节奏明显接近参考。但长跑到
+900M 步仍未出现参考第 539 帧的第二阶段。
+
+**新证据/下一卡点**：本地 ARM7 状态机仍把 0x027FFC30 写成 0（PC 0x0201270C 从
+0x020798A0+0xBE 拷贝），参考保持 0xFFFF；0x020798A0 区域参考在 frame3→4 之间从 0
+变为 FF，本地一直被多处清零（0x020008AC/0x02009E68 等）。下一步对照参考 frame3→4
+之间初始化该区域的代码路径，找出本地少执行/多清零的分支条件。

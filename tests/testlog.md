@@ -696,3 +696,8 @@
 - `[case 21-B9wd]`：按 FFXII 配置 D→A BG、C→B BG、E→A OBJ、H→B OBJ 后，
   各逻辑窗口写读回一致，IO 写 VRAMCNT D 可读回；结束恢复默认映射。
   全量 **768 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9we — LCDC/ext 调色板新增 2 项
+
+- `[case 21-B9wd]` 补：H=0x80 时经 0x0689C000 写入，切 H=0x82 后
+  `bus_vram_extpal16(Engine B, slot2)` 能读回同一颜色。全量 **770 项检查 0 失败**。

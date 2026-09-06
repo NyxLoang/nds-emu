@@ -1947,6 +1947,14 @@ static void test_vramcnt_mapping(nds_t *nds)
     bus_write8(bus, 0x04000243u, 0x81u);     /* 经 IO 写 VRAMCNT D */
     CHECK_EQ("vramcnt io read", bus_read8(bus, 0x04000243u), 0x81u);
 
+    /* LCDC 窗口（21-B9we）：0x0689C000 是 bank H 的第 2 个 8KB 槽，
+       H=0x80(LCDC) 时写入，H=0x82(BBG 扩展调色板) 后由渲染器读同一物理数据。 */
+    bus_set_vramcnt(bus, 7, 0x80u);
+    bus_write16(bus, 0x0689C000u, 0x7C1Fu);
+    CHECK_EQ("lcdc H bank window", bus_read16(bus, 0x0689C000u), 0x7C1Fu);
+    bus_set_vramcnt(bus, 7, 0x82u);
+    CHECK_EQ("bbg ext pal read", bus_vram_extpal16(bus, 1, 2, 0, 0), 0x7C1Fu);
+
     bus_vram_reset_default(bus);             /* 恢复默认，避免污染后续渲染用例 */
 }
 

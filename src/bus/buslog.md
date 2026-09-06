@@ -109,6 +109,19 @@
 - 遗留：Engine B（换屏后的顶屏 SQUARE ENIX）仍黑，参考/本地 BG/OBJ 寄存器、
   bank C/H 与调色板均一致，疑似缺 OBJ/扩展调色板或仿射精灵路径。
 
+## 2026-09-06 · 21-B9we — LCDC 分 bank 映射 + BG 扩展调色板
+
+- 参考在 0x0689C000（LCDC bank H 的第 2 个 8KB 槽）写入扩展调色板；旧实现把
+  LCDC 地址当“线性 VRAM 偏移”，0x0689C000 落到数组错误位置，bank H 恒 0。
+- `bus_resolve` 按 melonDS LCDC 规则分 bank：0x06800000 起每 128KB 对应
+  A-D，随后 E/F/G/H/I 各在自己的小窗；bank H 的写入现在落到 vram+0x98000
+  的正确 0x7FFF 掩码内。
+- `bus_set_vramcnt` 增加 H→BBG 扩展调色板槽（mode2），并新增
+  `bus_vram_extpal16`；renderer 在 DISPCNT bit30（extended palette）时用
+  扩展调色板取 256 色 BG 颜色。
+- 验证：全量 **770 项检查 0 失败**；真 ROM 本地 bank H 与参考逐字节一致，
+  Engine B 输出与参考同为 81 色/46288 白像素的 SQUARE ENIX 画面。
+
 ## 2026-09-05 · 21-B7 — Shared WRAM 按 WRAMCNT 双核切分
 
 - **背景**：B1 把 0x03000000 / 0x037F8000 无条件映射给两核同一 32KB，真机则按

@@ -98,6 +98,10 @@ typedef struct bus {
     uint32_t vram_map_bbg[0x8];           /* Engine B BG：16KB 槽 → bank 位掩码 */
     uint32_t vram_map_bobj[0x8];          /* Engine B OBJ：16KB 槽 → bank 位掩码 */
     uint32_t vram_map_tex[4];             /* 3D 纹理 512KB 块 → bank 位掩码 */
+    uint32_t vram_map_abg_ext[4];         /* Engine A BG 扩展调色板 8KB 槽 */
+    uint32_t vram_map_bbg_ext[4];         /* Engine B BG 扩展调色板 8KB 槽 */
+    uint32_t vram_map_aobj_ext;           /* Engine A OBJ 扩展调色板 */
+    uint32_t vram_map_bobj_ext;           /* Engine B OBJ 扩展调色板 */
     int      arm9_dtcm_on;                /* ARM9 DTCM 是否使能（CP15 c1 bit16） */
     uint32_t arm9_dtcm_base;              /* ARM9 DTCM 基址（未使能为 0xFFFFFFFF） */
     uint32_t arm9_dtcm_size;              /* ARM9 DTCM 大小 */
@@ -121,6 +125,10 @@ void bus_set_vramcnt(bus_t *bus, int bank, uint8_t cnt);
 
 /* 恢复阶段 9 的默认 homebrew 映射（A→A BG、B→A OBJ、C→B BG、D→B OBJ）。 */
 void bus_vram_reset_default(bus_t *bus);
+
+/* 读 BG 扩展调色板颜色（is_sub=1 → Engine B）。slot=0-3、pal=0-15、color=0-255。 */
+uint16_t bus_vram_extpal16(const bus_t *bus, int is_sub, int slot,
+                           unsigned pal, unsigned color);
 
 /* 按 8 位读写一个字节。
    地址换算规则：把总线地址减去区间基址，得到该数组的下标

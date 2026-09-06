@@ -258,7 +258,8 @@ static uint8_t tile_pixel(const bus_t *bus, uint32_t tile_addr, int px, int py, 
    索引 0 = 透明（跳过）。支持 hflip/vflip。
    最小实现：screen size=0（32×32 tile），暂不支持滚动（map 坐标 = 屏幕坐标）。 */
 static void draw_bg(const bus_t *bus, comp_t *c, uint32_t char_base,
-                    uint32_t map_base, uint32_t pal_base, int is_256, int bg)
+                    uint32_t map_base, uint32_t pal_base, int is_256,
+                    int ext, int bg, int is_sub)
 {
     for (int y = 0; y < RENDER_SCREEN_H; y++) {
         for (int x = 0; x < RENDER_SCREEN_W; x++) {
@@ -275,7 +276,10 @@ static void draw_bg(const bus_t *bus, comp_t *c, uint32_t char_base,
             if (idx == 0)
                 continue; /* 透明像素 */
             uint16_t color;
-            if (is_256)
+            if (is_256 && ext)
+                color = bus_vram_extpal16(bus, is_sub, bg,
+                                          (entry >> 12) & 0xFu, idx);
+            else if (is_256)
                 color = bus_read16(bus, pal_base + (uint32_t)idx * 2u);
             else
                 color = bus_read16(bus, pal_base + (uint32_t)(((entry >> 12) & 0xFu) * 16 + idx) * 2u);
@@ -375,10 +379,12 @@ static void render_tiled(const bus_t *bus, comp_t *c, int is_sub, uint32_t dispc
             uint32_t map_base = gfx_base
                 + ((bgcnt >> BGCNT_SCREEN_BASE_SHIFT) & 0x1Fu) * 0x800u
                 + disp_screen * 0x10000u;
+            int ext = (dispcnt & (1u << 30)) != 0;
             if (bg_is_affine(bmode, bg))
                 draw_affine_bg(bus, c, bgcnt, char_base, map_base, pal_base, bg, is_sub);
             else
-                draw_bg(bus, c, char_base, map_base, pal_base, (bgcnt & BGCNT_COLORS_256) != 0, bg);
+                draw_bg(bus, c, char_base, map_base, pal_base,
+                        (bgcnt & BGCNT_COLORS_256) != 0, ext, bg, is_sub);
         }
     }
 }

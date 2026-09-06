@@ -1078,3 +1078,22 @@ LDM/STM ^、banked r13/r14）抽成最小可复现单测再逐条对照 melonDS�
 **效果与遗留**：bank C/D 与参考逐字节一致后，Engine A 的 THINK&FEEL 画面已能
 渲染；但换屏后顶屏（参考 SQUARE ENIX 的 Engine B）仍是黑屏，说明下一个 gap
 在 OBJ/扩展调色板或仿射精灵渲染路径，而不是 BG bank 映射。
+
+### 21-B9we（2026-09-06 代码/测试）：LCDC 分 bank 映射 + BG 扩展调色板
+
+**证据**：参考核心的 H via LCDC 日志显示扩展调色板在 0x0689C000 写入
+（mask 后 addr=0x4000，即 bank H 槽 2 起点），值正是 H[0x4000] 的
+0x7FE0/0x842 调色板。旧本地把 LCDC 地址按线性 VRAM 偏移映射，写到数组错误
+位置，bank H 保持 0；修复后本地 bank H 与参考逐字节一致。
+
+**做了什么**：
+
+- bus_resolve 的 LCDC 区按 bank 窗口映射（A-D 每 128KB，E/F/G/H/I 各自小窗），
+  写 0x0689C000 落到 vram bank H 的 0x4000 偏移；
+- bus_set_vramcnt 的 H mode2 同时接到 Engine B BG 扩展调色板；新增
+  bus_vram_extpal16，renderer 在 DISPCNT bit30 时对 256 色 BG 使用扩展调色板；
+- `[case 21-B9wd]` 补 LCDC/ext 2 项，全量 **770 项检查 0 失败**。
+
+**效果**：本地 Engine B 已能渲染出与参考一致的 SQUARE ENIX 画面（同为
+81 色、46288 个近白像素的统计形状）；两屏现在分别是 SQUARE ENIX 与
+THINK&FEEL，开发商画面完整。继续追标题画面（下一帧段/输入）阶段。

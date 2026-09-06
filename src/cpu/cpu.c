@@ -127,6 +127,53 @@ int cpu_step(arm_cpu_t *cpu)
     cpu->step_cycles = 1;
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
+    /* 21-B9wf：ARM7 FreeBIOS 低地址等待路径必须整步走在 IRQ 检查之前。
+       真机从 Halt 唤醒后会先执行 BIOS 0x1158→0x112C 尾段（把调用方现场
+       恢复出来），IRQ 在尾段结束后才接管；若在 0x1158 处先被 IRQ 抢占，
+       调度器会把 BIOS 内部 PC 当任务现场保存，后续 LDM ^ 恢复出错误地址。 */
+    if (cpu->is_arm7 && cpu->bios7_active) {
+        if (cpu->bios7_halted) {
+            irq_t *hq = &cpu->nds->io->irq[1];
+            if (!(hq->ie & hq->ifl)) {
+                cpu->step_cycles = 0;
+                return 1;
+            }
+            cpu->bios7_halted = 0; /* 唤醒：下面先走 BIOS 尾段 */
+        }
+        if (cpu->bios7_delay) {
+            if (cpu->bios7_pc == 0x0000115Cu) {
+                uint32_t old = cpu->r[0];
+                uint32_t res = old - 1u;
+                cpu->r[0] = res;
+                cpu->cpsr &= ~(CPSR_N | CPSR_Z | CPSR_C | CPSR_V);
+                if (res & 0x80000000u) cpu->cpsr |= CPSR_N;
+                if (res == 0)          cpu->cpsr |= CPSR_Z;
+                if (old >= 1u)         cpu->cpsr |= CPSR_C;
+                if (old == 0x80000000u) cpu->cpsr |= CPSR_V;
+                cpu->step_cycles = 3;
+                if (res == 0) {
+                    cpu->bios7_delay = 0;
+                    cpu->bios7_pc = 0x0000112Cu;
+                    cpu->r[15] = cpu->bios7_pc;
+                    cpu->step_cycles = 2;
+                }
+            }
+            return 1;
+        }
+        if (cpu->bios7_pc == 0x00001158u) {
+            cpu->bios7_pc = 0x0000112Cu;
+            cpu->r[15] = cpu->bios7_pc;
+            cpu->step_cycles = 1;
+            return 1;
+        }
+        if (cpu->bios7_pc == 0x0000112Cu) {
+            cpu->bios7_active = 0;
+            exec_apply_cpsr(cpu, cpu->bios7_cpsr);
+            cpu->r[15] = cpu->bios7_ret;
+            cpu->step_cycles = 2;
+            return 1;
+        }
+    }
     if (bios_irq_tail9(cpu))
         return 1;
     /* 21-B9f：先检查 IRQ handler 是否刚弹出返回地址（见函数注释） */

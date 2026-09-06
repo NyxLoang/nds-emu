@@ -47,6 +47,24 @@
 - 未满足时返回 `BIOS_RET_WAIT` → `exec.c` 不前进 PC，等价低功耗等待（真机此刻视频/定时器继续跑）。
 - `bios_wait_by_loop`（0x03）：本模拟器不建模精确时序，按空操作处理。
 
+## 2026-09-06 · 21-B9wf — ARM7 FreeBIOS 低地址等待路径 HLE
+
+- **做了什么**：
+  - 修正 0x115C 的语义：它是 SWI 3 WaitByLoop（`subs r0,#1; bgt`）的循环体，
+    不是 Halt。ARM7 SWI 3 不再空操作：进入低地址状态后每步减 r0、每轮约
+    3 周期（step_cycles=3），减到 0 后等价执行 BIOS 0x112C 尾部并恢复调用方
+    CPSR/PC；r0 归零，供调用方判断。
+  - ARM7 SWI 6 Halt 改走暂停态：无 (IF&IE) 时停住且不消耗周期；唤醒不要求
+    IME（melonDS HaltInterrupted 口径），唤醒后先走 BIOS 0x1158→0x112C 尾部，
+    IRQ 在尾部恢复现场后才接管，避免把 BIOS 内部 PC 当任务现场保存。
+  - `bios_dispatch` 新增 REDIR 返回值：HLE 已改写 PC/CPSR 时 exec/thumb 不再
+    机械前进。
+- **怎么验证**：新增 `[case 21-B9wf]`（delay 计数/成本/尾部恢复 + Halt 暂停/
+    唤醒/尾部恢复共 20 项）；ARM7 行为不影响 ARM9 既有 Halt/IntrWait 用例。
+- **结果**：全量 **790 项检查 0 失败**。真 ROM headless 中 ARM7 首次稳定进入
+  0x1158/0x115C 低地址暂停/延迟态；事件驱动的“等待核唤醒后补跑积压指令”
+  跑飞已修复，时间/事件调度仍待继续完善。
+
 ## 2026-09-05 · 21-B9 — SWI 0x0E GetCRC16（bios_crc16.c）
 
 - 新建 `bios_crc16.h/.c`：实现 NDS9/NDS7 通用的 GetCRC16。

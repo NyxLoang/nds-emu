@@ -40,6 +40,16 @@ typedef struct arm_cpu {
     int deadloop_reported; /* 死循环识别已打印过（避免每步刷屏） */
     int irq_dump_done;     /* 首中断现场快照已打印过（21-B9b，避免每次 IRQ 刷屏） */
     int irq_mask_logged;   /* “IF&IE 已挂起但 CPSR.I 屏蔽”只提示一次（21-B9h） */
+    /* 21-B9wf：ARM7 FreeBIOS 低地址等待路径（参考级 HLE）。
+       真机 SWI 3 WaitByLoop 在 BIOS 0x115C 执行 “subs r0,#1; bgt” 循环，
+       每轮约 3 周期；SWI 6 Halt 先写 HALTCNT 进入暂停。HLE 不执行 BIOS 码，
+       用下面字段模拟循环节拍与暂停/唤醒边界。 */
+    int      bios7_active;   /* ARM7 正在低地址等待路径 */
+    int      bios7_delay;    /* 正在 WaitByLoop 循环中 */
+    int      bios7_halted;   /* Halt 暂停中（只等 IF&IE，不等 IME） */
+    uint32_t bios7_pc;       /* 下一个要模拟的低地址步骤（0x115C/0x112C） */
+    uint32_t bios7_ret;      /* SWI 返回地址 = 调用方下一条指令 */
+    uint32_t bios7_cpsr;     /* 调用方 CPSR（低路径结束时恢复） */
     irq_hle_ctx_t irq_hle; /* IRQ HLE 桩的现场保存区（21-B9f） */
 } arm_cpu_t;
 

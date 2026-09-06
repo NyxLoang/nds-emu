@@ -701,3 +701,11 @@
 
 - `[case 21-B9wd]` 补：H=0x80 时经 0x0689C000 写入，切 H=0x82 后
   `bus_vram_extpal16(Engine B, slot2)` 能读回同一颜色。全量 **770 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9wf — ARM7 FreeBIOS 低地址等待路径新增 20 项
+
+- 新增 `[case 21-B9wf]`：Thumb `swi 3` 从 r0=3 起逐轮减 1，每轮 step_cycles=3，
+  减到 0 后经 0x112C 尾部恢复调用方（PC=base+2、CPSR 含 T/I 原样、r0=0）；
+  Thumb `swi 6` 无 (IF&IE) 时停在 0x1158 且 step_cycles=0，置位后唤醒、清暂停、
+  走 BIOS 尾部回调用方。共 20 项断言。
+- 全量从 **770 项**增至 **790 项检查，0 项失败**。

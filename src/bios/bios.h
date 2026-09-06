@@ -31,6 +31,7 @@ typedef struct arm_cpu arm_cpu_t; /* 前向声明：bios 只操作寄存器/总�
 #define BIOS_RET_HANDLED 1    /* 已知函数已处理：PC += 4 */
 #define BIOS_RET_UNKNOWN 0    /* 未知号：打印日志，PC += 4 */
 #define BIOS_RET_WAIT    (-1) /* 等待未满足：PC 不动，重跑本 SWI */
+#define BIOS_RET_REDIR   (-2) /* 21-B9wf：处理器已切到 HLE 低地址状态，PC 不再由 exec 推进 */
 
 /* HLE 分发：按 SWI 函数号 n（= swi_num>>16）调用对应实现。 */
 int bios_dispatch(uint32_t n, arm_cpu_t *cpu);

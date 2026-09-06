@@ -560,6 +560,8 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         int ret = bios_dispatch(cpu->swi_num >> 16, cpu);
         if (ret == BIOS_RET_WAIT) {
             /* PC 不动，重跑本 SWI */
+        } else if (ret == BIOS_RET_REDIR) {
+            /* 21-B9wf：bios 已把 PC/CPSR 切到 HLE 低地址状态 */
         } else if (ret == BIOS_RET_UNKNOWN) {
             arm_exception(cpu, EXC_SWI_OFF, ARM_MODE_SVC, 4); /* 未知号 → SWI 向量 */
         } else {

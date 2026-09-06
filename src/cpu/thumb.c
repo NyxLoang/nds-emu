@@ -316,6 +316,7 @@ int thumb_step(arm_cpu_t *cpu, uint16_t insn)
             cpu->swi_num = fn;
             int ret = bios_dispatch(fn, cpu);
             if (ret == BIOS_RET_WAIT) return 1;
+            if (ret == BIOS_RET_REDIR) return 1;
             if (ret == BIOS_RET_UNKNOWN) { arm_exception(cpu, EXC_SWI_OFF, ARM_MODE_SVC, 4); return 1; }
             cpu->r[15] += 2;
             return 1;

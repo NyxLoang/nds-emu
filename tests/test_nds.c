@@ -2829,6 +2829,67 @@ static void test_bios_wait(nds_t *nds)
     CHECK_EQ("halt PC", nds->cpu->r[15], base + 8);
 }
 
+/* ---- 21-B9wf 用例：ARM7 FreeBIOS 低地址等待路径 HLE ----
+   WaitByLoop（SWI 3）应逐次减 r0（参考 0x115C subs/bgt，约 3 周期/轮），
+   结束后返回调用方并把 r0 归零；Halt（SWI 6）应进入暂停态，只由
+   (IF&IE) 唤醒（不要求 IME）。 */
+static void test_bios_wait_arm7(nds_t *nds)
+{
+    arm_cpu_t *cpu7 = nds->cpu7;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+
+    /* WaitByLoop：Thumb swi 3，r0=3 → 3 轮循环后回到 base+2 */
+    bus_write16(nds->bus, base + 0, 0xDF03u);
+    bus_write16(nds->bus, base + 2, 0xE7FEu); /* B self（占位） */
+    cpu7->cpsr = ARM_MODE_SYS | CPSR_T | CPSR_I;
+    cpu7->r[0] = 3;
+    cpu_reset(cpu7, base);
+    exec_set_trace(0);
+    cpu_step(cpu7); /* SWI 分发：进入低地址 0x115C 状态 */
+    CHECK_EQ("a7 delay enter pc", cpu7->r[15], 0x0000115Cu);
+    CHECK_EQ("a7 delay active", cpu7->bios7_active, 1);
+    CHECK_EQ("a7 delay mode", cpu7->cpsr & CPSR_MODE_MASK, ARM_MODE_SYS);
+    CHECK_EQ("a7 delay thumb off", cpu7->cpsr & CPSR_T, 0u);
+    cpu_step(cpu7);
+    CHECK_EQ("a7 delay r0-1", cpu7->r[0], 2u);
+    CHECK_EQ("a7 delay cost", cpu7->step_cycles, 3u);
+    cpu_step(cpu7);
+    CHECK_EQ("a7 delay r0-2", cpu7->r[0], 1u);
+    cpu_step(cpu7);
+    CHECK_EQ("a7 delay r0-3", cpu7->r[0], 0u);
+    CHECK_EQ("a7 delay tail pc", cpu7->r[15], 0x0000112Cu);
+    cpu_step(cpu7); /* BIOS 尾部：恢复调用方 CPSR/PC */
+    CHECK_EQ("a7 delay ret pc", cpu7->r[15], base + 2);
+    CHECK_EQ("a7 delay ret cpsr", cpu7->cpsr,
+             ARM_MODE_SYS | CPSR_T | CPSR_I);
+    CHECK_EQ("a7 delay inactive", cpu7->bios7_active, 0);
+
+    /* Halt：无 (IF&IE) 时暂停且不消耗周期；置位后唤醒并返回调用方 */
+    bus_write16(nds->bus, base + 0, 0xDF06u);
+    bus_write16(nds->bus, base + 2, 0xE7FEu);
+    cpu7->cpsr = ARM_MODE_SYS | CPSR_T;
+    cpu7->r[0] = 0;
+    nds->io->irq[1].ime = 0;
+    nds->io->irq[1].ie = 0;
+    nds->io->irq[1].ifl = 0;
+    cpu_reset(cpu7, base);
+    cpu_step(cpu7); /* SWI 分发：写 HALTCNT 后暂停，pc=0x1158 */
+    CHECK_EQ("a7 halt pc", cpu7->r[15], 0x00001158u);
+    CHECK_EQ("a7 halt flag", cpu7->bios7_halted, 1);
+    cpu_step(cpu7); /* 无唤醒条件：不消耗周期 */
+    CHECK_EQ("a7 halt wait pc", cpu7->r[15], 0x00001158u);
+    CHECK_EQ("a7 halt wait cost", cpu7->step_cycles, 0u);
+    nds->io->irq[1].ie = IO_IF_VBLANK;
+    nds->io->irq[1].ifl = IO_IF_VBLANK;
+    cpu_step(cpu7); /* 唤醒：先执行 BIOS b 0x112C */
+    CHECK_EQ("a7 halt wake tail", cpu7->r[15], 0x0000112Cu);
+    CHECK_EQ("a7 halt flag cleared", cpu7->bios7_halted, 0);
+    cpu_step(cpu7); /* BIOS 尾部：恢复调用方 PC */
+    CHECK_EQ("a7 halt ret pc", cpu7->r[15], base + 2);
+    CHECK_EQ("a7 halt inactive", cpu7->bios7_active, 0);
+    exec_set_trace(1);
+}
+
 /* ---- 11.7 用例：综合（LZ77 解压到 VRAM + Div + Sqrt 串行） ---- */
 static void test_stage11_integration(nds_t *nds)
 {
@@ -4902,6 +4963,7 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_bios_wait(nds);
+        test_bios_wait_arm7(nds);
         nds_destroy(nds);
     }
     printf("\n[case 11.7] 综合（LZ77 解压 + Div + Sqrt 串行）\n");

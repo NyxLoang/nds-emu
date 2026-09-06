@@ -53,16 +53,46 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
     timing_arm(&tm, 0, line_cycles, runner_ev_line, &ctx);
     timing_arm(&tm, 1, frame_cycles, runner_ev_frame, &ctx);
 
+    /* 21-B9wf：ARM7 的 HALTCNT 暂停由 (IF&IE) 唤醒（不要求 IME），
+       ARM9 WFI 仍要求 irq_pending（IME=1 才可能唤醒）。 */
+#define RUNNER_WAKE7(io_) (((io_)->irq[1].ie & (io_)->irq[1].ifl) != 0)
+#define RUNNER_WAKE9(io_) irq_pending(&(io_)->irq[0])
+
     uint64_t cost9 = 0, cost7 = 0;
     int a9_wait = 0, a7_wait = 0;
     uint64_t i = 0;
     while (i < steps) {
-        if (a9_wait && irq_pending(&nds->io->irq[0]))
+        /* 等待本身不消耗指令，但会消耗系统时间：唤醒时把该核的已用周期
+           跳到当前系统时间 tm.now（ARM9 时钟为 ARM7 的 2 倍），否则调度器
+           会把“暂停期间流逝的时间”误当成积压指令连续补跑，导致 ARM7
+           沿主存跑飞（21-B9wf 复现并修复）。 */
+        if (a9_wait && RUNNER_WAKE9(nds->io)) {
             a9_wait = 0;
-        if (a7_wait && irq_pending(&nds->io->irq[1]))
+            cost9 = tm.now * 2;
+        }
+        if (a7_wait && RUNNER_WAKE7(nds->io)) {
             a7_wait = 0;
-        if (a9_wait && a7_wait)
-            break;
+            cost7 = tm.now;
+        }
+        if (a9_wait && a7_wait) {
+            /* 两核都在低功耗等待：不能空转，推进到下一个硬件事件（扫描线/
+               VBlank），事件回调会把对应 IF 置位唤醒核心。 */
+            uint64_t next = timing_next(&tm);
+            if (next == UINT64_MAX)
+                break;
+            timing_advance(&tm, next);
+            i++;
+            if ((i & 0xFFFFFu) == 0xFFFFFu) {
+                printf("headless-cyc: step=%llu both-wait now=%llu next=%llu"
+                       " line=%llu frame=%llu\n",
+                       (unsigned long long)(i + 1),
+                       (unsigned long long)tm.now,
+                       (unsigned long long)next,
+                       (unsigned long long)ctx.next_line,
+                       (unsigned long long)ctx.next_frame);
+            }
+            continue;
+        }
         int step7;
         if (a9_wait)
             step7 = 1;
@@ -79,19 +109,37 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
             a9_wait = (nds->cpu->step_cycles == 0);
             if (!a9_wait) cost9 += nds->cpu->step_cycles;
         }
-        uint64_t sys = (cost9 / 2 < cost7) ? cost9 / 2 : cost7;
+        /* 单核等待时，时间必须由仍在跑的核推进：若取 min(cost9/2,cost7)，
+           等待核的成本停住会把系统时间钉死在原地，VBlank/扫描线事件再也
+           到不了期（21-B9wf 修复）。唤醒后另一核的成本落后，会按 2:1
+           连续补跑，等价暂停期间时间照常流逝。 */
+        uint64_t sys;
+        if (a9_wait)
+            sys = cost7;
+        else if (a7_wait)
+            sys = cost9 / 2;
+        else
+            sys = (cost9 / 2 < cost7) ? cost9 / 2 : cost7;
         timing_advance(&tm, sys);
         i++;
         if ((i & 0xFFFFFu) == 0xFFFFFu) {
-            printf("headless-cyc: step=%llu ARM9 PC=%08X cyc=%llu | ARM7 PC=%08X cyc=%llu\n",
+            printf("headless-cyc: step=%llu ARM9 PC=%08X cyc=%llu cpsr=%08X if=%08X"
+                   " | ARM7 PC=%08X cyc=%llu cpsr=%08X if=%08X\n",
                    (unsigned long long)(i + 1), nds->cpu->r[15],
-                   (unsigned long long)nds->cpu->cycles, nds->cpu7->r[15],
-                   (unsigned long long)nds->cpu7->cycles);
+                   (unsigned long long)nds->cpu->cycles, nds->cpu->cpsr,
+                   nds->io->irq[0].ifl,
+                   nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles,
+                   nds->cpu7->cpsr, nds->io->irq[1].ifl);
         }
     }
-    printf("headless-cyc: done. ARM9 PC=%08X cyc=%llu | ARM7 PC=%08X cyc=%llu\n",
+#undef RUNNER_WAKE7
+#undef RUNNER_WAKE9
+    printf("headless-cyc: done. ARM9 PC=%08X cyc=%llu cpsr=%08X"
+           " | ARM7 PC=%08X cyc=%llu cpsr=%08X\n",
            nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
-           nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles);
+           nds->cpu->cpsr,
+           nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles,
+           nds->cpu7->cpsr);
     fflush(stdout);
     (void)shot_path;
 }

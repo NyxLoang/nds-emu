@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9s | CPU/IO/测试 | ARM BLX 立即数（安全区 Thumb SWI 桩入口）+ ARM7 Halt 中断后跳过 SWI：FFXII 越过 BA94/IPC 死锁，双核推进到系统空闲（723 项 0 失败） | [cpu](src/cpu/cpulog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9r（分析） | 工程 | trace 定位 IPC 死锁：ARM9 0x0200B8C8 等 IPCSYNC 回应、ARM7 0x03807524 等 FIFO，请求处理器 0x037FEB24 未被触发（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9q | IO/测试 | DMA 控制器按核拆成两套（ARM9/ARM7 各 4 通道），VBlank/卡带触发双核各自点火（718 项 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) |
 | 2026-09-06 | 21-B9p | IO/测试 | DMA 完成中断接线：搬完且 CNT bit14 置位时置 IF bit8-11（718 项 0 失败） | [io](src/io/iolog.md) · [tests](tests/testlog.md) |

@@ -455,4 +455,23 @@
 - 验证：全量 704 项后保持 0 失败；headless 空闲任务 CPU 周期不再随 VBlank
   无界增长，ARM9 每次帧中断被正常唤醒。
 
+## 2026-09-06 · 21-B9s — ARM BLX 立即数 + ARM7 Halt 唤醒语义
+
+- **ARM BLX 立即数**：旧实现只补了 `BLX Rm`（B9e），FFXII 0x02012500 的
+  `BLX 0x020007A8` 被误译成普通 B：既没写 LR、也没切 Thumb，执行落在安全区
+  “字节序占位区”，之后跳进错误路径，ARM9 永远不会走到 service13 FIFO 发送。
+  按 ARMv5 编码补：cond=1111 的分支 = BLX 立即数，`r14=PC+4`、无条件置 T、
+  目标按 H 位补 2、清最低位。FFXII 用它进安全区里的 Thumb SWI 桩
+  （`svc #0x0B; bx lr`）。
+- **ARM7 Halt 唤醒**：IRQ HLE 原本对所有等待都“回到被打断指令重执行”。
+  对 IntrWait 这是对的，但 ARM7 `SWI 0x06 Halt`（Thumb `DF06`）被中断唤醒后
+  应继续 SWI 之后（`bx lr` 回调用方），否则 FIFO 处理完再次睡死，后续
+  回执/队列逻辑永远不执行。修复：恢复现场时若被打断指令是 Thumb SWI6，
+  PC 前进 2 字节。
+- 验证：新增 `[case 21-B9s]` BLX 立即数单测 5 项；全量 **723 项检查 0 失败**。
+  真 ROM 的 BA84/BA94（0xF3141/1）首次对上参考值，ARM7 会回发
+  C0204006 类 FIFO 回执，ARM9 离开 0x0200EA88 忙等，双核推进到系统空闲
+  （0x0200957C WFI / SWI6 Halt）。下一卡点：ARM9 空闲后尚未开始显示初始化，
+  等待下一个启动事件。
+
 

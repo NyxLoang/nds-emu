@@ -63,6 +63,15 @@ static void irq_hle_restore(arm_cpu_t *cpu)
     cpu->r[12] = cpu->irq_hle.ip;
     /* 恢复 CPSR 也要切回 User/System：经模式同步把 IRQ 私有 r13/r14 存回槽 */
     exec_apply_cpsr(cpu, cpu->irq_hle.saved_cpsr);
+    /* 21-B9s：ARM7 的 Halt（SWI 0x06，Thumb 编码 DF06）在任意中断到来后应
+       “被唤醒并继续 SWI 之后”，而不是重新执行 Halt——否则中断里做完的事
+       （如 FIFO 请求处理）永远不会落到后续代码，CPU 会再次睡死。
+       这里只在被打断指令确实是 Thumb SWI 6 时跳过该指令；IntrWait 等带条件
+       重试的等待仍走“重执行被打断指令”的旧语义。 */
+    if (cpu->is_arm7 && (cpu->cpsr & CPSR_T) &&
+        cpu_fetch16(cpu) == 0xDF06u) {
+        cpu->r[15] = cpu->irq_hle.ret_pc + 2u;
+    }
     cpu->irq_hle.active = 0;
     if (cpu->nds->bus->diag && cpu->irq_hle.log_count < 16) {
         printf("irq: #%d %s restore ret_pc=%08X cpsr=%08X\n",

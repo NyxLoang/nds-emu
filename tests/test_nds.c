@@ -1181,6 +1181,32 @@ static void test_arm_blx_reg(nds_t *nds)
     exec_set_trace(1);
 }
 
+/* ---- 21-B9s 用例：ARM BLX 立即数（安全区 Thumb SWI 桩入口，FFXII
+   0x02012500 跳 0x020007A8 依赖：svc #N + bx lr） ---- */
+static void test_arm_blx_imm(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t thumb_fn = 0x02001000u;
+    const uint32_t off = (thumb_fn - (base + 8)) >> 2;
+
+    /* BLX 立即数（0xFA000000 | off24）：lr=PC+4，无条件切 Thumb */
+    bus_write32(nds->bus, base, 0xFA000000u | off);
+    bus_write16(nds->bus, thumb_fn, 0x2000); /* Thumb: MOVS r0, #0 */
+
+    cpu->cpsr = 0;
+    cpu_reset(cpu, base);
+    exec_set_trace(0);
+    cpu_step(cpu);
+    CHECK_EQ("blxi thumb lr", cpu->r[14], base + 4);
+    CHECK_EQ("blxi thumb T", (cpu->cpsr & CPSR_T) ? 1u : 0u, 1u);
+    CHECK_EQ("blxi thumb PC", cpu->r[15], thumb_fn);
+    cpu_step(cpu);
+    CHECK_EQ("blxi thumb r0", cpu->r[0], 0u);
+    CHECK_EQ("blxi thumb PC2", cpu->r[15], thumb_fn + 2);
+    exec_set_trace(1);
+}
+
 /* ---- 21-B9g 用例：模式私有 r13/r14（SVC/IRQ/System 栈互不覆盖） ---- */
 static void test_banked_r13_r14(nds_t *nds)
 {
@@ -4399,6 +4425,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_arm_blx_reg(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9s] ARM BLX 立即数（安全区 Thumb SWI 桩入口）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_arm_blx_imm(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9g] 模式私有 r13/r14（System/SVC/IRQ 栈互不覆盖）\n");

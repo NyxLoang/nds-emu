@@ -561,6 +561,21 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
     if (((insn >> 25) & 0x7u) == ARM_OP_BRANCH) {
         uint32_t imm24 = insn & 0x00FFFFFFu;
         uint32_t target = branch_target(cpu->r[15], insn);
+        /* BLX 立即数（ARMv5）：cond=1111 的“分支”编码。与 BL 不同，link 是
+           隐含行为，bit24 是 H（目标低半字选择）而不是链接位；执行时无条件
+           切到 Thumb（FFXII 安全区放的是 Thumb SWI 桩：svc #N + bx lr）。 */
+        if (cond == 0xFu) {
+            cpu->r[14] = cpu->r[15] + 4;
+            if (insn & (1u << 24))
+                target += 2;
+            if (g_trace)
+                printf("cpu: PC=%08X insn=%08X BLX %08X (lr=%08X, thumb) cycles=%llu\n",
+                       cpu->r[15], insn, target, cpu->r[14],
+                       (unsigned long long)cpu->cycles);
+            cpu->cpsr |= CPSR_T;
+            cpu->r[15] = target & ~1u;
+            return 1;
+        }
         if (insn & (1u << 24)) { /* BL */
             cpu->r[14] = cpu->r[15] + 4;
             if (g_trace)

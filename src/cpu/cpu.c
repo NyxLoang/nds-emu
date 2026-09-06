@@ -102,6 +102,9 @@ int cpu_step(arm_cpu_t *cpu)
         if (!irq_pending(irq))
             return 1;
         cpu->cpsr &= ~CPSR_I;
+        /* 21-B9s：WFI 被中断唤醒时指令先“完成”再进 IRQ——PC 前进到下一条，
+           否则 IRQ 返回后又停在 WFI 上重执行，空闲任务永远走不到后续代码。 */
+        cpu->r[15] += 4;
     }
     /* 21-B9h：IF&IE 已挂起却被 CPSR.I 屏蔽时只提示一次 */
     if (irq_pending(irq) && (cpu->cpsr & CPSR_I) && !cpu->irq_mask_logged) {

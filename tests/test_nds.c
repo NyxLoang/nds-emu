@@ -1676,12 +1676,12 @@ static void test_vcount(nds_t *nds)
     CHECK_EQ("vcount init 0", bus_read16(nds->bus, 0x04000006u), 0x0000u);
     CHECK_EQ("dispstat init 0", bus_read16(nds->bus, 0x04000004u), 0x0000u);
     io_set_vblank(nds->io);
-    CHECK_EQ("vcount after frame 1", bus_read16(nds->bus, 0x04000006u), 0x0001u);
+    CHECK_EQ("vcount after frame 1", bus_read16(nds->bus, 0x04000006u), 0x00B6u);
     CHECK_EQ("dispstat vblank bit", bus_read16(nds->bus, 0x04000004u) & 1u, 1u);
     io_set_vblank(nds->io);
-    CHECK_EQ("vcount after frame 2", bus_read16(nds->bus, 0x04000006u), 0x0002u);
+    CHECK_EQ("vcount after frame 2", bus_read16(nds->bus, 0x04000006u), 0x00B7u);
     bus_write16(nds->bus, 0x04000006u, 0x1234u);
-    CHECK_EQ("vcount read-only", bus_read16(nds->bus, 0x04000006u), 0x0002u);
+    CHECK_EQ("vcount read-only", bus_read16(nds->bus, 0x04000006u), 0x00B7u);
 }
 
 /* ---- 阶段 21-B4 用例：ARM BX 奇地址应切 Thumb ---- */

@@ -251,9 +251,12 @@ void io_set_vblank(io_t *io)
        VBlank；FFXII ARM7 会读它确认帧边界）。 */
     io->disp.dispstat = (uint16_t)(io->disp.dispstat | 1u);
     io->disp.dispstat_sub = (uint16_t)(io->disp.dispstat_sub | 1u);
-    /* 简易 VCOUNT：每“帧”推进一条扫描线（真机每帧 0..262；跑帧接近即可，
-       FFXII 只把 VCOUNT 当单调调度时钟用）。 */
-    io->vcount = (uint16_t)((io->vcount + 1u) % 263u);
+    /* 简易 VCOUNT：首个帧事件后从 0xB6 起逐帧推进（FFXII 任务注册发生在
+       扫描线 ~0xB6；此前从 0/1 起步会让“任务号 <= VCOUNT”判断全错）。 */
+    if (io->vcount == 0)
+        io->vcount = 0xB6u;
+    else
+        io->vcount = (uint16_t)((io->vcount + 1u) % 263u);
     dma_fire(&io->dma[0], io->bus, DMA_START_VBLANK); /* 双核各自 VBlank DMA */
     dma_fire(&io->dma[1], io->bus, DMA_START_VBLANK);
 }

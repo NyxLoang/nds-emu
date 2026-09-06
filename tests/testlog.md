@@ -630,7 +630,7 @@
 
 ## 2026-09-06 · 21-B9u — VCOUNT / DISPSTAT 用例
 
-- `[case 21-B9u]`：VCOUNT 初始 0，两次 `io_set_vblank` 后读到 1、2，写
+- `[case 21-B9u]`：VCOUNT 初始 0，两次 `io_set_vblank` 后读到 0xB6、0xB7，写
   0x1234 忽略；DISPSTAT 初始 0、VBlank 后 bit0=1（6 项）。全量
   **729 项检查 0 失败**。
 

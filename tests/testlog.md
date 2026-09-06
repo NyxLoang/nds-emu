@@ -662,3 +662,8 @@
 
 - `arm7 stm base r0/self/r2/no writeback`：验证 STMIA r1,{r0-r14} 在 r1 槽写入
   当前写地址、且无写回时 r1 不变。全量 **747 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9zn — 同口径补到 ARM9 新增 4 项
+
+- `arm9 stm base r0/self/r2/no writeback`：同一 STMIA 在 ARM9 主存地址上验证
+  r1 槽保存当前写地址。全量 **751 项检查 0 失败**。

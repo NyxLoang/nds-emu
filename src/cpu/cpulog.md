@@ -511,3 +511,14 @@
 - melonDS `A_STM`：ARM7 的 STM 在 rn 也在列表且存在更低编号寄存器时，rn 槽保存
   当前写地址（FFXII OS 上下文保存依赖）；本模拟器此前保存原 rn 值。
 - `exec_block_transfer` 按此口径实现，仅影响 ARM7 STM 且 rn 槽不是最低列表寄存器。
+
+## 2026-09-06 · 21-B9zn — A_STM 同一口径补到 ARM9
+
+- 对照 melonDS `ARMInterpreter_LoadStore.cpp` 的 `A_STM`：该“基址在列表内保存
+  当前写地址”是 ARM9/ARM7 共用的解释器语义，不是 ARM7 专属行为。
+  B9zg 只给 `is_arm7` 生效，ARM9 的 OS/IRQ 上下文保存仍按旧口径写回原 rn 值。
+- 修复：`exec_block_transfer` 去掉 `is_arm7` 条件，同一规则作用于两颗 CPU；
+  新增 `[case 21-B9zn]` 4 项 ARM9 断言。全量 **751 项检查 0 失败**。
+- 真 ROM 复测：该修复本身尚不足以进入第二阶段，但用发送指令级探针重新确认了
+  现状——ARM9 已能发出 service11（2B/81E3E82B/AB），ARM7 回 6B 两次，随后仍回
+  0x0200957C 空闲；与 B9zh..zm 记录的“service11 从未出现”不同，需以本次为准。

@@ -2269,6 +2269,28 @@ static void test_arm7_stm_base_in_list(nds_t *nds)
     CHECK_EQ("arm7 stm no writeback", cpu->r[1], 0x0380A4FCu);
 }
 
+/* ---- 21-B9zn 用例：同一 melonDS A_STM 口径同样作用于 ARM9 ---- */
+static void test_arm9_stm_base_in_list(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t pc = 0x02008000u;
+    bus_write32(nds->bus, pc, 0xE8817FFFu); /* STMIA r1, {r0-r14} */
+    cpu->cpsr = ARM_MODE_SYS;
+    cpu_reset(cpu, pc);
+    cpu->r[0] = 0x11111111u;
+    cpu->r[1] = 0x0200A4FCu; /* STMIA 基址：上下文保存的当前写地址槽 */
+    cpu->r[2] = 0x8000009Fu;
+    exec_set_trace(0);
+    cpu_step(cpu);
+    CHECK_EQ("arm9 stm base r0", bus_read32(nds->bus, 0x0200A4FCu),
+             0x11111111u);
+    CHECK_EQ("arm9 stm base self", bus_read32(nds->bus, 0x0200A500u),
+             0x0200A500u);
+    CHECK_EQ("arm9 stm base r2", bus_read32(nds->bus, 0x0200A504u),
+             0x8000009Fu);
+    CHECK_EQ("arm9 stm no writeback", cpu->r[1], 0x0200A4FCu);
+}
+
 /* ---- 10.6 用例：乘法 MUL/MLA + 长乘 UMULL/UMLAL/SMULL ---- */
 static void test_mul(nds_t *nds)
 {
@@ -4708,6 +4730,7 @@ int main(void)
         if (nds == NULL) return 1;
         test_block_transfer(nds);
         test_arm7_stm_base_in_list(nds);
+        test_arm9_stm_base_in_list(nds);
         nds_destroy(nds);
     }
     printf("\n[case 10.6] 乘法 MUL/MLA + 长乘\n");

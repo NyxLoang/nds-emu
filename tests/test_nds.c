@@ -3308,6 +3308,21 @@ static void test_cartbus_read(nds_t *nds)
                 | ((uint32_t)rom[0x3FE] << 16) | ((uint32_t)rom[0x3FF] << 24);
     CHECK_EQ("cart tail word", bus_read32(nds->bus, BUS_CARD_DATA), w0);
     CHECK_EQ("cart beyond end", bus_read32(nds->bus, BUS_CARD_DATA), 0xFFFFFFFFu);
+
+    /* 21-B9w: B8 命令读芯片 ID（melonDS CartCommon ROMCommandReceive 直接返回
+       ChipID，不是 ROM 数据）。0x400 字节 ROM 补成 2 的幂后仍 <1MB，
+       芯片 ID = 0xC2 | ((0x100 - size>>28)<<8) = 0x100C2。 */
+    static const uint8_t chipcmd[8] = {0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    for (int i = 0; i < 8; i++)
+        bus_write8(nds->bus, CART_COMMAND + i, chipcmd[i]);
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80u);
+    CHECK_EQ("cart chipid DRQ",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
+             CART_ROMCTRL_DRQ);
+    CHECK_EQ("cart chipid word", bus_read32(nds->bus, BUS_CARD_DATA), 0x000100C2u);
+    CHECK_EQ("cart chipid done busy",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_ACTIVATE, 0u);
+    CHECK_EQ("cart chipid second", bus_read32(nds->bus, BUS_CARD_DATA), 0xFFFFFFFFu);
 }
 
 /* ---- 阶段 15.3 用例：DMA 4 通道 + 地址递减 + VBlank 触发 ---- */

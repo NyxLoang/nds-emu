@@ -186,3 +186,17 @@
 - 验证：15.2 用例补「4 字节块读完 busy/DRQ 回落」断言；全量 **700 项检查 0
   失败**。真 ROM 该读块循环结束，ARM9 继续推进。
 
+## 2026-09-06 · 21-B9w — 卡带芯片 ID（B8 命令）+ 容量 ID 口径
+- 对照参考快照发现两处卡带 ID 口径错误：
+  1. `main.c` 直接把 ROM 头 0x0C 的游戏代码 ASCII 当成卡带 ID 写入
+     0x027FF800/0x027FFC00 系统表；melonDS `NDSCart::ParseROM` 实际用
+     “补成 2 的幂后的 ROM 大小”推导芯片 ID，FFXII 这颗是 0x7FC2。
+  2. `cartbus` 把 B7/B8 都当 ROM 读；melonDS 只有 B7 读 ROM，B8 直接返回
+     ChipID（`CartCommon::ROMCommandReceive`）。0x02011840 发 B8 读芯片 ID，
+     原来读回“AXFJ”让 0x02011FE8 走了错误的 service14 分支。
+- 修复：`cartbus_attach` 按补幂容量算 `chip_id`；`cartbus_activate/read32`
+  支持 B8 单字返回芯片 ID；`main.c` direct-boot 表复用同一公式。
+- 验证：15.2 用例补 B8 芯片 ID 断言（0x400 字节 ROM → 0x100C2）；真 ROM
+  跑过 0x0200AB70/0x02011D84 的 service11 文件读取路径，ARM9 开始加载
+  Worldmap/Menu 等 bmd 资源（此前只发 service14 后即停）。
+

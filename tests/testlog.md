@@ -638,3 +638,7 @@
 - VCOUNT 帧起始为 0，`io_advance_scanline` 后 +1；DISPSTAT 低字节只接受
   IRQ 使能位、高字节保存 VCount 比较值。全量 **731 项检查 0 失败**。
 
+## 2026-09-06 · 21-B9w — B8 芯片 ID 命令用例
+- 15.2 用例补：B8 00 00 00 00 00 00 00 激活后，CARD_DATA 读回按容量推导的
+  芯片 ID（0x400 字节 ROM → 0x100C2），读一次后 DRQ/busy 回落，再读 0xFFFFFFFF。
+

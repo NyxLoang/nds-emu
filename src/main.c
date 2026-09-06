@@ -41,7 +41,18 @@ static void direct_boot_tables(cart_t *cart, bus_t *bus)
 {
     if (cart == NULL || cart->size < 0x170 || bus == NULL)
         return;
-    uint32_t cartid = le32(cart->data + 0x00C); /* 游戏代码 4 字节 */
+    /* 21-B9w: cart ID is a melonDS NDSCart::ParseROM value derived from the
+       power-of-two padded ROM size, not the ASCII game code at header 0x0C.
+       FFXII compares the value read back from CARD_DATA against 0x027FFC00;
+       writing the game code sends it down the wrong service-14 path. */
+    size_t padded = 1;
+    while (padded < cart->size)
+        padded <<= 1;
+    uint32_t cartid = 0x000000C2u;
+    if (padded >= 1024u * 1024u && padded <= 128u * 1024u * 1024u)
+        cartid |= (uint32_t)((padded >> 20) - 1u) << 8;
+    else
+        cartid |= (uint32_t)(0x100u - (padded >> 28)) << 8;
     uint16_t hcrc = le16(cart->data + 0x0FC);   /* 头校验和 */
     uint16_t scrc = le16(cart->data + 0x0FE);   /* 安全区校验和 */
     for (uint32_t i = 0; i < 0x170; i += 4)

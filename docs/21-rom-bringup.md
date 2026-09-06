@@ -579,6 +579,31 @@ handler 表项设为 0x37FDDF0——正是周期任务调度器；补上该中�
 调起，C0240046 系列回执按帧重复出现，ARM9 也重新进入 0x020119xx 卡带读循环。
 验证 731 项 0 失败。下一卡点转为 ARM9 收下回执后如何继续显示初始化。
 
+### 21-B9w（2026-09-06）：direct-boot 卡带 ID 口径 + 卡带 B8 芯片 ID 命令
+
+**参考对照**：同一阶段导出的参考 Main RAM 快照里，0x027FF800/0x027FFC00 两组
+系统表值都是 `00007FC2`，而本地是 `4A465841`（“AXFJ”）。本地把 ROM 头 0x0C
+的游戏代码当成了卡带 ID；melonDS `NDSCart::ParseROM` 实际用“补成 2 的幂后的
+ROM 大小”推导芯片 ID（0xC2 | ((size>>20)-1)<<8，本 ROM 补到 128MB → 0x7FC2）。
+
+随后追踪 FIFO 差异发现本地 ARM9 在 service11 之前多发了一条 service14
+（0x0000004E），参考没有。调用栈落在 0x02011FE8 → 0x020120E0 → 0x02012058，
+而 0x02011FE8 开头会把 `0x02011840()` 从 CARD_DATA 读回的值与 0x027FFC00
+比较。反汇编 0x02011840 后再对照 melonDS `CartCommon::ROMCommandReceive`：
+它发的是 **B8 命令，B8 返回芯片 ID**，不是 B7 的 ROM 读；旧 cartbus 把 B7/B8
+都当 ROM 读，于是拿“AXFJ”比较，走了 service14 错误分支。
+
+**做了什么**：
+- `main.c` direct-boot 表按补幂 ROM 容量推导芯片 ID，与 melonDS 一致；
+- `cartbus` 新增 `chip_id`：B7 仍读 ROM，B8 激活后固定返回一个字的芯片 ID，
+  读完清除 DRQ/busy；
+- 15.2 用例补 B8 断言（0x400 字节测试 ROM → 0x100C2）。
+
+**效果**：修正后本地 ARM9 不再发 service14，改走与参考一致的 service11
+（0x0000002B/0x81E3E82B/0x000000AB…），开始把 Worldmap/Menu 等 bmd 资源读入
+Main RAM；全量测试 735 项 0 失败。下一卡点：ARM9 空闲任务上下文恢复后 PC 被置成
+0（0x02076F24 的 ctx40 在切走空闲任务时被写 0），正在对照调度器保存/恢复语义。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

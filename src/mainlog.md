@@ -134,3 +134,10 @@
   初始化流程。headless 日志打印一行 `boot : direct-boot tables @ 027FFxxx written`。
 - **验证**：594 项单测 0 失败；FFXII headless 越过旧信箱轮询后能读到卡带信息并继续
   boot 初始化（下一卡点见 docs/21-rom-bringup.md 21-B8）。
+
+## 2026-09-06 · 21-B9w — direct-boot 表的卡带 ID 按补幂容量推导
+- 旧实现把 ROM 头 0x0C 的游戏代码 ASCII 写进 0x027FF800/0x027FFC00，
+  参考快照是 melonDS 按“补成 2 的幂的 ROM 大小”算出的芯片 ID（FFXII=0x7FC2）。
+  修正为与 `cartbus` 同一公式：`0xC2 | ((size>>20)-1)<<8`（1MB..128MB）。
+- FFXII 0x02011FE8 会把 CARD_DATA 读回的芯片 ID 与 0x027FFC00 比较；
+  旧表导致它走到 service14 错误分支，修正后进入 service11 文件读取流程。

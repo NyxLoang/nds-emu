@@ -83,6 +83,9 @@ void runner_headless(nds_t *nds, uint64_t steps, int trace,
         /* 近似一帧（约 100 万步）触发一次 VBlank，模拟显示硬件，让等 VBlank 的游戏能继续 */
         if ((i & 0xFFFFFu) == 0xFFFFFu)
             io_set_vblank(nds->io);
+        /* VCOUNT 逐行：一帧约 263 条扫描线，100 万步内约 4000 步一条线 */
+        if ((i & 0xFFFu) == 0)
+            io_advance_scanline(nds->io);
         /* 每 100 万步打一次进度 */
         if ((i & 0xFFFFFu) == 0xFFFFFu) {
             /* 21-B9h：进度附带两核中断寄存器，便于判断“等 IRQ 但没来”是

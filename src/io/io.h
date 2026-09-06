@@ -79,6 +79,10 @@ save_t *io_get_save(io_t *io);
 /* 一帧结束：把 VBlank 位挂起（6.3；VBlank 是 ARM9 显示事件，置 ARM9 的 IF） */
 void io_set_vblank(io_t *io);
 
+/* VCOUNT 逐行推进：runner 每 ~4000 步调一次，模拟一帧内 263 条扫描线，
+   并触发 DISPSTAT VCount 匹配（IF bit2，FFXII 任务调度器依赖）。 */
+void io_advance_scanline(io_t *io);
+
 /* 是否真会发生中断（默认 ARM9 视角，6.4 主循环用） */
 int io_irq_pending(const io_t *io);
 

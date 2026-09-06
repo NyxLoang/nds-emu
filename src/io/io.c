@@ -251,14 +251,28 @@ void io_set_vblank(io_t *io)
        VBlank；FFXII ARM7 会读它确认帧边界）。 */
     io->disp.dispstat = (uint16_t)(io->disp.dispstat | 1u);
     io->disp.dispstat_sub = (uint16_t)(io->disp.dispstat_sub | 1u);
-    /* 简易 VCOUNT：首个帧事件后从 0xB6 起逐帧推进（FFXII 任务注册发生在
-       扫描线 ~0xB6；此前从 0/1 起步会让“任务号 <= VCOUNT”判断全错）。 */
-    if (io->vcount == 0)
-        io->vcount = 0xB6u;
-    else
-        io->vcount = (uint16_t)((io->vcount + 1u) % 263u);
+    io->vcount = 0;
     dma_fire(&io->dma[0], io->bus, DMA_START_VBLANK); /* 双核各自 VBlank DMA */
     dma_fire(&io->dma[1], io->bus, DMA_START_VBLANK);
+}
+
+void io_advance_scanline(io_t *io)
+{
+    io->vcount = (uint16_t)((io->vcount + 1u) % 263u);
+    /* DISPSTAT VCount 匹配：扫描线到达 bit8-15 设定值时置 bit2，
+       IRQ 使能（bit5）时把 IF bit2 挂起。FFXII 的 0x37FDDF0 任务调度器靠它被调起。 */
+    uint8_t v = (uint8_t)(io->vcount & 0xFFu);
+    uint16_t *stat[2] = { &io->disp.dispstat, &io->disp.dispstat_sub };
+    for (int s = 0; s < 2; s++) {
+        uint16_t old = *stat[s];
+        uint16_t setting = (uint16_t)((*stat[s] >> 8) & 0xFFu);
+        uint16_t match = (setting == v) ? 4u : 0u;
+        *stat[s] = (uint16_t)((*stat[s] & ~4u) | match);
+        if (match && !(old & 4u) && (*stat[s] & 0x20u)) {
+            io->irq[0].ifl |= 4u;
+            io->irq[1].ifl |= 4u;
+        }
+    }
 }
 
 int io_irq_pending(const io_t *io)

@@ -163,6 +163,20 @@ static void write_byte16(uint16_t *reg, int byte_idx, uint8_t val)
 
 void disp_write8(disp_t *d, uint32_t addr, uint8_t val)
 {
+    /* DISPSTAT：bit0-2 只读状态位；bit3-5 IRQ 使能可写；bit8-15 VCount 比较值。
+       游戏写它配置 VCount 匹配中断，之前被当写忽略。 */
+    if (addr >= IO_DISPSTAT && addr < IO_DISPSTAT + 2) {
+        uint16_t old = d->dispstat;
+        uint16_t mask = (addr & 1u) ? 0xFF00u : 0x0038u;
+        d->dispstat = (uint16_t)((old & ~mask) | ((uint16_t)val << ((addr & 1u) * 8) & mask));
+        return;
+    }
+    if (addr >= IO_DISPSTAT_SUB && addr < IO_DISPSTAT_SUB + 2) {
+        uint16_t old = d->dispstat_sub;
+        uint16_t mask = (addr & 1u) ? 0xFF00u : 0x0038u;
+        d->dispstat_sub = (uint16_t)((old & ~mask) | ((uint16_t)val << ((addr & 1u) * 8) & mask));
+        return;
+    }
     /* DISPCNT：32 位 */
     if (addr >= IO_DISPCNT && addr < IO_DISPCNT + 4) {
         uint32_t shift = (addr - IO_DISPCNT) * 8;

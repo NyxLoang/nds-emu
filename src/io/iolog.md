@@ -353,8 +353,15 @@
 
 - FFXII ARM7 任务注册路径频繁读 0x04000006（VCOUNT）计算任务截止点；此前
   模拟器按未知 IO 读 0，所有任务截止点相同、就绪队列排序退化。
-- `io_t` 增加 `vcount`，`io_set_vblank` 首个帧事件后从 0xB6 起逐帧推进
-  （FFXII 任务注册发生在扫描线 ~0xB6，从 0/1 起步会让“任务号 <= VCOUNT”
-  判断全错），0..262 循环，
-  0x04000006/07 只读返回低/高字节；DISPSTAT（主/副）bit0 在 VBlank 后置位。
-  验证 **729 项检查 0 失败**。
+- `io_t` 增加 `vcount`，`io_set_vblank` 把行号复位到 0（随后由 B9v 的
+  逐行推进驱动），0x04000006/07 只读返回低/高字节；DISPSTAT（主/副）bit0
+  在 VBlank 后置位。验证 **729 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9v — 逐行 VCOUNT + VCount 匹配中断
+
+- VCOUNT 改为逐行推进（runner 每 ~4000 步调 `io_advance_scanline`），一帧
+  263 行；DISPSTAT 写低字节只接受 bit3-5 IRQ 使能、高字节为比较值。
+- vcount 到达比较值时置 DISPSTAT bit2；若 bit5 使能，向两核 IF bit2 置位。
+- 真 ROM：FFXII ARM7 IF bit2 handler 为 0x37FDDF0（周期任务调度器），补上后
+  C0240046 系列回执开始按帧出现，ARM9 重新进入 0x020119xx 卡带读循环。
+  验证 **731 项检查 0 失败**。

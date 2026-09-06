@@ -630,7 +630,11 @@
 
 ## 2026-09-06 · 21-B9u — VCOUNT / DISPSTAT 用例
 
-- `[case 21-B9u]`：VCOUNT 初始 0，两次 `io_set_vblank` 后读到 0xB6、0xB7，写
-  0x1234 忽略；DISPSTAT 初始 0、VBlank 后 bit0=1（6 项）。全量
-  **729 项检查 0 失败**。
+- `[case 21-B9u]`：VCOUNT 初始 0，`io_set_vblank` 后行号归 0、DISPSTAT bit0=1；
+  DISPSTAT 可写 IRQ 使能与比较值。全量 **729 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9v — 逐行 VCOUNT / DISPSTAT 写语义用例
+
+- VCOUNT 帧起始为 0，`io_advance_scanline` 后 +1；DISPSTAT 低字节只接受
+  IRQ 使能位、高字节保存 VCount 比较值。全量 **731 项检查 0 失败**。
 

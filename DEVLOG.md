@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9zd（实验） | 工程/卡带 | 强制保留 0x027FFC30=FFFF 可停住 ARM7 入队风暴，但基座对象计数仍 1 vs 参考 7，第二阶段仍缺（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zc | 卡带/IO/测试 | B7/B8 按 melonDS 周期时序（首字/cmd/gap/逐字延迟）实现：FFXII 第一阶段从约 2 帧拉长到约 38 帧才空闲，743 项 0 失败 | [cart](src/cart/cartlog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zb（分析） | 工程/卡带 | 长帧参考 2480 帧 + 500/530/560/770 快照对齐：第二阶段约第 539 帧由 ARM7 对象队列 7→11 触发；本地卡带零延迟导致第一阶段提前完成、ARM7 反复入队（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9w | 卡带/装载 | direct-boot 表卡带 ID 按补幂容量推导 + 卡带 B8 命令返回芯片 ID：FFXII 越过错误的 service14 分支，进入 service11 文件读取（含 4 项新检查） | [cart](src/cart/cartlog.md) 路 [main](src/mainlog.md) 路 [tests](tests/testlog.md) |

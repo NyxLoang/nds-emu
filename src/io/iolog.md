@@ -373,3 +373,8 @@
 
 - ARM9 每个指令周期推进 `cartbus_advance`；就绪边沿复用现有卡带 IRQ/DMA 接线。
 - 原“写 ROMCTRL 立即可用”的边沿判断保留在写入路径，真正就绪由时钟推进触发。
+
+## 2026-09-06 · 21-B9wd — VRAMCNT 读写接线
+
+- 0x04000240-246/248-249 在 ARM9 视角读回 vramcnt、写时调 `bus_set_vramcnt`；
+  ARM7 视角保留 0x04000241=WRAMCNT 的旧语义，避免和 VRAMCNT B 冲突。

@@ -95,6 +95,20 @@
   新暴露下一个 gap——ARM7 写 `0x04000180/81`（IPCSYNC）被当作未知 IO 忽略，留待 B2。
 - **结果**：✅ 用户验收通过（2026-09-05）。
 
+## 2026-09-06 · 21-B9wd — VRAMCNT 动态映射
+
+- FFXII 启动后期写 VRAMCNT：A/B=83/8B（3D 纹理）、C=84（Engine B BG）、
+  D=81（Engine A BG）、E=82（Engine A OBJ）、F/G/H/I=83/85/82/82。旧固定
+  “bank A→顶屏 BG”只对默认 homebrew 布局成立，FFXII 顶屏会读错 bank。
+- `bus_t` 增加 vramcnt[9] 与 ABG/AOBJ/BBG/BOBJ/tex 槽位掩码表；`bus_set_vramcnt`
+  移植 melonDS `MapVRAM_AB/CD/E/H` 的当前必需分支，`bus_resolve` 对
+  0x06000000-0x067FFFFF 按映射表落物理 bank。
+- io 层把 0x04000240-246/248-249 接给 bus（ARM9 视角；ARM7 的 0x04000241 仍
+  是 WRAMCNT）；新增 `[case 21-B9wd]` 6 项断言。
+- 验证：全量 **768 项检查 0 失败**；真 ROM bank D/C/E 与参考原始 VRAM 完全一致。
+- 遗留：Engine B（换屏后的顶屏 SQUARE ENIX）仍黑，参考/本地 BG/OBJ 寄存器、
+  bank C/H 与调色板均一致，疑似缺 OBJ/扩展调色板或仿射精灵路径。
+
 ## 2026-09-05 · 21-B7 — Shared WRAM 按 WRAMCNT 双核切分
 
 - **背景**：B1 把 0x03000000 / 0x037F8000 无条件映射给两核同一 32KB，真机则按

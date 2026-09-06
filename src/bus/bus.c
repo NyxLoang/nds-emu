@@ -5,7 +5,33 @@
 bus_t *bus_create(void)
 {
     /* calloc 清零，保证未写入区域读 0，符合未初始化内存约定 */
-    return calloc(1, sizeof(bus_t));
+    bus_t *bus = calloc(1, sizeof(bus_t));
+    if (bus == NULL)
+        return NULL;
+    bus_vram_reset_default(bus);
+    return bus;
+}
+
+void bus_vram_reset_default(bus_t *bus)
+{
+    if (bus == NULL)
+        return;
+    for (int i = 0; i < 0x20; i++) bus->vram_map_abg[i] = 0;
+    for (int i = 0; i < 0x10; i++) bus->vram_map_aobj[i] = 0;
+    for (int i = 0; i < 0x8; i++) {
+        bus->vram_map_bbg[i] = 0;
+        bus->vram_map_bobj[i] = 0;
+    }
+    for (int i = 0; i < 4; i++) bus->vram_map_tex[i] = 0;
+    /* 默认映射（阶段 9 的 libnds vramDefault 布局）：
+       A→Engine A BG、B→Engine A OBJ、C→Engine B BG、D→Engine B OBJ。
+       FFXII 启动后写 VRAMCNT 会覆盖为参考配置。 */
+    for (int i = 0; i < 8; i++) {
+        bus->vram_map_abg[i] |= 1u << 0;
+        bus->vram_map_aobj[i] |= 1u << 1;
+        bus->vram_map_bbg[i] |= 1u << 2;
+        bus->vram_map_bobj[i] |= 1u << 3;
+    }
 }
 
 void bus_destroy(bus_t *bus)
@@ -28,6 +54,99 @@ void bus_set_arm9_dtcm(bus_t *bus, int enabled, uint32_t base, uint32_t size)
     bus->arm9_dtcm_on = enabled && size > 0;
     bus->arm9_dtcm_base = bus->arm9_dtcm_on ? base : 0xFFFFFFFFu;
     bus->arm9_dtcm_size = bus->arm9_dtcm_on ? size : 0;
+}
+
+/* ---- 21-B9wd：VRAMCNT 动态映射（端口自 melonDS GPU::MapVRAM_*） ---- */
+
+/* 物理 bank 在 bus->vram 数组里的基址与大小/掩码 */
+static const uint32_t vram_bank_phys[9] = {
+    0x00000u, 0x20000u, 0x40000u, 0x60000u, 0x80000u,
+    0x90000u, 0x94000u, 0x98000u, 0xA0000u
+};
+static const uint32_t vram_bank_mask[9] = {
+    0x1FFFFu, 0x1FFFFu, 0x1FFFFu, 0x1FFFFu, 0x0FFFFu,
+    0x03FFFu, 0x03FFFu, 0x07FFFu, 0x03FFFu
+};
+
+static void vram_clear_bank(bus_t *bus, uint32_t bankmask)
+{
+    for (int i = 0; i < 0x20; i++) bus->vram_map_abg[i] &= ~bankmask;
+    for (int i = 0; i < 0x10; i++) bus->vram_map_aobj[i] &= ~bankmask;
+    for (int i = 0; i < 0x8; i++) {
+        bus->vram_map_bbg[i] &= ~bankmask;
+        bus->vram_map_bobj[i] &= ~bankmask;
+    }
+    for (int i = 0; i < 4; i++) bus->vram_map_tex[i] &= ~bankmask;
+}
+
+static void vram_set_abg(bus_t *bus, int slot, int n, uint32_t mask)
+{
+    for (int i = 0; i < n; i++)
+        bus->vram_map_abg[slot + i] |= mask;
+}
+
+static void vram_set_aobj(bus_t *bus, int slot, int n, uint32_t mask)
+{
+    for (int i = 0; i < n; i++)
+        bus->vram_map_aobj[slot + i] |= mask;
+}
+
+static void vram_set_bbg(bus_t *bus, int n, uint32_t mask)
+{
+    for (int i = 0; i < n; i++)
+        bus->vram_map_bbg[i] |= mask;
+}
+
+static void vram_set_bobj(bus_t *bus, int n, uint32_t mask)
+{
+    for (int i = 0; i < n; i++)
+        bus->vram_map_bobj[i] |= mask;
+}
+
+void bus_set_vramcnt(bus_t *bus, int bank, uint8_t cnt)
+{
+    if (bus == NULL || bank < 0 || bank >= 9)
+        return;
+    uint8_t old = bus->vramcnt[bank];
+    bus->vramcnt[bank] = cnt;
+    if (old == cnt)
+        return;
+
+    uint32_t bankmask = 1u << bank;
+    vram_clear_bank(bus, bankmask);
+    if (!(cnt & 0x80u))
+        return;
+
+    if (bank <= 1) { /* A/B：mask 0x9B */
+        unsigned ofs = (cnt >> 3) & 3u;
+        switch (cnt & 3u) {
+        case 1: vram_set_abg(bus, (int)(ofs << 3), 8, bankmask); break;
+        case 2: vram_set_aobj(bus, (int)((ofs & 1u) << 3), 8, bankmask); break;
+        case 3: bus->vram_map_tex[ofs] |= bankmask; break;
+        default: break; /* LCDC：本项目暂不建模 */
+        }
+    } else if (bank <= 3) { /* C/D：mask 0x9F */
+        unsigned ofs = (cnt >> 3) & 7u;
+        switch (cnt & 7u) {
+        case 1: vram_set_abg(bus, (int)(ofs << 3), 8, bankmask); break;
+        case 3: bus->vram_map_tex[ofs & 3u] |= bankmask; break;
+        case 4:
+            if (bank == 2) vram_set_bbg(bus, 8, bankmask);
+            else           vram_set_bobj(bus, 8, bankmask);
+            break;
+        default: break; /* LCDC/ARM7：暂不建模 */
+        }
+    } else if (bank == 4) { /* E：mask 0x87 */
+        switch (cnt & 7u) {
+        case 1: vram_set_abg(bus, 0, 4, bankmask); break;
+        case 2: vram_set_aobj(bus, 0, 4, bankmask); break;
+        default: break; /* LCDC/纹理调色板/扩展调色板：暂不建模 */
+        }
+    } else if (bank == 7) { /* H：mask 0x87，当前 FFXII 配置为 B OBJ */
+        if ((cnt & 7u) == 2)
+            vram_set_bobj(bus, 8, bankmask);
+    }
+    /* F/G/I：FFXII 当前配置不用于 2D 引擎，后续需要时按 melonDS 补齐 */
 }
 
 /* Shared WRAM 按 WRAMCNT 低 2 位 + 当前访问者切分（阶段 21-B7）。
@@ -65,6 +184,36 @@ static int bus_shared_resolve(const bus_t *bus, uint32_t addr,
     }
     *region = mem;
     *off = (size_t)(addr & mask);
+    return 1;
+}
+
+/* 21-B9wd：逻辑 VRAM 窗口按 VRAMCNT 映射到物理 bank。
+   范围与 melonDS GPU 一致：A BG=0x06000000、B BG=0x06200000、
+   A OBJ=0x06400000、B OBJ=0x06600000，每窗 2MB 地址空间里用 16KB 槽查掩码。 */
+static int bus_vram_resolve(const bus_t *bus, uint32_t addr,
+                            const uint8_t **region, size_t *off)
+{
+    if (addr < 0x06000000u || addr >= 0x06800000u)
+        return 0;
+    uint32_t mask;
+    if (addr < 0x06200000u)
+        mask = bus->vram_map_abg[(addr >> 14) & 0x1Fu];
+    else if (addr < 0x06400000u)
+        mask = bus->vram_map_bbg[(addr >> 14) & 0x7u];
+    else if (addr < 0x06600000u)
+        mask = bus->vram_map_aobj[(addr >> 14) & 0xFu];
+    else
+        mask = bus->vram_map_bobj[(addr >> 14) & 0x7u];
+
+    if (mask == 0)
+        return 0; /* 未映射：读 0 / 写忽略 */
+    int bank = 0;
+    while (bank < 9 && !(mask & (1u << bank)))
+        bank++;
+    if (bank >= 9)
+        return 0;
+    *region = bus->vram + vram_bank_phys[bank];
+    *off = (size_t)(addr & vram_bank_mask[bank]);
     return 1;
 }
 
@@ -113,8 +262,11 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - BUS_MAIN_RAM_MIRROR_BASE);
         return 1;
     }
-    /* VRAM：显存区间，换算方式与 Main RAM 相同（addr - 0x06000000 = VRAM 下标） */
-    if (addr >= BUS_VRAM_BASE &&
+    /* 21-B9wd：Engine A/B 的 BG/OBJ 逻辑窗口先按 VRAMCNT 映射解析 */
+    if (addr >= 0x06000000u && addr < 0x06800000u)
+        return bus_vram_resolve(bus, addr, region, off);
+    /* LCDC/显示捕获区仍按旧的全量窗口映射（0x06800000 起 → vram 数组对应偏移） */
+    if (addr >= BUS_LCDC_VRAM_BASE &&
         addr - BUS_VRAM_BASE < BUS_VRAM_SIZE) {
         *region = bus->vram;
         *off = (size_t)(addr - BUS_VRAM_BASE);

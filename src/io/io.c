@@ -80,6 +80,15 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return irq_read8(&io->irq[is_arm7 ? 1 : 0], addr);
     if (ipc_sync_is_addr(addr))
         return ipc_sync_read8(&io->sync, addr, is_arm7);
+    if (!is_arm7 && addr >= BUS_VRAM_CNT_BASE &&
+        addr < BUS_VRAM_CNT_BASE + 10u &&
+        addr != 0x04000247u && io->bus != NULL) {
+        /* VRAMCNT：0x240-246=A..G，0x248-249=H..I（0x247 是 WRAMCNT） */
+        unsigned idx = (unsigned)(addr - BUS_VRAM_CNT_BASE);
+        if (idx > 6)
+            idx--;
+        return io->bus->vramcnt[idx];
+    }
     if (memctl_is_addr(addr))
         return memctl_read8(&io->memctl, addr, is_arm7);
     if (power_is_addr(addr) && (is_arm7 || addr >= IO_POWER_POSTFLG))
@@ -126,6 +135,15 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         /* 请求目标是对端核：ARM9 写请求 → ARM7 的 IF，ARM7 写请求 → ARM9 的 IF */
         ipc_sync_write8(&io->sync, addr, val, is_arm7,
                         &io->irq[is_arm7 ? 0 : 1]);
+        return;
+    }
+    if (!is_arm7 && addr >= BUS_VRAM_CNT_BASE &&
+        addr < BUS_VRAM_CNT_BASE + 10u &&
+        addr != 0x04000247u && io->bus != NULL) {
+        unsigned idx = (unsigned)(addr - BUS_VRAM_CNT_BASE);
+        if (idx > 6)
+            idx--;
+        bus_set_vramcnt(io->bus, (int)idx, val);
         return;
     }
     if (memctl_is_addr(addr)) {

@@ -48,6 +48,12 @@
 #define BUS_VRAM_MAIN_OBJ_PHYS  0x20000u      /* 主 OBJ 窗口物理偏移（bank B） */
 #define BUS_VRAM_SUB_OBJ_PHYS   0x60000u      /* 副 OBJ 窗口物理偏移（bank D） */
 
+/* VRAMCNT 动态映射（21-B9wd）：NDS 的 9 个物理 VRAM bank 经 0x04000240-249
+   可映射到 Engine A BG / A OBJ / Engine B BG / B OBJ / 3D 纹理等逻辑窗口。
+   FFXII 把 bank D→顶屏 BG、bank C→底屏 BG、bank E→A OBJ、bank H→B OBJ，
+   旧实现的固定“bank A→顶屏”只对默认 homebrew 布局成立。 */
+#define BUS_VRAM_CNT_BASE 0x04000240u
+
 /* LCDC 分配 VRAM 窗口（阶段 20.2 显示捕获目标）：0x06800000 起 512KB，映射到 vram[0] */
 #define BUS_LCDC_VRAM_BASE 0x06800000u
 #define BUS_LCDC_VRAM_SIZE (512 * 1024)
@@ -86,6 +92,12 @@ typedef struct bus {
     uint8_t  palette[BUS_PALETTE_SIZE];   /* 调色板 RAM：2KB */
     uint8_t  oam[BUS_OAM_SIZE];           /* OAM：2KB（OBJ 属性） */
     io_t    *io;                          /* IO 寄存器区实现（由 nds 挂入） */
+    uint8_t  vramcnt[9];                  /* VRAMCNT A-I（0x04000240-249） */
+    uint32_t vram_map_abg[0x20];          /* Engine A BG：16KB 槽 → bank 位掩码 */
+    uint32_t vram_map_aobj[0x10];         /* Engine A OBJ：16KB 槽 → bank 位掩码 */
+    uint32_t vram_map_bbg[0x8];           /* Engine B BG：16KB 槽 → bank 位掩码 */
+    uint32_t vram_map_bobj[0x8];          /* Engine B OBJ：16KB 槽 → bank 位掩码 */
+    uint32_t vram_map_tex[4];             /* 3D 纹理 512KB 块 → bank 位掩码 */
     int      arm9_dtcm_on;                /* ARM9 DTCM 是否使能（CP15 c1 bit16） */
     uint32_t arm9_dtcm_base;              /* ARM9 DTCM 基址（未使能为 0xFFFFFFFF） */
     uint32_t arm9_dtcm_size;              /* ARM9 DTCM 大小 */
@@ -102,6 +114,13 @@ void bus_set_diag(bus_t *bus, int on);
 /* CP15 更新 ARM9 DTCM 映射（阶段 21-B8）：enabled=0 时 0x027E0000 等地址走 Main RAM
    镜像；enabled=1 时 ARM9 对 [base, base+size) 的读写改走私有 DTCM。 */
 void bus_set_arm9_dtcm(bus_t *bus, int enabled, uint32_t base, uint32_t size);
+
+/* 写 VRAMCNT：按 melonDS GPU::MapVRAM_* 的分支更新逻辑窗口映射。
+   bank：0=A … 8=I；cnt：VRAMCNT 寄存器写入的 8 位值。 */
+void bus_set_vramcnt(bus_t *bus, int bank, uint8_t cnt);
+
+/* 恢复阶段 9 的默认 homebrew 映射（A→A BG、B→A OBJ、C→B BG、D→B OBJ）。 */
+void bus_vram_reset_default(bus_t *bus);
 
 /* 按 8 位读写一个字节。
    地址换算规则：把总线地址减去区间基址，得到该数组的下标

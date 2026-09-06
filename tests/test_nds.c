@@ -1915,10 +1915,39 @@ static void test_disp_regs(nds_t *nds)
     CHECK_EQ("pal entry 0", bus_read16(nds->bus, BUS_PALETTE_BASE), 0x7C00u);
     bus_write16(nds->bus, BUS_PALETTE_BASE + 0x400, 0x03E0u);
     CHECK_EQ("pal sub entry", bus_read16(nds->bus, BUS_PALETTE_BASE + 0x400), 0x03E0u);
-    /* VRAM 固定窗口：副 BG 0x06200000 应映射到物理 bank C（vram[0x40000]） */
+    /* VRAM 窗口：副 BG 0x06200000 由默认映射落到 bank C；
+       物理 bank 不直接暴露给总线，写入后应能从同一逻辑窗口读回。 */
     bus_write16(nds->bus, BUS_VRAM_SUB_BG_BASE, 0x001Fu);
     CHECK_EQ("vram sub bg win", bus_read16(nds->bus, BUS_VRAM_SUB_BG_BASE), 0x001Fu);
-    CHECK_EQ("vram sub bg phys", bus_read16(nds->bus, BUS_VRAM_BASE + BUS_VRAM_SUB_BG_PHYS), 0x001Fu);
+}
+
+/* 21-B9wd：VRAMCNT 动态映射（FFXII 配置：D→A BG、C→B BG、E→A OBJ、H→B OBJ） */
+static void test_vramcnt_mapping(nds_t *nds)
+{
+    bus_t *bus = nds->bus;
+    nds->bus->active_is_arm7 = 0;
+
+    for (int b = 0; b < 9; b++)
+        bus_set_vramcnt(bus, b, 0x00u);      /* 先清掉全部映射 */
+    bus_set_vramcnt(bus, 3, 0x81u);          /* D → Engine A BG */
+    bus_set_vramcnt(bus, 2, 0x84u);          /* C → Engine B BG */
+    bus_set_vramcnt(bus, 4, 0x82u);          /* E → Engine A OBJ */
+    bus_set_vramcnt(bus, 7, 0x82u);          /* H → Engine B OBJ */
+
+    bus_write16(bus, 0x06000000u, 0xABCDu);
+    CHECK_EQ("vramcnt D->A BG read", bus_read16(bus, 0x06000000u), 0xABCDu);
+    CHECK_EQ("vramcnt D phys", bus_read16(bus, 0x06000000u + 0x1FFFEu), 0x0000u);
+    bus_write16(bus, 0x06200000u + 0x100u, 0x1234u);
+    CHECK_EQ("vramcnt C->B BG read", bus_read16(bus, 0x06200000u + 0x100u), 0x1234u);
+    bus_write16(bus, 0x06400000u, 0x1111u);
+    CHECK_EQ("vramcnt E->A OBJ read", bus_read16(bus, 0x06400000u), 0x1111u);
+    bus_write16(bus, 0x06600000u + 0x200u, 0x2222u);
+    CHECK_EQ("vramcnt H->B OBJ read", bus_read16(bus, 0x06600000u + 0x200u), 0x2222u);
+
+    bus_write8(bus, 0x04000243u, 0x81u);     /* 经 IO 写 VRAMCNT D */
+    CHECK_EQ("vramcnt io read", bus_read8(bus, 0x04000243u), 0x81u);
+
+    bus_vram_reset_default(bus);             /* 恢复默认，避免污染后续渲染用例 */
 }
 
 /* 9.3：直色位图模式渲染（DISPCNT mode 5 + BG2 直色位图） */
@@ -4726,6 +4755,8 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_disp_regs(nds);
+        printf("\n[case 21-B9wd] VRAMCNT 动态映射\n");
+        test_vramcnt_mapping(nds);
         nds_destroy(nds);
     }
     printf("\n[case 9.3] 直色位图模式渲染\n");

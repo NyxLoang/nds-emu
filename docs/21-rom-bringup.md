@@ -1058,3 +1058,23 @@ LDM/STM ^、banked r13/r14）抽成最小可复现单测再逐条对照 melonDS�
 续到 AB/1AB/22B/26B/00040005 等多轮；headless 60M 步终点从约 7.55M 周期
 空闲推进到约 16.4M 周期空闲（ARM9 0x0200957C），显示初始化之前的卡点需
 继续追下一处。
+
+### 21-B9wd（2026-09-06 代码/测试）：VRAMCNT 动态映射
+
+**证据**：参考核心导出 frame120 的 VRAMCNT=83/8B/84/81/82/83/85/82/82，
+对应 bank D→Engine A BG、bank C→Engine B BG、bank E→A OBJ、bank H→B OBJ，
+而 bank A/B 只作 3D 纹理。本地旧总线把 bank A 当顶屏 BG，顶屏取错 bank；
+本地 bank C/D/E/H 原始字节与参考完全一致，BG/OBJ 控制寄存器和调色板也一致。
+
+**做了什么**：
+
+- bus 增加 vramcnt[9] 与 ABG/AOBJ/BBG/BOBJ/tex 槽位掩码，移植 melonDS
+  `MapVRAM_AB/CD/E/H` 的当前必需分支；0x06000000-0x067FFFFF 的读写按映射表
+  落到物理 bank；
+- io 层把 VRAMCNT 寄存器（ARM9 视角）接给 bus，ARM7 的 0x04000241 保持
+  WRAMCNT 语义；
+- 新增 `[case 21-B9wd]`，全量 **768 项检查 0 失败**。
+
+**效果与遗留**：bank C/D 与参考逐字节一致后，Engine A 的 THINK&FEEL 画面已能
+渲染；但换屏后顶屏（参考 SQUARE ENIX 的 Engine B）仍是黑屏，说明下一个 gap
+在 OBJ/扩展调色板或仿射精灵渲染路径，而不是 BG bank 映射。

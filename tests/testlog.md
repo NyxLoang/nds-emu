@@ -690,3 +690,9 @@
   改为 FreeBIOS 语义：触发后 lr=0xFFFF06F0（不是被打断 PC），弹栈后先回
   BIOS 桩，再经 tail 恢复 r0-r3/r12/r14 与 CPSR，最后重执行被打断指令并
   恢复 IRQ SP。全量 **763 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9wd — VRAMCNT 动态映射新增 6 项
+
+- `[case 21-B9wd]`：按 FFXII 配置 D→A BG、C→B BG、E→A OBJ、H→B OBJ 后，
+  各逻辑窗口写读回一致，IO 写 VRAMCNT D 可读回；结束恢复默认映射。
+  全量 **768 项检查 0 失败**。

@@ -683,3 +683,10 @@
 
 - `[case 21-B9vw]`：最早截止选择、到期前不触发、按槽触发、自动解除、
   重新武装。全量 **762 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9wa — ARM9 IRQ BIOS 返回桩用例改写
+
+- `[case 21-B9c]` 的 handler 仍是 STMFD lr / 破坏 r1 / LDMFD pc，但期望
+  改为 FreeBIOS 语义：触发后 lr=0xFFFF06F0（不是被打断 PC），弹栈后先回
+  BIOS 桩，再经 tail 恢复 r0-r3/r12/r14 与 CPSR，最后重执行被打断指令并
+  恢复 IRQ SP。全量 **763 项检查 0 失败**。

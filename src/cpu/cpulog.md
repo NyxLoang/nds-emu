@@ -531,3 +531,23 @@
   调度器用 `step_cycles` 累计真实时间戳。
 - 新增 `[case 21-B9vv]` 4 项（WFI step_cycles=0/不增指令计数、普通指令
   step_cycles=1/指令计数+1）。全量 **755 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9wa — ARM9 IRQ 返回桩改为 FreeBIOS 尾部
+
+- 逐指令对照（方式 1）：参考 ARM9 解释器在 0x01FF8120 后打印连续 [tr]，
+  本地临时加同窗口 [ltr]。第二次 6B 里 ITCM 0x01FF8120→01FF8198 两侧完全
+  一致，分歧只在 0x01FF81A0 的 `ldmia sp!,{pc}`：
+  - 参考弹到 **0xFFFF06F0**（FreeBIOS IRQ 入口 `mov r14,r15` 留在栈里的
+    返回桩），随后 `ldmia sp!,{r0-r3,r12,r14}; subs pc,r14,#4` 把新任务
+    接到 0x02007F74/0778C，service11 续发 1AB；
+  - 本地弹到 **0x02009580**（被打断旧空闲任务 PC），`irq_hle_restore`
+    恢复旧 sleep 上下文，随后 077D4 把 F18 写回 76F24。
+- 根因：本地 ARM9 IRQ HLE 把 lr 设成“被打断 PC”；真 FreeBIOS 在入口
+  `stmdb sp!,{r0-r3,r12,lr}` 压六字帧后把 lr 改成桩地址 0xFFFF06F0，
+  ITCM 分发器弹栈拿到的是桩地址而不是旧任务 PC。
+- 修复：ARM9 IRQ 槽跳转等价执行 FreeBIOS 0xFFFF06D8 入口（压六字帧 +
+  lr=0xFFFF06F0）；新增 `bios_irq_tail9` 在 PC==0xFFFF06F0 且 IRQ 模式时
+  模拟尾部两条指令，用 SPSR_irq 恢复 CPSR。IRQ HLE 私有恢复只保留给 ARM7。
+- 验证：`[case 21-B9c]` 改为新语义（lr=桩、弹回桩、tail 恢复后重执行被打断
+  指令、IRQ SP 回弹）；全量 **763 项检查 0 失败**。真 ROM 60M 步下 service11
+  从 3 次续到 AB/1AB/22B/26B/00040005 等多轮，终点推进到 16.4M 周期空闲。

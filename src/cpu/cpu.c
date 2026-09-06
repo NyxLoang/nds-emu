@@ -46,10 +46,9 @@ uint16_t cpu_fetch16(const arm_cpu_t *cpu)
     return bus_read16(cpu->nds->bus, cpu->r[15]);
 }
 
-/* 21-B9f：IRQ HLE 桩的“返回恢复”。FFXII 的中断分发器用
-   `stmdb sp!,{lr}; ...; ldmfd sp!,{pc}` 返回——它压入/弹出的返回地址是模拟桩
-   设置的“被打断指令 PC”（等价于真 BIOS 把 stub 地址放进 LR，stub 再 SUBS 返回）。
-   由于没有可执行 BIOS 桩，返回后由本函数在取指前恢复现场并重执行被打断指令。 */
+/* 21-B9f：IRQ HLE 桩的“返回恢复”（21-B9wa 起仅 ARM7 需要）。
+   ARM9 改用 FreeBIOS 返回桩（bios_irq_tail9）按真机路径弹六字帧；
+   ARM7 没有可执行 BIOS 桩，仍在 handler 弹回返回点后由本函数恢复现场。 */
 static void irq_hle_restore(arm_cpu_t *cpu)
 {
     if (!cpu->irq_hle.active)
@@ -82,6 +81,44 @@ static void irq_hle_restore(arm_cpu_t *cpu)
     }
 }
 
+/* 21-B9wa（实验）：ARM9 FreeBIOS IRQ 尾部。
+   参考核心在 ITCM 0x01FF81A0 弹 PC 后不是直接回旧任务，而是先到
+   0xFFFF06F0（FreeBIOS IRQ 入口设置的“返回桩”），由
+     ldmia sp!, {r0-r3,r12,r14}
+     subs pc, r14, #4
+   从当前 IRQ 栈帧恢复寄存器并用 SPSR_irq 恢复 CPSR。
+   FFXII 的 ITCM 上下文切换把“新任务”的六字帧压回栈后弹到该桩，
+   本地此前直接把桩地址错设成被打断 PC，导致只恢复旧 sleep 上下文。 */
+static int bios_irq_tail9(arm_cpu_t *cpu)
+{
+    if (cpu->is_arm7)
+        return 0;
+    if ((cpu->cpsr & CPSR_MODE_MASK) != ARM_MODE_IRQ)
+        return 0;
+    if (cpu->r[15] != 0xFFFF06F0u)
+        return 0;
+
+    uint32_t sp = cpu->r[13];
+    cpu->r[0]  = bus_read32(cpu->nds->bus, sp + 0x00u);
+    cpu->r[1]  = bus_read32(cpu->nds->bus, sp + 0x04u);
+    cpu->r[2]  = bus_read32(cpu->nds->bus, sp + 0x08u);
+    cpu->r[3]  = bus_read32(cpu->nds->bus, sp + 0x0Cu);
+    cpu->r[12] = bus_read32(cpu->nds->bus, sp + 0x10u);
+    cpu->r[14] = bus_read32(cpu->nds->bus, sp + 0x14u);
+    cpu->r[13] = sp + 0x18u;
+
+    uint32_t ret = cpu->r[14] - 4u;
+    uint32_t saved = cpu->spsr[1];
+    cpu->r[15] = ret;
+    exec_apply_cpsr(cpu, saved);
+    cpu->step_cycles = 2;
+    if (cpu->nds->bus->diag && cpu->irq_hle.log_count < 16) {
+        printf("irq: arm9 bios tail ret=%08X cpsr=%08X\n", ret, cpu->cpsr);
+        cpu->irq_hle.log_count++;
+    }
+    return 1;
+}
+
 /* 单步执行一条指令：
    框架只负责「取指 + 指令计数」，指令语义全部委托给 exec_step（见 exec.c）。
    返回 0 表示停机（本阶段总是返回 1，停机由死循环达成）。 */
@@ -90,6 +127,8 @@ int cpu_step(arm_cpu_t *cpu)
     cpu->step_cycles = 1;
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
+    if (bios_irq_tail9(cpu))
+        return 1;
     /* 21-B9f：先检查 IRQ handler 是否刚弹出返回地址（见函数注释） */
     irq_hle_restore(cpu);
     /* 6.5：一条指令 ≈ 一个周期，推进所有使能定时器（分频在 timer.c 内处理） */
@@ -166,12 +205,12 @@ int cpu_step(arm_cpu_t *cpu)
             uint32_t slot_fc = bus_read32(cpu->nds->bus,
                                           cpu->nds->bus->arm9_dtcm_base + 0x3FFCu);
             if (slot_fc != 0) {
-                /* 21-B9x：真机 ARM9 BIOS 的 IRQ 入口会先压 r0-r3/r12/lr 六字帧，
-                   再跳用户 handler（FreeBIOS interrupt_handler 同款）。FFXII 的
-                   ITCM dispatcher 在 0x01FF8164 附近从 IRQ 栈弹这 6 个字保存现场；
-                   此前没有压帧会弹到栈底 0，把空闲任务上下文写坏。 */
+                /* 21-B9x + 21-B9wa：等价执行 FreeBIOS 0xFFFF06D8 入口——
+                   先 stmdb sp!,{r0-r3,r12,lr} 压六字帧，再设 lr=0xFFFF06F0
+                   （BIOS 返回桩）后跳用户 handler。ITCM 上下文切换靠这个
+                   桩地址把新任务接回调度器；旧实现把 lr 设成被打断 PC，
+                   使弹栈直接落回旧任务而非 BIOS 桩。 */
                 uint32_t isp = cpu->r[13];
-                cpu->irq_hle.saved_irq_sp = isp;
                 bus_write32(cpu->nds->bus, isp - 0x18u + 0x00u, cpu->r[0]);
                 bus_write32(cpu->nds->bus, isp - 0x18u + 0x04u, cpu->r[1]);
                 bus_write32(cpu->nds->bus, isp - 0x18u + 0x08u, cpu->r[2]);
@@ -179,26 +218,14 @@ int cpu_step(arm_cpu_t *cpu)
                 bus_write32(cpu->nds->bus, isp - 0x18u + 0x10u, cpu->r[12]);
                 bus_write32(cpu->nds->bus, isp - 0x18u + 0x14u, ret_pc + 4u);
                 cpu->r[13] = isp - 0x18u;
-                /* 激活 HLE 桩：把返回点设成被打断指令 PC，dispatcher 的
-                   pop {pc} 会回到这里，随后 irq_hle_restore 恢复现场 */
-                cpu->irq_hle.active = 1;
-                cpu->irq_hle.saved_cpsr = saved_cpsr;
-                cpu->irq_hle.ret_pc = ret_pc;
-                cpu->irq_hle.r[0] = cpu->r[0];
-                cpu->irq_hle.r[1] = cpu->r[1];
-                cpu->irq_hle.r[2] = cpu->r[2];
-                cpu->irq_hle.r[3] = cpu->r[3];
-                cpu->irq_hle.ip = cpu->r[12];
-                cpu->irq_hle.log_count++;
                 /* 目标地址 LSB=1 表示 Thumb 入口：按 BX 规则清 PC 最低位并置 T */
                 if (slot_fc & 1u)
                     cpu->cpsr |= CPSR_T;
                 else
                     cpu->cpsr &= ~CPSR_T;
                 cpu->r[15] = slot_fc & ~1u;
-                /* dispatcher 以 stmdb/pop 成对使用 lr：给它“返回被中断 PC”的
-                   地址（真 BIOS 桩会给 stub 地址再 SUBS 回这里，效果等价） */
-                cpu->r[14] = ret_pc;
+                cpu->r[14] = 0xFFFF06F0u;
+                cpu->irq_hle.log_count++;
             }
         }
         /* 21-B9i：ARM7 IRQ 槽在 ARM7 WRAM 顶 0x0380FFFC（FFXII 实测指向

@@ -1021,3 +1021,40 @@ LDM/STM ^、banked r13/r14）抽成最小可复现单测再逐条对照 melonDS�
 收尾，本地顺序反了”。下一步把 ITCM 切换后实际恢复的上下文/寄存器集与
 参考逐指令对比，定位本地为什么恢复的是旧 sleep 上下文而不是 service
 续跑上下文。
+
+### 21-B9wa（2026-09-06 代码/测试）：ARM9 IRQ 返回桩改为 FreeBIOS 尾部
+
+**逐指令对照（方式 1）**：给 melonDS ARM9 解释器加“0x01FF8120 后连续
+1500 条”的 [tr] 钩子，本地在 cpu_step 临时加同窗口 [ltr]，对齐第二次
+6B（参考 t9=24,357,580 起）：
+
+- ITCM 0x01FF8120（写 F18=76FE4）→ 01FF8198（LDMIB ^）两侧寄存器几乎
+  完全一致：LDM ^ 后 r0=1、r1=02077020、r4=02076F14、r5=02076F24、
+  r6=02076FE4、r8=1、r9=0xB、sp=027E3F78、lr=02007F78；
+- 分歧出现在 0x01FF81A0 的 `ldmia sp!,{pc}`：
+  - 参考弹到 **0xFFFF06F0**——FreeBIOS IRQ 入口（0xFFFF06D8）先
+    `stmdb sp!,{r0-r3,r12,lr}` 压六字帧，再用 `mov r14,r15` 把 lr 设成
+    返回桩地址；ITCM 尾部 STMDA 后从栈底弹回的就是该桩。随后 BIOS 尾部
+    `ldmia sp!,{r0-r3,r12,r14}; subs pc,r14,#4` 把新任务接到
+    0x02007F74/0778C，service11 续发 1AB/22B/26B/00040005；
+  - 本地弹到 **0x02009580**（被打断旧空闲任务 PC）——本地 HLE 把
+    handler 的 lr 直接设成被打断 PC，irq_hle_restore 恢复旧 sleep 上下文，
+    之后 077D4 把 F18 写回 76F24 并回空闲。
+
+**做了什么**：
+
+- `cpu.c` ARM9 IRQ 槽跳转改为等价执行 FreeBIOS 0xFFFF06D8 入口：压
+  r0-r3/r12 + 被打断 PC+4 六字帧，lr=0xFFFF06F0（不再用 irq_hle 私有槽
+  保存 ARM9 现场）；
+- 新增 `bios_irq_tail9`：当 ARM9 在 IRQ 模式执行到 0xFFFF06F0 时模拟
+  `ldmia sp!,{r0-r3,r12,r14}` + `subs pc,r14,#4`（用 SPSR_irq 恢复
+  CPSR），等价真机 BIOS 尾部；IRQ HLE 私有恢复只保留给 ARM7；
+- `[case 21-B9c]` 改写为新语义：lr=桩地址、handler 弹栈先回桩、tail 恢复
+  现场后重执行被打断指令、IRQ SP 回弹。
+
+验证：全量 **763 项检查 0 失败**。
+
+真 ROM 效果：第二次 6B 不再被旧 76F24 sleep 切换抢回——service11 从 3 次
+续到 AB/1AB/22B/26B/00040005 等多轮；headless 60M 步终点从约 7.55M 周期
+空闲推进到约 16.4M 周期空闲（ARM9 0x0200957C），显示初始化之前的卡点需
+继续追下一处。

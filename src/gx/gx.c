@@ -396,7 +396,17 @@ void gx_write8(gx_t *g, uint32_t addr, uint8_t val)
         uint32_t mask = 0xFFu << shift;
         g->disp3dcnt = (g->disp3dcnt & ~mask) | ((uint32_t)val << shift);
     }
-    /* GXSTAT / RAM_COUNT 只读，忽略写 */
+    /* GXSTAT 0x04000603：bit30-31 为 FIFO IRQ 模式（melonDS Write8 口径），
+       0x04000601 bit7 清矩阵栈复位标志；RAM_COUNT 保持只读。 */
+    if (addr == GX_GXSTAT + 1 && (val & 0x80u)) {
+        g->gxstat &= ~0x8000u;
+        return;
+    }
+    if (addr == GX_GXSTAT + 3) {
+        uint32_t mode = (uint32_t)(val & 0xC0u) << 24;
+        g->gxstat = (g->gxstat & ~GXSTAT_IRQ_MODE) | mode;
+        return;
+    }
 }
 
 void gx_write32(gx_t *g, uint32_t addr, uint32_t val)

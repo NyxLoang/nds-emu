@@ -64,3 +64,10 @@
   累计 483 项检查 0 失败，`ctest` 100% 通过。
 - **简化说明**：命令同步执行（不模拟 4 拍 FIFO 延迟）；平色着色（无光照/纹理采样/alpha 混合）；
   `SWAP_BUFFERS`/`RAM_COUNT`/`POLYGON_ATTR`/`NORMAL` 为占位或忽略。
+
+## 2026-09-06 · 21-B9za — GXSTAT FIFO IRQ 模式（IF bit21）
+- GXSTAT 0x04000603 的 bit30-31 是 FIFO IRQ 模式（melonDS `Write8` 口径），
+  FFXII 设 mode=2 后 ARM9 IF bit21 应随 FIFO 空挂起；旧实现把 GXSTAT 当只读，
+  本地 IF9 一直缺参考里的 0x200000。
+- `gx_write8` 支持 0x04000603 写模式、0x04000601 bit7 清栈标志；
+  io 层在 GX 写后同步 IF21（简化：FIFO 同步执行，空即触发）。

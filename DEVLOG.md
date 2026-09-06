@@ -28,6 +28,7 @@
 | 2026-09-06 | 21-B9x | CPU | ARM9 IRQ 入口补 BIOS 六字帧（r0-r3/r12/lr）：FFXII ITCM 分发器不再弹栈底 0，ARM9 不再跳低地址空扫，稳定停在空闲任务（738 项 0 失败） | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9y | CPU | IRQ 返回时恢复 ARM9 IRQ SP：压帧后 SP 不回弹会约 180 帧后溢出覆盖 handler 表，导致 FIFO 中断跳到 IO；修复后 5 亿步仍稳定空闲（739 项 0 失败） | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9z | 卡带 | B7 地址按补幂 ROM 掩码并对 <0x8000 重定向，尾部按 melonDS 零填充：卡带读取口径更贴近参考（739 项 0 失败） | [cart](src/cart/cartlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
+| 2026-09-06 | 21-B9za | 3D/IO | GXSTAT bits30-31 FIFO IRQ 模式可写并同步 ARM9 IF bit21：本地 IF9 补上参考的 0x200000（742 项 0 失败） | [gx](src/gx/gxlog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9v | IO/CPU | VCOUNT 逐行推进 + DISPSTAT VCount 匹配中断（IF bit2）：FFXII ARM7 0x37FDDF0 任务调度器被调起，C024 系列回执开始出现（731 项 0 失败） | [io](src/io/iolog.md) 路 [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9u | IO/测试 | VCOUNT（0x04000006）+ DISPSTAT（0x04000004 bit0）只读实现：ARM7 任务调度不再把帧状态当未知 IO 读 0（729 项 0 失败） | [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9t（分析） | CPU/BIOS | 对照参考定位：C0204006 后缺的不是回执本身，而是 ARM7 Halt 经 BIOS 唤醒后继续系统任务的路径（仅文档） | [cpu](src/cpu/cpulog.md) 路 [21](docs/21-rom-bringup.md) |

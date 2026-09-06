@@ -31,6 +31,7 @@
 /* GXSTAT 位 */
 #define GXSTAT_FIFO_EMPTY  (1u << 26)
 #define GXSTAT_BUSY        (1u << 27)
+#define GXSTAT_IRQ_MODE    (3u << 30)
 
 /* 几何命令码 */
 #define GX_CMD_MTX_MODE     0x10

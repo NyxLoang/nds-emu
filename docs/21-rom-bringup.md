@@ -636,6 +636,13 @@ handler 表被覆盖、ARM9 PC 从 0x04000188 逐字扫到 0x0983CFA4。
 `0x8000 + (addr & 0x1FF)`；同时 `PadToPowerOf2` 尾部是 0 而非 0xFF。
 测试假 ROM 放大到 0x10000 并改用 0x8100 地址，保持 739 项 0 失败。
 
+### 21-B9za（2026-09-06）：GXSTAT FIFO IRQ 模式 → IF bit21
+
+参考日志里 ARM9 IF9 一直带 0x200000（GXFIFO），本地始终没有。对照 melonDS
+`GPU3D::Write8`/`CheckFIFOIRQ`：GXSTAT 0x04000603 的 bits30-31 是 FIFO IRQ
+模式，FFXII 设为 mode=2（FIFO 空触发）后 IF21 应挂起。本地把 GXSTAT 当只读，
+游戏配置被吞掉。补上可写模式并在 io 层同步 IF21，本地 IF9 与参考一致。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

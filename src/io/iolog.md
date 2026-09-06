@@ -365,3 +365,7 @@
 - 真 ROM：FFXII ARM7 IF bit2 handler 为 0x37FDDF0（周期任务调度器），补上后
   C0240046 系列回执开始按帧出现，ARM9 重新进入 0x020119xx 卡带读循环。
   验证 **731 项检查 0 失败**。
+
+## 2026-09-06 · 21-B9za — IF bit21（GX FIFO）接线
+- irq.h 增加 `IO_IF_GXFIFO`（bit21）；GXSTAT bits30-31 写模式后，io 层在
+  GX 写操作后按“FIFO 空”同步置/清 IF21（参考 ARM9 IF9 的 0x200000）。

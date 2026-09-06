@@ -3,6 +3,8 @@
 #include "io.h"
 #include "bus/bus.h"
 
+static void io_gx_fifo_irq_sync(io_t *io);
+
 io_t *io_create(void)
 {
     io_t *io = calloc(1, sizeof(io_t));
@@ -185,6 +187,7 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     }
     if (gx_is_addr(addr) && !is_arm7) {
         gx_write8(&io->gx, addr, val);
+        io_gx_fifo_irq_sync(io);
         return;
     }
     if (snd_is_addr(addr) && is_arm7) {
@@ -210,9 +213,21 @@ void io_send32(io_t *io, int is_arm7, uint32_t val)
     io_fifo_update_irq_all(io);
 }
 
+/* GXSTAT bits30-31 配置后，FIFO 空/低水位要反映到 ARM9 IF bit21（melonDS
+   GPU3D::CheckFIFOIRQ）。本阶段命令同步执行，简化：只要模式开启且 FIFO 空就挂起。 */
+static void io_gx_fifo_irq_sync(io_t *io)
+{
+    if ((io->gx.gxstat & GXSTAT_IRQ_MODE) &&
+        (io->gx.gxstat & GXSTAT_FIFO_EMPTY))
+        io->irq[0].ifl |= IO_IF_GXFIFO;
+    else
+        io->irq[0].ifl &= ~IO_IF_GXFIFO;
+}
+
 void io_gx_write32(io_t *io, uint32_t addr, uint32_t val)
 {
     gx_write32(&io->gx, addr, val);
+    io_gx_fifo_irq_sync(io);
 }
 
 uint32_t io_card_data_read32(io_t *io)

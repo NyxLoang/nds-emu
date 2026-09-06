@@ -24,6 +24,9 @@
 /* 卡带中断位（阶段 15）：bit19 = 卡带数据传输完成 */
 #define IO_IF_CARD_DONE (1u << 19)
 
+/* 3D 几何引擎 FIFO 中断（GXSTAT bits30-31 配置，阶段 21-B9z+） */
+#define IO_IF_GXFIFO (1u << 21)
+
 /* 中断控制器状态：三个 32 位寄存器。
    真机 IME/IE/IF 多为 32 位寄存器，这里按整字存储，按字节访问。 */
 typedef struct irq {

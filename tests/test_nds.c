@@ -4045,6 +4045,15 @@ static void test_gx_fifo(nds_t *nds)
     CHECK_EQ("gx fifo in",   g->fb[120 * GX_SCREEN_W + 200], 0x7C00u);
     CHECK_EQ("gx fifo out1", g->fb[160 * GX_SCREEN_W + 200], 0u);
     CHECK_EQ("gx fifo out2", g->fb[100 * GX_SCREEN_W + 120], 0u);
+
+    /* GXSTAT 0x04000603 写 bits30-31：mode=2（FIFO 空触发）→ IF bit21 */
+    bus_write8(bus, GX_GXSTAT + 3, 0x80u);
+    CHECK_EQ("gx irq mode", g->gxstat & GXSTAT_IRQ_MODE, 0x80000000u);
+    CHECK_EQ("gx irq if21",
+             nds->io->irq[0].ifl & IO_IF_GXFIFO, IO_IF_GXFIFO);
+    bus_write8(bus, GX_GXSTAT + 3, 0x00u);
+    CHECK_EQ("gx irq cleared",
+             nds->io->irq[0].ifl & IO_IF_GXFIFO, 0u);
 }
 
 /* ---- 阶段 19.4 用例：3D 图层合成进 2D 顶屏 ---- */

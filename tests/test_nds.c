@@ -1394,6 +1394,56 @@ static void test_bios_soundbias(nds_t *nds)
     nds->bus->active_is_arm7 = 0;
 }
 
+/* ---- 21-B9wi：ARM7 BIOS 音频查表 SWI 0x1A-0x1D（FFXII 在 0x0380443C
+   Thumb SWI 0x1C 处卡住后漂移的根因回归） ---- */
+static void test_bios_audio_tables(nds_t *nds)
+{
+    const uint32_t base = BUS_ARM7_WRAM_BASE + 0x1900u;
+    static const uint16_t prog[] = {
+        0xDF1A, /* SWI 0x1A GetSineTable   */
+        0xDF1B, /* SWI 0x1B GetPitchTable  */
+        0xDF1C, /* SWI 0x1C GetVolumeTable */
+        0xDF1D, /* SWI 0x1D GetBootProcs   */
+        0xE7FE,
+    };
+
+    nds->bus->active_is_arm7 = 1;
+    thumb_write(nds, base, prog, 5);
+    arm_cpu_t *cpu = nds->cpu7;
+
+    cpu->cpsr = CPSR_T;
+    cpu->r[0] = 1u; /* sine 索引 1 -> 0x0324 */
+    cpu_reset(cpu, base);
+    cpu_step(cpu);
+    CHECK_EQ("sine pc", cpu->r[15], base + 2u);
+    CHECK_EQ("sine r0", cpu->r[0], 0x0324u);
+
+    cpu->cpsr = CPSR_T;
+    cpu->r[0] = 1u; /* pitch 索引 1 -> 0x003B */
+    cpu_reset(cpu, base + 2u);
+    cpu_step(cpu);
+    CHECK_EQ("pitch pc", cpu->r[15], base + 4u);
+    CHECK_EQ("pitch r0", cpu->r[0], 0x003Bu);
+
+    cpu->cpsr = CPSR_T;
+    cpu->r[0] = 0x2A0u; /* FFXII 实际调用参数 -> 0x47 */
+    cpu_reset(cpu, base + 4u);
+    cpu_step(cpu);
+    CHECK_EQ("volume pc", cpu->r[15], base + 6u);
+    CHECK_EQ("volume r0", cpu->r[0], 0x47u);
+
+    cpu->cpsr = CPSR_T;
+    cpu_reset(cpu, base + 6u);
+    cpu_step(cpu);
+    CHECK_EQ("boot pc", cpu->r[15], base + 8u);
+    CHECK_EQ("boot r0", cpu->r[0], 0x00000A2Eu);
+    CHECK_EQ("boot r1", cpu->r[1], 0x00002C3Cu);
+    CHECK_EQ("boot r2", cpu->r[2], 0x000005FFu);
+
+    cpu->cpsr = 0;
+    nds->bus->active_is_arm7 = 0;
+}
+
 /* ---- 21-B9i 用例：FIFO CNT 高字节 0xC4 = 错误应答 + 使能 + 收 IRQ ---- */
 static void test_fifo_cnt_combine(nds_t *nds)
 {
@@ -4772,6 +4822,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_bios_soundbias(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wi] ARM7 BIOS 音频查表 SWI 0x1A-0x1D\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bios_audio_tables(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9n] 电源/启动寄存器（POWCNT1/2 + POSTFLG）\n");

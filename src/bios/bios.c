@@ -27,6 +27,14 @@ int bios_dispatch(uint32_t n, arm_cpu_t *cpu)
     case BIOS_SWI_SOUNDBIAS:
         /* SoundBias 只存在于 NDS7；ARM9 的 0x08 未定义，走未知号异常路径 */
         return cpu->is_arm7 ? bios_soundbias(cpu) : BIOS_RET_UNKNOWN;
+    case BIOS_SWI_GET_SINE_TABLE:
+        return cpu->is_arm7 ? bios_get_sine_table(cpu) : BIOS_RET_UNKNOWN;
+    case BIOS_SWI_GET_PITCH_TABLE:
+        return cpu->is_arm7 ? bios_get_pitch_table(cpu) : BIOS_RET_UNKNOWN;
+    case BIOS_SWI_GET_VOLUME_TABLE:
+        return cpu->is_arm7 ? bios_get_volume_table(cpu) : BIOS_RET_UNKNOWN;
+    case BIOS_SWI_GET_BOOT_PROCS:
+        return cpu->is_arm7 ? bios_get_boot_procs(cpu) : BIOS_RET_UNKNOWN;
     case BIOS_SWI_HALT:             return bios_halt(cpu);
     case BIOS_SWI_INTR_WAIT:        return bios_intr_wait(cpu);
     case BIOS_SWI_VBLANK_INTR_WAIT: return bios_vblank_intr_wait(cpu);

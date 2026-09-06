@@ -90,3 +90,23 @@
 - `bios.c` 只在 ARM7 核登记 0x08（ARM9 无此函数，仍走未知号异常路径）。
 - 新增 `[case 21-B9l]` Thumb 双参数断言；全量 **704 项检查 0 失败**。真 ROM
   ARM7 不再漂移，稳定回到 0x038043E2 的 Halt 服务入口。
+
+## 2026-09-06 · 21-B9wi — ARM7 SWI 0x1A-0x1D 音频/启动查表
+
+- **证据**：ARM7 逐指令日志在 4,478,972 周期走到 0x0380443C 的 Thumb
+  `swi 0x1C`（DF1C），随后本地把未知号送去 0x00000008 向量，在低地址全零
+  区逐 2 字节漂移到 0x3FCE、0x570CC…。FreeBIOS 低地址 SWI 表把 0x1C 定义
+  为 ARM7 专用 `GetVolumeTable`（r0=0x2A0 时返回 0x47），0x1A/0x1B 是
+  正弦/音高表，0x1D 返回三个启动处理器句柄。
+- **做了什么**：
+  - 新增 `bios_audio_tables.h`：从 melonDS 使用的 FreeBIOS
+    `bios_common.s` 机械抽取正弦 64 半字、音高 768 半字、音量 724 字节
+    三张表；
+  - `bios_snd.c` 实现 `bios_get_sine/pitch/volume_table` 与
+    `bios_get_boot_procs`；`bios.c` 只在 ARM7 核登记 0x1A-0x1D；
+  - runner 事件驱动 headless 结束处补帧号/VRAM 非零统计，并让
+    `--screenshot` 真正可输出事件驱动画面。
+- **验证**：新增 `[case 21-B9wi]` 10 项断言（三种表的关键索引 + 启动句柄），
+  全量 **805 项检查 0 失败**。真 ROM 事件驱动 1.5 亿步内 ARM7 不再出现
+  0x00003xxx/0x00xxxxxx 漂移，终点稳定停 0x1158；4 亿/9 亿步同样全程
+  无跑飞，ARM7 终点 PC=0x1158。

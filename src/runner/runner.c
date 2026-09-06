@@ -21,6 +21,9 @@ typedef struct runner_ev_ctx {
     uint64_t frame_cycles;
 } runner_ev_ctx_t;
 
+static int save_bmp(const char *path, const uint32_t *fb_top,
+                    const uint32_t *fb_bot);
+
 static void runner_ev_line(void *ctx)
 {
     runner_ev_ctx_t *c = (runner_ev_ctx_t *)ctx;
@@ -140,6 +143,33 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
            nds->cpu->cpsr,
            nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles,
            nds->cpu7->cpsr);
+    uint64_t vram_nz = 0;
+    for (size_t vi = 0; vi < BUS_VRAM_SIZE; vi++)
+        if (nds->bus->vram[vi]) vram_nz++;
+    printf("headless-cyc: summary now=%llu frame=%llu vram-nz=%llu"
+           " disp=%08X dispb=%08X\n",
+           (unsigned long long)tm.now,
+           (unsigned long long)(tm.now / frame_cycles),
+           (unsigned long long)vram_nz,
+           bus_read32(nds->bus, 0x04000000u),
+           bus_read32(nds->bus, 0x04001000u));
+    if (shot_path != NULL) {
+        uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
+                                              * RENDER_SCREEN_H);
+        uint32_t *fb_bot = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
+                                              * RENDER_SCREEN_H);
+        if (fb_top != NULL && fb_bot != NULL) {
+            render_frame(nds->bus, fb_top, fb_bot);
+            if (save_bmp(shot_path, fb_top, fb_bot) == 0)
+                printf("headless-cyc: screenshot saved to %s\n", shot_path);
+            else
+                printf("headless-cyc: screenshot FAILED (%s)\n", shot_path);
+        } else {
+            printf("headless-cyc: screenshot OOM\n");
+        }
+        free(fb_top);
+        free(fb_bot);
+    }
     fflush(stdout);
     (void)shot_path;
 }

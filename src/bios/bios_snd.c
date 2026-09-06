@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "bios.h"
 #include "bios_snd.h"
+#include "bios_audio_tables.h"
 #include "cpu/cpu.h"
 #include "bus/bus.h"
 #include "io/io.h"
@@ -15,5 +16,38 @@ int bios_soundbias(arm_cpu_t *cpu)
     uint16_t next = (uint16_t)((old & 0xFC00u) | level);
 
     bus_write16(cpu->nds->bus, SND_SOUNDBIAS, next);
+    return BIOS_RET_HANDLED;
+}
+
+/* SWI 0x1A GetSineTable (ARM7): return bios_audio_sine[r0] */
+int bios_get_sine_table(arm_cpu_t *cpu)
+{
+    uint32_t i = cpu->r[0];
+    cpu->r[0] = (i < 64u) ? bios_audio_sine[i] : 0u;
+    return BIOS_RET_HANDLED;
+}
+
+/* SWI 0x1B GetPitchTable (ARM7): return bios_audio_pitch[r0] */
+int bios_get_pitch_table(arm_cpu_t *cpu)
+{
+    uint32_t i = cpu->r[0];
+    cpu->r[0] = (i < 768u) ? bios_audio_pitch[i] : 0u;
+    return BIOS_RET_HANDLED;
+}
+
+/* SWI 0x1C GetVolumeTable (ARM7): return bios_audio_volume[r0] */
+int bios_get_volume_table(arm_cpu_t *cpu)
+{
+    uint32_t i = cpu->r[0];
+    cpu->r[0] = (i < 724u) ? bios_audio_volume[i] : 0u;
+    return BIOS_RET_HANDLED;
+}
+
+/* SWI 0x1D GetBootProcs (ARM7): return the three boot-processor handles */
+int bios_get_boot_procs(arm_cpu_t *cpu)
+{
+    cpu->r[0] = 0x00000A2Eu;
+    cpu->r[1] = 0x00002C3Cu;
+    cpu->r[2] = 0x000005FFu;
     return BIOS_RET_HANDLED;
 }

@@ -26,6 +26,10 @@ typedef struct arm_cpu arm_cpu_t; /* 前向声明：bios 只操作寄存器/总�
 #define BIOS_SWI_HUFF               0x13u
 #define BIOS_SWI_RL_WRAM            0x14u
 #define BIOS_SWI_RL_VRAM            0x15u
+#define BIOS_SWI_GET_SINE_TABLE     0x1Au  /* 仅 NDS7 */
+#define BIOS_SWI_GET_PITCH_TABLE    0x1Bu  /* 仅 NDS7 */
+#define BIOS_SWI_GET_VOLUME_TABLE   0x1Cu  /* 仅 NDS7 */
+#define BIOS_SWI_GET_BOOT_PROCS     0x1Du  /* 仅 NDS7 */
 
 /* bios_dispatch 返回值：决定 SWI 之后 PC 是否前进。 */
 #define BIOS_RET_HANDLED 1    /* 已知函数已处理：PC += 4 */

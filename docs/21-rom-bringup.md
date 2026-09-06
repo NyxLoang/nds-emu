@@ -1151,3 +1151,33 @@ bit11-4；`[case 21-B9d]` 补非零 Rd 回归（E16FAF13），全量 **795 项
 0x01FF8524/8528、0x01FF86A4 等位流复制循环（往 0x021Bxxxx 写填充字节），
 不再跳 EA000988。长跑终点 ARM9 在 0x01FF84xx/0x020119xx 间活动；ARM7
 后期仍在未映射主存区跑飞，下一对照点是 ARM7 在标题段时间轴上的任务恢复。
+
+### 21-B9wi（2026-09-06 代码/测试）：ARM7 SWI 0x1A-0x1D，标题时间轴不再跑飞
+
+**证据**：ARM7 逐指令日志抓到第一个稳定跑飞点——ARM7 在 4,478,972 周期
+执行 0x037FF484 的 `BX r12` 切到 0x0380443C Thumb，紧接着 `swi 0x1C`
+（DF1C）。本地 bios_dispatch 未登记 0x1C，把它当 unknown SWI 送进
+0x00000008 异常向量；低地址 BIOS 字节未实现，CPU 就以 SVC+Thumb 状态在
+全零区从 0x00000008 逐 2 字节漂移，直到越过 0x4000 进入 0x00xxxxxx/0x1Bxxxxxx。
+FreeBIOS（melonDS 默认参考 BIOS）的 SWI 表第 0x1C 项是 ARM7 专用
+GetVolumeTable——它在 `adr r1,volume_table` 后用 `ldrb r0,[r1,r0]` 返回
+音量折线字节，调用参数 r0=0x2A0 时返回 0x47。
+
+**做了什么**：
+
+- 从 FreeBIOS `bios_common.s` 抽取正弦/音高/音量表（64 半字/768 半字/
+  724 字节）为 `bios_audio_tables.h`；
+- bios_snd 实现 SWI 0x1A GetSineTable、0x1B GetPitchTable、
+  0x1C GetVolumeTable 与 0x1D GetBootProcs（r0=0xA2E/r1=0x2C3C/
+  r2=0x5FF），bios 分发只在 ARM7 核放行；
+- runner 事件驱动 headless 结束处增加帧号/VRAM 非零统计，并支持
+  `--screenshot`（原先 cycles 模式忽略截图参数）。
+
+**验证**：新增 `[case 21-B9wi]` 10 项，全量 **805 项检查 0 失败**。
+事件驱动 1.5 亿步终点 ARM7=0x1158、无跑飞；400M/900M 步终点仍是
+0x1158，ARM9 持续在 0x01FF84xx/0x020119xx 标题与 service 代码间活动。
+
+**当前画面状态**：900M 步摘要 `frame=1126 vram-nz=393208`，与参考
+frame1310 的 `vram-nz=393099` 只差 109 字节，DISPCNT=00121F10 与参考
+标题态一致；本地截图底屏已有约 2159 色画面，顶屏仍全黑——下一对照点是
+顶屏 Engine A 在该标题视频模式下的渲染/映射。

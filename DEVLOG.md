@@ -27,6 +27,7 @@
 |------|------|------|------------|------|
 | 2026-09-06 | 21-B9wg（代码/测试） | CPU | ARM7 IRQ 入口/尾部改 FreeBIOS 0x1FB0/0x1FC0 参考级 HLE：六字帧 + SPSR 恢复，792 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wh（代码/测试） | CPU | CLZ Rd 掩码修正（0x0FFF0FF0 留出 Rd）：0x847C 的 CLZ r10,r3 不再误判为 CMN，标题位流解码越过 0x86A4，795 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
+| 2026-09-06 | 21-B9wi（代码/测试） | BIOS/工程 | ARM7 SWI 0x1A-0x1D 音频/启动查表（FreeBIOS）+ headless-cycles 帧/VRAM 摘要与截图：0x0380443C 的 SWI 0x1C 不再掉低地址，805 项 0 失败 | [bios](src/bios/bioslog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wf（代码/测试） | CPU/BIOS | ARM7 FreeBIOS 低地址等待路径 HLE：WaitByLoop 真循环节拍 + Halt 暂停/唤醒，790 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [bios](src/bios/bioslog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9we（代码/测试） | 总线/PPU | LCDC 分 bank 映射 + Engine B BG 扩展调色板：SQUARE ENIX 屏亮起，770 项 0 失败 | [bus](src/bus/buslog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wd（代码/测试） | 总线/IO | 实现 VRAMCNT 动态映射：FFXII bank D→A BG/C→B BG/E→A OBJ/H→B OBJ，768 项 0 失败 | [bus](src/bus/buslog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

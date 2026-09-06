@@ -25,6 +25,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9vy（分析） | 工程 | 参考第二次 service11 窗口 Δt9≈1079-1131/Δt7≈545-588，本地 6B→AB 仅 548 条指令，作为成本校准基准（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9vx | 工程 | 事件目标 headless 驱动入口 `--headless-cycles`：timing 事件表挂 VBlank/扫描线，固定 2:1 保留回退 | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9vw | 时序/测试 | 新增最小事件目标调度表 timing（arm/disarm/next/advance），762 项 0 失败 | [timing](src/timing/timinglog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9vv | CPU/测试 | 周期成本模型骨架：arm_cpu_t.step_cycles（普通=1、WFI 等待=0），755 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

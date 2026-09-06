@@ -119,6 +119,37 @@ static int bios_irq_tail9(arm_cpu_t *cpu)
     return 1;
 }
 
+/* 21-B9wf（第二步）：ARM7 FreeBIOS IRQ 尾部。
+   真机 0x1FB0 入口先 stmdb sp!,{r0-r3,r12,lr} 压六字帧并把 lr 设成
+   0x1FC0 返回桩；用户 handler/调度器最终 ldmia sp!,{pc} 弹回该桩后，
+   0x1FC0 弹六字帧、0x1FC4 subs pc,r14,#4 用 SPSR_irq 恢复被打断现场。
+   与 ARM9 0xFFFF06F0 的 FreeBIOS 尾部对称，IRQ HLE 私有恢复不再需要。 */
+static int bios_irq_tail7(arm_cpu_t *cpu)
+{
+    if (!cpu->is_arm7)
+        return 0;
+    if ((cpu->cpsr & CPSR_MODE_MASK) != ARM_MODE_IRQ)
+        return 0;
+    if (cpu->r[15] != 0x00001FC0u)
+        return 0;
+
+    uint32_t sp = cpu->r[13];
+    cpu->r[0]  = bus_read32(cpu->nds->bus, sp + 0x00u);
+    cpu->r[1]  = bus_read32(cpu->nds->bus, sp + 0x04u);
+    cpu->r[2]  = bus_read32(cpu->nds->bus, sp + 0x08u);
+    cpu->r[3]  = bus_read32(cpu->nds->bus, sp + 0x0Cu);
+    cpu->r[12] = bus_read32(cpu->nds->bus, sp + 0x10u);
+    cpu->r[14] = bus_read32(cpu->nds->bus, sp + 0x14u);
+    cpu->r[13] = sp + 0x18u;
+
+    uint32_t ret = cpu->r[14] - 4u;
+    uint32_t saved = cpu->spsr[1]; /* SPSR_irq = 被打断 CPSR */
+    cpu->r[15] = ret;
+    exec_apply_cpsr(cpu, saved);
+    cpu->step_cycles = 2;
+    return 1;
+}
+
 /* 单步执行一条指令：
    框架只负责「取指 + 指令计数」，指令语义全部委托给 exec_step（见 exec.c）。
    返回 0 表示停机（本阶段总是返回 1，停机由死循环达成）。 */
@@ -175,6 +206,8 @@ int cpu_step(arm_cpu_t *cpu)
         }
     }
     if (bios_irq_tail9(cpu))
+        return 1;
+    if (bios_irq_tail7(cpu))
         return 1;
     /* 21-B9f：先检查 IRQ handler 是否刚弹出返回地址（见函数注释） */
     irq_hle_restore(cpu);
@@ -284,27 +317,21 @@ int cpu_step(arm_cpu_t *cpu)
                    上方 0x380FF80..0x94 取旧任务 r0-r3/r12/lr。真机该区由 BIOS
                    入口帧预填；这里在跳用户 handler 前等价预填（lr=被打断PC+4）。 */
                 uint32_t isp = cpu->r[13];
-                bus_write32(cpu->nds->bus, isp + 0x00u, cpu->r[0]);
-                bus_write32(cpu->nds->bus, isp + 0x04u, cpu->r[1]);
-                bus_write32(cpu->nds->bus, isp + 0x08u, cpu->r[2]);
-                bus_write32(cpu->nds->bus, isp + 0x0Cu, cpu->r[3]);
-                bus_write32(cpu->nds->bus, isp + 0x10u, cpu->r[12]);
-                bus_write32(cpu->nds->bus, isp + 0x14u, ret_pc + 4u);
-                cpu->irq_hle.active = 1;
-                cpu->irq_hle.saved_cpsr = saved_cpsr;
-                cpu->irq_hle.ret_pc = ret_pc;
-                cpu->irq_hle.r[0] = cpu->r[0];
-                cpu->irq_hle.r[1] = cpu->r[1];
-                cpu->irq_hle.r[2] = cpu->r[2];
-                cpu->irq_hle.r[3] = cpu->r[3];
-                cpu->irq_hle.ip = cpu->r[12];
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x00u, cpu->r[0]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x04u, cpu->r[1]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x08u, cpu->r[2]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x0Cu, cpu->r[3]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x10u, cpu->r[12]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x14u, ret_pc + 4u);
+                cpu->r[13] = isp - 0x18u;
+                cpu->irq_hle.active = 0;
                 cpu->irq_hle.log_count++;
                 if (slot_fc & 1u)
                     cpu->cpsr |= CPSR_T;
                 else
                     cpu->cpsr &= ~CPSR_T;
                 cpu->r[15] = slot_fc & ~1u;
-                cpu->r[14] = ret_pc;
+                cpu->r[14] = 0x00001FC0u;
             }
         }
         return 1;

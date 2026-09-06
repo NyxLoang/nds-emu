@@ -25,6 +25,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9wg（代码/测试） | CPU | ARM7 IRQ 入口/尾部改 FreeBIOS 0x1FB0/0x1FC0 参考级 HLE：六字帧 + SPSR 恢复，792 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wf（代码/测试） | CPU/BIOS | ARM7 FreeBIOS 低地址等待路径 HLE：WaitByLoop 真循环节拍 + Halt 暂停/唤醒，790 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [bios](src/bios/bioslog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9we（代码/测试） | 总线/PPU | LCDC 分 bank 映射 + Engine B BG 扩展调色板：SQUARE ENIX 屏亮起，770 项 0 失败 | [bus](src/bus/buslog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wd（代码/测试） | 总线/IO | 实现 VRAMCNT 动态映射：FFXII bank D→A BG/C→B BG/E→A OBJ/H→B OBJ，768 项 0 失败 | [bus](src/bus/buslog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

@@ -567,3 +567,19 @@
 - **结果**：真 ROM ARM7 首中断与后续暂停都落在 0x115C/0x1158（与参考低地址
   一致）；长跑不再主存跑飞。标题所需的周期时间模型/事件表继续在 B9wf 后续
   小步推进。
+
+## 2026-09-06 · 21-B9wg — ARM7 IRQ 入口/尾部改 FreeBIOS 桩（对称 B9wa）
+
+- **做了什么**：
+  - ARM7 IRQ 触发不再用模拟器私有 `irq_hle_restore` 保存/恢复现场，改为等价
+    执行 FreeBIOS 0x1FB0 入口：`stmdb sp!,{r0-r3,r12,lr}` 压六字帧
+    （lr=被打断 PC+4）、SP 下移 0x18、lr 设 0x1FC0 返回桩后跳用户 handler。
+  - 新增 `bios_irq_tail7`：ARM7 在 IRQ 模式弹回 0x1FC0 时模拟
+    `ldmia sp!,{r0-r3,r12,r14}` + `subs pc,r14,#4`，用 SPSR_irq 恢复 CPSR。
+  - `[case 21-B9i]` 更新为 FreeBIOS 语义：handler LDMFD 先回 0x1FC0 桩，
+    再弹帧回被打断点，随后重执行被打断指令。
+- **怎么验证**：`[case 21-B9i]` 增加 tail/ret 两步断言；全量
+  **792 项检查 0 失败**。
+- **结果**：真 ROM 短跑 ARM7 继续正常进出 0x1158/0x115C；事件驱动 20M 步内
+  ARM9 也能多次离开空闲并跑显示/服务代码。超长跑到 Timer0 回绕后的标题段仍
+  有双核跑飞，下一小步继续对照该段任务恢复路径。

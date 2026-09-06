@@ -1442,8 +1442,11 @@ static void test_arm7_irq_slot(nds_t *nds)
     cpu_step(cpu); /* STMFD sp!,{lr} */
     cpu_step(cpu); /* MOV r1,#0x11 */
     CHECK_EQ("arm7 slot r1 clobbered", cpu->r[1], 0x11u);
-    cpu_step(cpu); /* LDMFD sp!,{pc} -> 返回被打断点 */
-    cpu_step(cpu); /* cpu_step 恢复现场并重执行 NOP */
+    cpu_step(cpu); /* LDMFD sp!,{pc} -> 返回 FreeBIOS 0x1FC0 桩 */
+    CHECK_EQ("arm7 slot tail pc", cpu->r[15], 0x00001FC0u);
+    cpu_step(cpu); /* FreeBIOS 尾部：弹六字帧 + SPSR 恢复 -> 返回被打断点 */
+    CHECK_EQ("arm7 slot ret pc", cpu->r[15], pc);
+    cpu_step(cpu); /* 重执行 NOP */
     CHECK_EQ("arm7 slot r1 restored", cpu->r[1], 0xABu);
     CHECK_EQ("arm7 slot mode restored", cpu->cpsr & CPSR_MODE_MASK,
              ARM_MODE_USER);

@@ -709,3 +709,9 @@
   Thumb `swi 6` 无 (IF&IE) 时停在 0x1158 且 step_cycles=0，置位后唤醒、清暂停、
   走 BIOS 尾部回调用方。共 20 项断言。
 - 全量从 **770 项**增至 **790 项检查，0 项失败**。
+
+## 2026-09-06 · 21-B9wg — ARM7 IRQ FreeBIOS 尾段新增/改写 2 项
+
+- `[case 21-B9i]` 改为 FreeBIOS 语义：handler `ldmfd sp!,{pc}` 先回到
+  0x1FC0 桩；下一 cpu_step 弹六字帧并按 SPSR_irq 回被打断点；再下一步重执行
+  NOP。新增 2 项断言，全量 **792 项检查，0 项失败**。

@@ -506,3 +506,8 @@
 - 修复：`irq_hle_ctx` 记录压帧前的 IRQ SP，`irq_hle_restore` 返回前恢复；
   `[case 21-B9c]` 补 SP 恢复断言。全量 **739 项检查 0 失败**。
 
+## 2026-09-06 · 21-B9zg — ARM7 STM 基址在列表内的保存语义
+
+- melonDS `A_STM`：ARM7 的 STM 在 rn 也在列表且存在更低编号寄存器时，rn 槽保存
+  当前写地址（FFXII OS 上下文保存依赖）；本模拟器此前保存原 rn 值。
+- `exec_block_transfer` 按此口径实现，仅影响 ARM7 STM 且 rn 槽不是最低列表寄存器。

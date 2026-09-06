@@ -2247,6 +2247,28 @@ static void test_block_transfer(nds_t *nds)
     CHECK_EQ("stmdb mem r7", bus_read32(nds->bus, stack - 4), 0x44u);
 }
 
+/* ---- 21-B9zg 用例：ARM7 STM 基址寄存器在列表内保存当前写地址 ---- */
+static void test_arm7_stm_base_in_list(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu7;
+    const uint32_t pc = 0x03808000u;
+    bus_write32(nds->bus, pc, 0xE8817FFFu); /* STMIA r1, {r0-r14} */
+    cpu->cpsr = ARM_MODE_SYS;
+    cpu_reset(cpu, pc);
+    cpu->r[0] = 0x11111111u;
+    cpu->r[1] = 0x0380A4FCu; /* STMIA 基址：真实保存时 cpsr 已写入 A4F8 */
+    cpu->r[2] = 0x8000009Fu;
+    exec_set_trace(0);
+    cpu_step(cpu);
+    CHECK_EQ("arm7 stm base r0", bus_read32(nds->bus, 0x0380A4FCu),
+             0x11111111u);
+    CHECK_EQ("arm7 stm base self", bus_read32(nds->bus, 0x0380A500u),
+             0x0380A500u);
+    CHECK_EQ("arm7 stm base r2", bus_read32(nds->bus, 0x0380A504u),
+             0x8000009Fu);
+    CHECK_EQ("arm7 stm no writeback", cpu->r[1], 0x0380A4FCu);
+}
+
 /* ---- 10.6 用例：乘法 MUL/MLA + 长乘 UMULL/UMLAL/SMULL ---- */
 static void test_mul(nds_t *nds)
 {
@@ -4685,6 +4707,7 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_block_transfer(nds);
+        test_arm7_stm_base_in_list(nds);
         nds_destroy(nds);
     }
     printf("\n[case 10.6] 乘法 MUL/MLA + 长乘\n");

@@ -311,8 +311,19 @@ static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
 
     for (int i = 0; i < 16; i++) {
         if (!(list & (1u << i))) continue;
-        if (l) cpu->r[i] = bus_read32(cpu->nds->bus, addr);
-        else   bus_write32(cpu->nds->bus, addr, cpu->r[i]);
+        if (l) {
+            cpu->r[i] = bus_read32(cpu->nds->bus, addr);
+        } else {
+            /* 21-B9zg：melonDS ARM7 STM 的“基址在列表内”口径。
+               ARM7 的 STM 当基址寄存器 rn 也在列表、且存在更低编号寄存器时，
+               该槽保存的是当前写地址而不是原 rn 值（FFXII OS 上下文保存依赖此行为）；
+               ARM9 与“无更低寄存器”的情况仍保存原值。 */
+            uint32_t val = cpu->r[i];
+            if (cpu->is_arm7 && (int)i == (int)rn &&
+                (list & ((1u << i) - 1u)) != 0u)
+                val = addr;
+            bus_write32(cpu->nds->bus, addr, val);
+        }
         addr += 4;
     }
     if (user_view) {

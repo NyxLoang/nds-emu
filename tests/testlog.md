@@ -628,8 +628,9 @@
   Thumb `MOVS r0,#0`；断言 lr=base+4、T=1、PC=目标，并执行目标首条指令
   （5 项）。全量 **723 项检查 0 失败**。
 
-## 2026-09-06 · 21-B9u — VCOUNT 用例
+## 2026-09-06 · 21-B9u — VCOUNT / DISPSTAT 用例
 
-- `[case 21-B9u]`：初始 0，两次 `io_set_vblank` 后读到 1、2，写 0x1234 忽略
-  （4 项）。全量 **727 项检查 0 失败**。
+- `[case 21-B9u]`：VCOUNT 初始 0，两次 `io_set_vblank` 后读到 1、2，写
+  0x1234 忽略；DISPSTAT 初始 0、VBlank 后 bit0=1（6 项）。全量
+  **729 项检查 0 失败**。
 

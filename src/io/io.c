@@ -247,6 +247,10 @@ void io_set_vblank(io_t *io)
        service6 的完成状态机才会推进。 */
     irq_set_vblank(&io->irq[0]);
     irq_set_vblank(&io->irq[1]);
+    /* DISPSTAT bit0 = VBlank 标志（近似：VBlank 事件后到下一次帧事件前视为处于
+       VBlank；FFXII ARM7 会读它确认帧边界）。 */
+    io->disp.dispstat = (uint16_t)(io->disp.dispstat | 1u);
+    io->disp.dispstat_sub = (uint16_t)(io->disp.dispstat_sub | 1u);
     /* 简易 VCOUNT：每“帧”推进一条扫描线（真机每帧 0..262；跑帧接近即可，
        FFXII 只把 VCOUNT 当单调调度时钟用）。 */
     io->vcount = (uint16_t)((io->vcount + 1u) % 263u);

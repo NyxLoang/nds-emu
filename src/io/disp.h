@@ -8,11 +8,13 @@
 
 /* 主引擎（Engine A）地址 */
 #define IO_DISPCNT          0x04000000u   /* 显示控制（32 位） */
+#define IO_DISPSTAT         0x04000004u   /* 显示状态（16 位，bit0=VBlank） */
 #define IO_BGCNT_BASE       0x04000008u   /* BG0-3 控制（各 16 位） */
 #define IO_BG_SCROLL_BASE   0x04000010u   /* BG0-3 滚动 HOFS/VOFS（各 16 位） */
 
 /* 副引擎（Engine B）地址 */
 #define IO_DISPCNT_SUB      0x04001000u
+#define IO_DISPSTAT_SUB     0x04001004u
 #define IO_BGCNT_SUB_BASE   0x04001008u
 #define IO_BG_SCROLL_SUB_BASE 0x04001010u
 
@@ -98,6 +100,8 @@
 typedef struct disp {
     uint32_t dispcnt;                 /* 主 DISPCNT */
     uint32_t dispcnt_sub;             /* 副 DISPCNT */
+    uint16_t dispstat;                /* 主 DISPSTAT（bit0=VBlank 等） */
+    uint16_t dispstat_sub;            /* 副 DISPSTAT */
     uint16_t bgcnt[IO_BG_COUNT];      /* 主 BG0-3 CNT */
     uint16_t bgcnt_sub[IO_BG_COUNT];  /* 副 BG0-3 CNT */
     uint16_t hofs[IO_BG_COUNT];       /* 主 BG0-3 水平滚动 */

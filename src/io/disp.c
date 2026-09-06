@@ -5,6 +5,10 @@
    主引擎在 0x04000000 起，副引擎在 0x04001000 起，布局相同。 */
 int disp_is_addr(uint32_t addr)
 {
+    if (addr >= IO_DISPSTAT && addr < IO_DISPSTAT + 2)
+        return 1;
+    if (addr >= IO_DISPSTAT_SUB && addr < IO_DISPSTAT_SUB + 2)
+        return 1;
     if (addr >= IO_DISPCNT && addr < IO_DISPCNT + 4)
         return 1;
     if (addr >= IO_BGCNT_BASE && addr < IO_BGCNT_BASE + 2 * IO_BG_COUNT)
@@ -95,6 +99,10 @@ static uint16_t *disp_reg16(disp_t *d, uint32_t addr)
 
 uint8_t disp_read8(const disp_t *d, uint32_t addr)
 {
+    if (addr >= IO_DISPSTAT && addr < IO_DISPSTAT + 2)
+        return (uint8_t)(d->dispstat >> ((addr - IO_DISPSTAT) * 8));
+    if (addr >= IO_DISPSTAT_SUB && addr < IO_DISPSTAT_SUB + 2)
+        return (uint8_t)(d->dispstat_sub >> ((addr - IO_DISPSTAT_SUB) * 8));
     /* DISPCNT：32 位，小端按字节取（基址=最低字节） */
     if (addr >= IO_DISPCNT && addr < IO_DISPCNT + 4)
         return (uint8_t)(d->dispcnt >> ((addr - IO_DISPCNT) * 8));

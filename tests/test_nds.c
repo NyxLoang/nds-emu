@@ -3262,7 +3262,7 @@ static void test_secure_area_load(nds_t *nds)
 /* ---- 阶段 15.2 卡带命令读：写命令 + 激活 + 从 CARD_DATA 按序读回 ---- */
 static void test_cartbus_read(nds_t *nds)
 {
-    uint8_t rom[0x400];
+    uint8_t rom[0x10000];
     for (uint32_t i = 0; i < sizeof rom; i++)
         rom[i] = (uint8_t)i;   /* rom[i]=i&0xFF */
     io_attach_cart(nds->io, rom, sizeof rom);
@@ -3270,8 +3270,8 @@ static void test_cartbus_read(nds_t *nds)
     /* 未激活命令时读数据端口：无数据 → 0xFFFFFFFF */
     CHECK_EQ("cart data before cmd", bus_read32(nds->bus, BUS_CARD_DATA), 0xFFFFFFFFu);
 
-    /* 命令 B7 读地址 0x100（命令字节大端：00 00 01 00） */
-    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00};
+    /* 命令 B7 读地址 0x8100（melonDS 会把 <0x8000 的请求重定向） */
+    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
 
@@ -3286,12 +3286,12 @@ static void test_cartbus_read(nds_t *nds)
              bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_ACTIVATE,
              CART_ROMCTRL_ACTIVATE);
 
-    /* 从 0x100 读 4 字：每次读自动 +4 */
+    /* 从 0x8100 读 4 字：每次读自动 +4 */
     for (int i = 0; i < 4; i++) {
-        uint32_t want = (uint32_t)rom[0x100 + 4 * i]
-                      | ((uint32_t)rom[0x100 + 4 * i + 1] << 8)
-                      | ((uint32_t)rom[0x100 + 4 * i + 2] << 16)
-                      | ((uint32_t)rom[0x100 + 4 * i + 3] << 24);
+        uint32_t want = (uint32_t)rom[0x8100 + 4 * i]
+                      | ((uint32_t)rom[0x8100 + 4 * i + 1] << 8)
+                      | ((uint32_t)rom[0x8100 + 4 * i + 2] << 16)
+                      | ((uint32_t)rom[0x8100 + 4 * i + 3] << 24);
         char nm[32];
         snprintf(nm, sizeof nm, "cart data word[%d]", i);
         CHECK_EQ(nm, bus_read32(nds->bus, BUS_CARD_DATA), want);
@@ -3308,13 +3308,13 @@ static void test_cartbus_read(nds_t *nds)
     CHECK_EQ("cart 4B done DRQ",
              bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ, 0u);
 
-    /* 越界读：命令读 0x3FC（rom 只有 0x400），第 2 字越界 → 0xFFFFFFFF */
-    static const uint8_t cmd2[8] = {0xB7, 0x00, 0x00, 0x03, 0xFC, 0x00, 0x00, 0x00};
+    /* 越界读：命令读 0x8FFC（rom 只有 0x10000），块外再读 → 0xFFFFFFFF */
+    static const uint8_t cmd2[8] = {0xB7, 0x00, 0x00, 0x8F, 0xFC, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd2[i]);
-    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80);
-    uint32_t w0 = (uint32_t)rom[0x3FC] | ((uint32_t)rom[0x3FD] << 8)
-                | ((uint32_t)rom[0x3FE] << 16) | ((uint32_t)rom[0x3FF] << 24);
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x87u); /* 4 字节块，读完即回落 */
+    uint32_t w0 = (uint32_t)rom[0x8FFC] | ((uint32_t)rom[0x8FFD] << 8)
+                | ((uint32_t)rom[0x8FFE] << 16) | ((uint32_t)rom[0x8FFF] << 24);
     CHECK_EQ("cart tail word", bus_read32(nds->bus, BUS_CARD_DATA), w0);
     CHECK_EQ("cart beyond end", bus_read32(nds->bus, BUS_CARD_DATA), 0xFFFFFFFFu);
 
@@ -3386,7 +3386,7 @@ static void test_dma_channels(nds_t *nds)
 /* ---- 阶段 15.4 用例：卡带 DMA——DMA 从 ROM（CARD_DATA）搬数据到 RAM ---- */
 static void test_card_dma(nds_t *nds)
 {
-    uint8_t rom[0x400];
+    uint8_t rom[0x10000];
     for (uint32_t i = 0; i < sizeof rom; i++)
         rom[i] = (uint8_t)i;
     io_attach_cart(nds->io, rom, sizeof rom);
@@ -3405,18 +3405,18 @@ static void test_card_dma(nds_t *nds)
     /* 卡带命令尚未激活：不该搬 */
     CHECK_EQ("card dma not yet", bus_read32(nds->bus, dst), 0x00000000u);
 
-    /* 命令 B7 读 0x100 + 激活 ROMCTRL */
-    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00};
+    /* 命令 B7 读 0x8100 + 激活 ROMCTRL */
+    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
     bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80);
 
     /* 8 字应从 CARD_DATA 按序搬进 dest */
     for (int i = 0; i < 8; i++) {
-        uint32_t want = (uint32_t)rom[0x100 + 4 * i]
-                      | ((uint32_t)rom[0x100 + 4 * i + 1] << 8)
-                      | ((uint32_t)rom[0x100 + 4 * i + 2] << 16)
-                      | ((uint32_t)rom[0x100 + 4 * i + 3] << 24);
+        uint32_t want = (uint32_t)rom[0x8100 + 4 * i]
+                      | ((uint32_t)rom[0x8100 + 4 * i + 1] << 8)
+                      | ((uint32_t)rom[0x8100 + 4 * i + 2] << 16)
+                      | ((uint32_t)rom[0x8100 + 4 * i + 3] << 24);
         char nm[32];
         snprintf(nm, sizeof nm, "card dma word[%d]", i);
         CHECK_EQ(nm, bus_read32(nds->bus, dst + 4u * i), want);
@@ -3437,13 +3437,13 @@ static void test_card_program(nds_t *nds)
     const uint32_t base = BUS_MAIN_RAM_BASE;
     const uint32_t dst  = 0x02002000u;
 
-    uint8_t rom[0x200];
+    uint8_t rom[0x10000];
     for (uint32_t i = 0; i < sizeof rom; i++)
         rom[i] = (uint8_t)i;
     io_attach_cart(nds->io, rom, sizeof rom);
 
-    /* 预写命令：B7 读地址 0x100（命令字节大端） */
-    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00};
+    /* 预写命令：B7 读地址 0x8100（命令字节大端） */
+    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
 
@@ -3474,12 +3474,12 @@ static void test_card_program(nds_t *nds)
                 base, base + 0x44, 64);
     CHECK_EQ("card prog PC halt", nds->cpu->r[15], base + 0x44);
 
-    /* dest 收到 rom[0x100..0x10F]（4 字） */
+    /* dest 收到 rom[0x8100..0x810F]（4 字） */
     for (int i = 0; i < 4; i++) {
-        uint32_t want = (uint32_t)rom[0x100 + 4 * i]
-                      | ((uint32_t)rom[0x100 + 4 * i + 1] << 8)
-                      | ((uint32_t)rom[0x100 + 4 * i + 2] << 16)
-                      | ((uint32_t)rom[0x100 + 4 * i + 3] << 24);
+        uint32_t want = (uint32_t)rom[0x8100 + 4 * i]
+                      | ((uint32_t)rom[0x8100 + 4 * i + 1] << 8)
+                      | ((uint32_t)rom[0x8100 + 4 * i + 2] << 16)
+                      | ((uint32_t)rom[0x8100 + 4 * i + 3] << 24);
         char nm[32];
         snprintf(nm, sizeof nm, "card prog word[%d]", i);
         CHECK_EQ(nm, bus_read32(nds->bus, dst + 4u * i), want);

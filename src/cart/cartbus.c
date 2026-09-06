@@ -27,6 +27,7 @@ void cartbus_attach(cartbus_t *cb, const uint8_t *rom, size_t rom_size)
     else
         cb->chip_id |= (uint32_t)(0x100u - (padded >> 28)) << 8;
     cb->chip_read = 0;
+    cb->rom_mask = (uint32_t)(padded - 1u);
 }
 
 int cartbus_attach_save(cartbus_t *cb, save_type_t type)
@@ -48,6 +49,8 @@ static uint32_t rom_le32(const uint8_t *rom, size_t rom_size, uint32_t addr)
         uint32_t a = addr + (uint32_t)i;
         if (a < rom_size)
             b = rom[a];
+        else
+            b = 0x00; /* 21-B9z: melonDS PadToPowerOf2 对尾部用 0 填充 */
         v |= (uint32_t)b << (i * 8);
     }
     return v;
@@ -67,10 +70,14 @@ static void cartbus_activate(cartbus_t *cb)
         cb->xfer_remaining = 4;
         cb->chip_read = 1;
     } else if (c0 == 0xB7) {
-        cb->xfer_addr = ((uint32_t)cb->cmd[1] << 24)
+        uint32_t addr = ((uint32_t)cb->cmd[1] << 24)
                       | ((uint32_t)cb->cmd[2] << 16)
                       | ((uint32_t)cb->cmd[3] << 8)
                       | ((uint32_t)cb->cmd[4]);
+        cb->xfer_addr = addr & cb->rom_mask;
+        /* melonDS CartCommon：B7 若请求 <0x8000，重定向到 0x8000+(低 9 位) */
+        if (cb->xfer_addr < 0x8000u)
+            cb->xfer_addr = 0x8000u + (cb->xfer_addr & 0x1FFu);
         cb->chip_read = 0;
         uint32_t blk = (cb->romctrl & CART_ROMCTRL_BLOCK_MASK) >> 24;
         uint32_t size;

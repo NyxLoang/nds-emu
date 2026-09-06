@@ -46,6 +46,7 @@ typedef struct cartbus {
     save_t         save;       /* 存档芯片（阶段 16：AUXSPI 的 SPI 从设备） */
     uint32_t       chip_id;    /* 21-B9w: 0xB8 命令返回的芯片 ID（由补力散后 ROM 大小算出） */
     int            chip_read;  /* 当前传输是否为 B8 ChipID 读取 */
+    uint32_t       rom_mask;   /* 21-B9z: 补成 2 的幂后的 ROM 掩码（melonDS B7 使用） */
 } cartbus_t;
 
 /* 清零初始化。 */

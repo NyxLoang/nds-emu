@@ -629,6 +629,13 @@ handler 表被覆盖、ARM9 PC 从 0x04000188 逐字扫到 0x0983CFA4。
 2 亿步与 5 亿步长跑均保持 0x0200957C 空闲，不再覆盖 handler 表；
 `[case 21-B9c]` 补 SP 恢复断言，全量 **739 项检查 0 失败**。
 
+### 21-B9z（2026-09-06）：B7 地址掩码/重定向 + ROM 尾部零填充
+
+对照 melonDS `CartCommon::ROMCommandStart` 的 B7 分支，补上两处口径：
+地址先 `& ROMMask`（补成 2 的幂后的容量-1），请求落在 0x8000 以下时重定向到
+`0x8000 + (addr & 0x1FF)`；同时 `PadToPowerOf2` 尾部是 0 而非 0xFF。
+测试假 ROM 放大到 0x10000 并改用 0x8100 地址，保持 739 项 0 失败。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

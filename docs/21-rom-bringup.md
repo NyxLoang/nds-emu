@@ -986,3 +986,11 @@ LDM/STM ^、banked r13/r14）抽成最小可复现单测再逐条对照 melonDS�
 
 下一步把扫描线/VBlank 事件用该系统时间驱动，先保留固定 2:1 作为回退，
 再逐步把 FIFO/卡带事件接入。
+### 21-B9vx（2026-09-06 代码）：事件目标 headless 驱动（实验入口）
+
+新增 `runner_headless_cycles()`：用 `timing_t` 挂扫描线/VBlank 事件，
+按系统时间戳选择 ARM9/ARM7（ARM9 时钟 2 倍），WFI 等待不占调度；
+命令行 `--headless-cycles N` 启用，`--headless N` 固定 2:1 保留回退。
+
+当前事件目标驱动仍停在 service11 三次后，与固定驱动同点；本步只固化
+架构入口，后续调成本/事件边界时用它复现。

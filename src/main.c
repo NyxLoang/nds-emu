@@ -92,6 +92,7 @@ int main(int argc, char *argv[])
     /* 阶段 21 bring-up：`--headless N` 跑 N 步后退出（不开窗口/音频），定位第一个卡点 */
     long headless_steps = 0;
     int headless_trace = 0;
+    int headless_cycles = 0;
     const char *headless_shot = NULL;
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
@@ -101,6 +102,10 @@ int main(int argc, char *argv[])
             headless_trace = 1;
         else if (wcscmp(wargv[i], L"--screenshot") == 0)
             headless_shot = "headless_shot.bmp";
+        else if (wcscmp(wargv[i], L"--headless-cycles") == 0 && i + 1 < wargc) {
+            headless_steps = wcstol(wargv[i + 1], NULL, 10);
+            headless_cycles = 1;
+        }
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -110,6 +115,10 @@ int main(int argc, char *argv[])
             headless_trace = 1;
         else if (strcmp(argv[i], "--screenshot") == 0)
             headless_shot = "headless_shot.bmp";
+        else if (strcmp(argv[i], "--headless-cycles") == 0 && i + 1 < argc) {
+            headless_steps = strtol(argv[i + 1], NULL, 10);
+            headless_cycles = 1;
+        }
     }
 #endif
 
@@ -250,8 +259,12 @@ int main(int argc, char *argv[])
 
     /* 阶段 21 bring-up：headless 模式下跑完 N 步即退出，不开窗口/音频 */
     if (headless_steps > 0) {
-        runner_headless(nds, (uint64_t)headless_steps, headless_trace,
-                        headless_shot);
+        if (headless_cycles)
+            runner_headless_cycles(nds, (uint64_t)headless_steps,
+                                   headless_trace, headless_shot);
+        else
+            runner_headless(nds, (uint64_t)headless_steps, headless_trace,
+                            headless_shot);
         if (save_path != NULL)
             free(save_path);
         cart_free(cart);

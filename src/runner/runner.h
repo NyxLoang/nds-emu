@@ -10,5 +10,8 @@ struct nds; /* 前向声明：避免 runner.h 依赖 nds.h */
    shot_path 非空时把跑完后的双屏帧缓冲写成 24 位 BMP（顶屏在上，256×384）。 */
 void runner_headless(struct nds *nds, uint64_t steps, int trace,
                      const char *shot_path);
+/* 事件目标 headless（周期成本模型实验驱动，固定 2:1 保留在上方函数） */
+void runner_headless_cycles(struct nds *nds, uint64_t steps, int trace,
+                            const char *shot_path);
 
 #endif /* NDS_EMU_RUNNER_H */

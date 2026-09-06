@@ -25,6 +25,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9vx | 工程 | 事件目标 headless 驱动入口 `--headless-cycles`：timing 事件表挂 VBlank/扫描线，固定 2:1 保留回退 | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9vw | 时序/测试 | 新增最小事件目标调度表 timing（arm/disarm/next/advance），762 项 0 失败 | [timing](src/timing/timinglog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9vv | CPU/测试 | 周期成本模型骨架：arm_cpu_t.step_cycles（普通=1、WFI 等待=0），755 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zu（路线） | 工程 | 确定大改造路线：周期成本模型 → 事件目标调度器 → 双核驱动迁移 → 回到第二次 6B 校准（仅文档） | [21](docs/21-rom-bringup.md) |

@@ -9,6 +9,92 @@
 #include "io/io.h"        /* io_set_vblank */
 #include "ppu/render.h"   /* render_frame：双屏纯软件出图 */
 #include "runner.h"
+#include "timing/timing.h"
+
+/* 事件目标 headless：把扫描线/VBlank 挂到 timing 事件表上。 */
+typedef struct runner_ev_ctx {
+    io_t *io;
+    timing_t *tm;
+    uint64_t next_line;
+    uint64_t next_frame;
+    uint64_t line_cycles;
+    uint64_t frame_cycles;
+} runner_ev_ctx_t;
+
+static void runner_ev_line(void *ctx)
+{
+    runner_ev_ctx_t *c = (runner_ev_ctx_t *)ctx;
+    io_advance_scanline(c->io);
+    c->next_line += c->line_cycles;
+    timing_arm(c->tm, 0, c->next_line - c->tm->now, runner_ev_line, c);
+}
+
+static void runner_ev_frame(void *ctx)
+{
+    runner_ev_ctx_t *c = (runner_ev_ctx_t *)ctx;
+    io_set_vblank(c->io);
+    c->next_frame += c->frame_cycles;
+    timing_arm(c->tm, 1, c->next_frame - c->tm->now, runner_ev_frame, c);
+}
+
+void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
+                            const char *shot_path)
+{
+    bus_set_diag(nds->bus, 1);
+    exec_set_trace(trace);
+    thumb_set_trace(trace);
+
+    timing_t tm;
+    timing_init(&tm);
+    const uint64_t frame_cycles = 560190;
+    const uint64_t line_cycles = frame_cycles / 263;
+    runner_ev_ctx_t ctx = { nds->io, &tm, line_cycles, frame_cycles,
+                            line_cycles, frame_cycles };
+    timing_arm(&tm, 0, line_cycles, runner_ev_line, &ctx);
+    timing_arm(&tm, 1, frame_cycles, runner_ev_frame, &ctx);
+
+    uint64_t cost9 = 0, cost7 = 0;
+    int a9_wait = 0, a7_wait = 0;
+    uint64_t i = 0;
+    while (i < steps) {
+        if (a9_wait && irq_pending(&nds->io->irq[0]))
+            a9_wait = 0;
+        if (a7_wait && irq_pending(&nds->io->irq[1]))
+            a7_wait = 0;
+        if (a9_wait && a7_wait)
+            break;
+        int step7;
+        if (a9_wait)
+            step7 = 1;
+        else if (a7_wait)
+            step7 = 0;
+        else
+            step7 = (cost9 / 2 > cost7);
+        if (step7) {
+            cpu_step(nds->cpu7);
+            a7_wait = (nds->cpu7->step_cycles == 0);
+            if (!a7_wait) cost7 += nds->cpu7->step_cycles;
+        } else {
+            cpu_step(nds->cpu);
+            a9_wait = (nds->cpu->step_cycles == 0);
+            if (!a9_wait) cost9 += nds->cpu->step_cycles;
+        }
+        uint64_t sys = (cost9 / 2 < cost7) ? cost9 / 2 : cost7;
+        timing_advance(&tm, sys);
+        i++;
+        if ((i & 0xFFFFFu) == 0xFFFFFu) {
+            printf("headless-cyc: step=%llu ARM9 PC=%08X cyc=%llu | ARM7 PC=%08X cyc=%llu\n",
+                   (unsigned long long)(i + 1), nds->cpu->r[15],
+                   (unsigned long long)nds->cpu->cycles, nds->cpu7->r[15],
+                   (unsigned long long)nds->cpu7->cycles);
+        }
+    }
+    printf("headless-cyc: done. ARM9 PC=%08X cyc=%llu | ARM7 PC=%08X cyc=%llu\n",
+           nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
+           nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles);
+    fflush(stdout);
+    (void)shot_path;
+}
 
 /* 把两块 256×192 RGBA8888 帧缓冲纵向拼成一张 24 位 BMP（顶屏在上）。
    只用于 headless 诊断截图，不依赖 SDL。 */

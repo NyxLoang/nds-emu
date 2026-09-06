@@ -25,6 +25,7 @@
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
 | 2026-09-06 | 21-B9w | 卡带/装载 | direct-boot 表卡带 ID 按补幂容量推导 + 卡带 B8 命令返回芯片 ID：FFXII 越过错误的 service14 分支，进入 service11 文件读取（含 4 项新检查） | [cart](src/cart/cartlog.md) 路 [main](src/mainlog.md) 路 [tests](tests/testlog.md) |
+| 2026-09-06 | 21-B9x | CPU | ARM9 IRQ 入口补 BIOS 六字帧（r0-r3/r12/lr）：FFXII ITCM 分发器不再弹栈底 0，ARM9 不再跳低地址空扫，稳定停在空闲任务（738 项 0 失败） | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9v | IO/CPU | VCOUNT 逐行推进 + DISPSTAT VCount 匹配中断（IF bit2）：FFXII ARM7 0x37FDDF0 任务调度器被调起，C024 系列回执开始出现（731 项 0 失败） | [io](src/io/iolog.md) 路 [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9u | IO/测试 | VCOUNT（0x04000006）+ DISPSTAT（0x04000004 bit0）只读实现：ARM7 任务调度不再把帧状态当未知 IO 读 0（729 项 0 失败） | [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9t（分析） | CPU/BIOS | 对照参考定位：C0204006 后缺的不是回执本身，而是 ARM7 Halt 经 BIOS 唤醒后继续系统任务的路径（仅文档） | [cpu](src/cpu/cpulog.md) 路 [21](docs/21-rom-bringup.md) |

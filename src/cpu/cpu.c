@@ -160,6 +160,18 @@ int cpu_step(arm_cpu_t *cpu)
             uint32_t slot_fc = bus_read32(cpu->nds->bus,
                                           cpu->nds->bus->arm9_dtcm_base + 0x3FFCu);
             if (slot_fc != 0) {
+                /* 21-B9x：真机 ARM9 BIOS 的 IRQ 入口会先压 r0-r3/r12/lr 六字帧，
+                   再跳用户 handler（FreeBIOS interrupt_handler 同款）。FFXII 的
+                   ITCM dispatcher 在 0x01FF8164 附近从 IRQ 栈弹这 6 个字保存现场；
+                   此前没有压帧会弹到栈底 0，把空闲任务上下文写坏。 */
+                uint32_t isp = cpu->r[13];
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x00u, cpu->r[0]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x04u, cpu->r[1]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x08u, cpu->r[2]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x0Cu, cpu->r[3]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x10u, cpu->r[12]);
+                bus_write32(cpu->nds->bus, isp - 0x18u + 0x14u, ret_pc + 4u);
+                cpu->r[13] = isp - 0x18u;
                 /* 激活 HLE 桩：把返回点设成被打断指令 PC，dispatcher 的
                    pop {pc} 会回到这里，随后 irq_hle_restore 恢复现场 */
                 cpu->irq_hle.active = 1;

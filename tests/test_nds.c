@@ -1096,6 +1096,13 @@ static void test_irq_slot_jump(nds_t *nds)
     CHECK_EQ("slot spsr saved", cpu->spsr[exec_spsr_index(ARM_MODE_IRQ)],
              ARM_MODE_USER);
     CHECK_EQ("slot lr=ret pc", cpu->r[14], base); /* HLE 桩返回点=被打断指令 */
+    /* 21-B9x：真 BIOS 在跳用户 handler 前压 r0-r3/r12/lr 六字帧，
+       FFXII ITCM 分发器从 IRQ 栈弹这 6 个字保存现场。 */
+    CHECK_EQ("slot frame sp", cpu->r[13], base + 0x2000u - 0x18u);
+    CHECK_EQ("slot frame r1", bus_read32(nds->bus, base + 0x2000u - 0x14u),
+             0xABu);
+    CHECK_EQ("slot frame ret", bus_read32(nds->bus, base + 0x2000u - 0x04u),
+             base + 4u);
 
     nds->io->irq[0].ifl = 0; /* 模拟 handler 已写 IF 清除，避免返回后立即重入 */
     cpu_step(cpu);           /* STMFD sp!, {lr}：把返回点压栈 */

@@ -486,4 +486,14 @@
 - 下一步：给 ARM7 Halt HLE 补唤醒后调度路径，或改走参考 ARM7 BIOS
   0x000011xx/0x00001Fxx 的异常返回与 SWI 分发语义。
 
+## 2026-09-06 · 21-B9x — ARM9 IRQ 入口补 BIOS 六字帧
+
+- 根因：FFXII 的 ITCM 中断分发器在 0x01FF8164 附近会从 IRQ 栈弹
+  r0-r3/r12/lr 六个字保存“被打断任务”的现场。真机这些字由 ARM9 BIOS
+  高向量入口（FreeBIOS `interrupt_handler` 同款 `stmdb sp!,{r0-r3,r12,lr}`）
+  在跳用户 handler 前压栈；本地 HLE 直接跳槽指针，导致分发器弹到栈底 0，
+  把空闲任务上下文写坏后 PC 弹到 0。
+- 修复：跳 ARM9 handler 前先压 6 字帧（r0-r3/r12 + 被打断 PC+4），并下移 IRQ SP。
+- 验证：`[case 21-B9c]` 补 3 项帧断言；全量 **738 项检查 0 失败**。
+  真 ROM 不再跳低地址空扫，稳定停在 0x0200957C 空闲等下一帧事件。
 

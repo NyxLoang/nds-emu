@@ -617,6 +617,18 @@ Main RAM；全量测试 735 项 0 失败。随后暴露的“空闲任务 PC 被
 0x18，与真 BIOS/FreeBIOS 行为对齐。效果：ARM9 不再跳低地址空扫，稳定停在
 0x0200957C 空闲任务；`[case 21-B9c]` 补帧断言 3 项，全量 **738 项检查 0 失败**。
 
+### 21-B9y（2026-09-06）：IRQ 返回时恢复 ARM9 IRQ SP
+
+B9x 压帧后，每次 IRQ 入口都会把 IRQ SP 下移 0x18；本地 HLE 不走 BIOS 的
+`ldmia sp!,{r0-r3,r12,lr}` 返回路径，SP 一直没有弹回。约 180 帧后 IRQ 栈从
+DTCM 顶部一路溢到 0x027E0000 的 handler 表，把 FIFO 表项 0x027E0048 覆盖成
+0x04000188；下一次 FIFO 中断就 `bx` 到 IO 地址开始空扫。长跑 2 亿步复现：
+handler 表被覆盖、ARM9 PC 从 0x04000188 逐字扫到 0x0983CFA4。
+
+修复：`irq_hle_ctx` 记录压帧前的 IRQ SP，`irq_hle_restore` 返回前恢复。
+2 亿步与 5 亿步长跑均保持 0x0200957C 空闲，不再覆盖 handler 表；
+`[case 21-B9c]` 补 SP 恢复断言，全量 **739 项检查 0 失败**。
+
 ---
 
 ## 4. 装载时“secure: not encrypted”不是错误

@@ -14,6 +14,7 @@ typedef struct irq_hle_ctx {
     uint32_t ip;         /* r12 同 r0-r3 */
     uint32_t ret_pc;     /* 返回点 = 被打断指令地址 */
     uint32_t saved_cpsr; /* 被打断时的 CPSR（含模式/I 位） */
+    uint32_t saved_irq_sp;
 } irq_hle_ctx_t;
 
 /* ARM 处理器（ARM946E-S 或 ARM7TDMI）的可见状态。两核共用同一套结构，

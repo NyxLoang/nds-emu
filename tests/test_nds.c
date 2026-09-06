@@ -1118,6 +1118,8 @@ static void test_irq_slot_jump(nds_t *nds)
     CHECK_EQ("slot return I", (cpu->cpsr & CPSR_I) ? 1u : 0u, 0u);
     CHECK_EQ("slot instr rerun", cpu->r[0], 5u);
     CHECK_EQ("slot return PC", cpu->r[15], base + 4);
+    CHECK_EQ("slot irq sp restored",
+             cpu->r13_bank[exec_spsr_index(ARM_MODE_IRQ)], base + 0x2000u);
     exec_set_trace(1);
 
     bus_set_arm9_dtcm(nds->bus, 0, 0, 0); /* 恢复禁用，避免污染后续用例 */

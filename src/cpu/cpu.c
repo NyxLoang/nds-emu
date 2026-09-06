@@ -61,6 +61,8 @@ static void irq_hle_restore(arm_cpu_t *cpu)
     for (int i = 0; i < 4; i++)
         cpu->r[i] = cpu->irq_hle.r[i];
     cpu->r[12] = cpu->irq_hle.ip;
+    if (!cpu->is_arm7)
+        cpu->r[13] = cpu->irq_hle.saved_irq_sp;
     /* 恢复 CPSR 也要切回 User/System：经模式同步把 IRQ 私有 r13/r14 存回槽 */
     exec_apply_cpsr(cpu, cpu->irq_hle.saved_cpsr);
     /* 21-B9s：ARM7 的 Halt（SWI 0x06，Thumb 编码 DF06）在任意中断到来后应
@@ -165,6 +167,7 @@ int cpu_step(arm_cpu_t *cpu)
                    ITCM dispatcher 在 0x01FF8164 附近从 IRQ 栈弹这 6 个字保存现场；
                    此前没有压帧会弹到栈底 0，把空闲任务上下文写坏。 */
                 uint32_t isp = cpu->r[13];
+                cpu->irq_hle.saved_irq_sp = isp;
                 bus_write32(cpu->nds->bus, isp - 0x18u + 0x00u, cpu->r[0]);
                 bus_write32(cpu->nds->bus, isp - 0x18u + 0x04u, cpu->r[1]);
                 bus_write32(cpu->nds->bus, isp - 0x18u + 0x08u, cpu->r[2]);

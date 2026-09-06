@@ -81,9 +81,9 @@ static void cartbus_activate(cartbus_t *cb)
         cb->chip_read = 0;
         uint32_t blk = (cb->romctrl & CART_ROMCTRL_BLOCK_MASK) >> 24;
         uint32_t size;
-        if (blk == 0)      size = 0x200u;          /* None → 默认 0x200（游戏常规块） */
-        else if (blk == 7) size = 4u;              /* 4 字节（KEY2 区用） */
-        else               size = 0x100u << (blk - 1); /* 1=0x100 2=0x200 … 6=0x2000 */
+        if (blk == 7)      size = 4u;              /* 4 字节（KEY2 区用） */
+        else if (blk == 0) size = 0u;              /* None：无数据 */
+        else               size = 0x100u << blk;   /* melonDS: 1=0x200 … 6=0x4000 */
         cb->xfer_remaining = size;
     } else {
         /* 未支持的命令：不产生数据，但仍置就绪，读 CARD_DATA 会得 0xFFFFFFFF。 */

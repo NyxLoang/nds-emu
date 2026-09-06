@@ -3319,8 +3319,8 @@ static void test_cartbus_read(nds_t *nds)
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
 
-    /* 激活 ROMCTRL（写 bit31） */
-    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80);
+    /* 激活 ROMCTRL（写 bit31，块字段=1 → 0x200，melonDS 口径） */
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x81);
 
     /* 21-B9zb: 激活后要等 melonDS 首字延迟 DRQ 才就绪 */
     CHECK_EQ("cart romctrl not yet DRQ",
@@ -3461,7 +3461,7 @@ static void test_card_dma(nds_t *nds)
     static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
-    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80);
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x81); /* 块字段=1 → 0x200 */
     /* 21-B9zb: 等卡带首字就绪；就绪边沿会让卡带 DMA 自动触发 */
     for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
         io_advance_cart(nds->io, 0);
@@ -3521,7 +3521,7 @@ static void test_card_program(nds_t *nds)
         /* 0x30 */ 0xE3A01404, /* MOV r1, #0x04000000       r1 = 0x04000000 */
         /* 0x34 */ 0xE28110A4, /* ADD r1, r1, #0xA4         r1 = 0x040000A4 */
         /* 0x38 */ 0xE2811C01, /* ADD r1, r1, #0x100        r1 = 0x040001A4（ROMCTRL） */
-        /* 0x3C */ 0xE3A00102, /* MOV r0, #0x80000000       r0 = activate bit31 */
+        /* 0x3C */ 0xE3A00481, /* MOV r0, #0x81000000       activate + 块字段=1 */
         /* 0x40 */ 0xE5810000, /* STR r0, [r1]              ROMCTRL=activate → DMA 搬 */
         /* 0x44 */ 0xEAFFFFFE, /* B self（停机） */
     };

@@ -35,7 +35,9 @@ ROM 一次性读进内存，而是在游戏过程中按需从卡带流式读取�
 
 ```
 bit23    Data-Word Status（只读）：0=Busy，1=Ready/DRQ（有数据可读）
-bit24-26 Block size：0=None，1=0x100，2=0x200 … 7=4 字节（0x100 << (n-1)）
+bit24-26 Block size：0=None，1=0x200，2=0x400 … 6=0x4000，7=4 字节
+         （melonDS NDSCart：0x100 << n；早期文档写成 0x100 << (n-1) 有误，
+          B9zo 已按 melonDS 修正，FFXII 块字段 1 实为 0x200）
 bit31    Start/Activate（写 1 触发命令，锁存 CARD_COMMAND 并开始传输）
 ```
 

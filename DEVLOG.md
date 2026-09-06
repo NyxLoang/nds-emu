@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9zo | 卡带/测试 | ROMCTRL 块长按 melonDS `0x100<<n` 修正（旧 0x100<<(n-1) 导致 B7 每块只读一半）：FFXII 主存缓冲与参考 frame30 逐字节一致，751 项 0 失败 | [cart](src/cart/cartlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zn | CPU/测试 | melonDS A_STM “基址在列表内保存当前写地址”补到 ARM9（B9zg 只修了 ARM7）：751 项 0 失败；发送点探针复测确认本地已能发 2B/E3E82B/AB 三次 service11 后停回空闲 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zm（实验） | 工程 | 帧/VCOUNT 节奏 4 倍加速后 service11 仍为 0，排除“帧数不足”（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9zl（分析） | 工程 | service 分发 0x0200D9FC 本地仅 4 轮 r1=9/0xA 事件就等待；转回 ARM7 A4F8 激活点（仅文档） | [21](docs/21-rom-bringup.md) |

@@ -39,6 +39,7 @@ typedef struct io {
     math_t math;                      /* 硬件除法/开方（阶段 21-B9k：DIV/SQRT） */
     snd_t snd;                        /* 音频（阶段 18：16 通道 + SOUNDCNT/SOUNDBIAS） */
     gx_t gx;                          /* 3D 几何引擎（阶段 19：DISP3DCNT/GXSTAT/GXFIFO） */
+    uint16_t vcount;                  /* VCOUNT（0x04000006 只读扫描线，runner 每帧推进） */
     cartbus_t cartbus;                /* 卡带总线（阶段 15：ROMCTRL/命令/数据端口） */
     struct bus *bus;                  /* bus 反指：DMA 搬运需经 bus 访存 */
 } io_t;

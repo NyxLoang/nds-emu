@@ -24,6 +24,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-06 | 21-B9u | IO/测试 | VCOUNT（0x04000006）只读实现：ARM7 任务调度不再把 VCOUNT 当未知 IO 读 0（727 项 0 失败） | [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9t（分析） | CPU/BIOS | 对照参考定位：C0204006 后缺的不是回执本身，而是 ARM7 Halt 经 BIOS 唤醒后继续系统任务的路径（仅文档） | [cpu](src/cpu/cpulog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9s+ | CPU | ARM9 CP15 WFI 唤醒后 PC 前进：与 ARM7 Halt 同族，空闲任务能越过 WFI（723 项 0 失败） | [cpu](src/cpu/cpulog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9s | CPU/IO/测试 | ARM BLX 立即数（安全区 Thumb SWI 桩入口）+ ARM7 Halt 中断后跳过 SWI：FFXII 越过 BA94/IPC 死锁，双核推进到系统空闲（723 项 0 失败） | [cpu](src/cpu/cpulog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

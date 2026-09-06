@@ -1670,6 +1670,18 @@ static void test_power_regs(nds_t *nds)
     nds->bus->active_is_arm7 = 0;
 }
 
+/* ---- 21-B9u 用例：VCOUNT（0x04000006 只读，任务调度时钟） ---- */
+static void test_vcount(nds_t *nds)
+{
+    CHECK_EQ("vcount init 0", bus_read16(nds->bus, 0x04000006u), 0x0000u);
+    io_set_vblank(nds->io);
+    CHECK_EQ("vcount after frame 1", bus_read16(nds->bus, 0x04000006u), 0x0001u);
+    io_set_vblank(nds->io);
+    CHECK_EQ("vcount after frame 2", bus_read16(nds->bus, 0x04000006u), 0x0002u);
+    bus_write16(nds->bus, 0x04000006u, 0x1234u);
+    CHECK_EQ("vcount read-only", bus_read16(nds->bus, 0x04000006u), 0x0002u);
+}
+
 /* ---- 阶段 21-B4 用例：ARM BX 奇地址应切 Thumb ---- */
 static void test_arm_bx_thumb(nds_t *nds)
 {
@@ -4496,6 +4508,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_power_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9u] VCOUNT 只读扫描线（任务调度时钟）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_vcount(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B4] ARM BX 奇地址切 Thumb\n");

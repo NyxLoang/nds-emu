@@ -103,6 +103,12 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return gx_read8(&io->gx, addr);
     if (snd_is_addr(addr) && is_arm7)
         return snd_read8(&io->snd, addr);
+    /* VCOUNT（0x04000006/07 只读）：FFXII ARM7 用它做任务调度截止点；
+       未实现时读 0 会让所有任务截止点相同、就绪队列排序错误。 */
+    if (addr == 0x04000006u)
+        return (uint8_t)(io->vcount & 0xFFu);
+    if (addr == 0x04000007u)
+        return (uint8_t)(io->vcount >> 8);
     if (io->bus != NULL && io->bus->diag && io_addr_first_seen(addr))
         printf("io: read  unknown addr=%08X (arm7=%d)\n", addr, is_arm7);
     return 0;
@@ -241,6 +247,9 @@ void io_set_vblank(io_t *io)
        service6 的完成状态机才会推进。 */
     irq_set_vblank(&io->irq[0]);
     irq_set_vblank(&io->irq[1]);
+    /* 简易 VCOUNT：每“帧”推进一条扫描线（真机每帧 0..262；跑帧接近即可，
+       FFXII 只把 VCOUNT 当单调调度时钟用）。 */
+    io->vcount = (uint16_t)((io->vcount + 1u) % 263u);
     dma_fire(&io->dma[0], io->bus, DMA_START_VBLANK); /* 双核各自 VBlank DMA */
     dma_fire(&io->dma[1], io->bus, DMA_START_VBLANK);
 }

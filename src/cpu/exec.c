@@ -647,10 +647,11 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
         return 1;
     }
 
-    /* CLZ（ARMv5）：bit27-4 固定为 0001 0110 1111 1111 0001（掩码 0x0FFFFFF0），
-       Rd 在 bit15-12、Rm 在 bit3-0。结果 = Rm 的二进制前导零个数（0 的前导零
-       定义为 32）。FFXII 的 IRQ 分发器用它找“最高优先级的挂起中断位”。 */
-    if ((insn & 0x0FFFFFF0u) == 0x016F0F10u) {
+    /* CLZ（ARMv5）：固定位是 bit27-20=00010110、bit19-16=1111、bit11-4=11110001，
+       Rd 在 bit15-12、Rm 在 bit3-0，所以掩码必须留出 Rd（0x0FFF0FF0）。
+       结果 = Rm 的二进制前导零个数（0 的前导零定义为 32）。FFXII 的 IRQ 分发器
+       用它找“最高优先级的挂起中断位”，低地址标题解码还用 CLZ r10,r3。 */
+    if ((insn & 0x0FFF0FF0u) == 0x016F0F10u) {
         unsigned rd = (insn >> 12) & 0xFu;
         unsigned rm = insn & 0xFu;
         uint32_t v = read_reg(cpu, rm);

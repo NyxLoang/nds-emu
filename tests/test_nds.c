@@ -1152,6 +1152,16 @@ static void test_clz(nds_t *nds)
         CHECK_EQ(cases[i].name, cpu->r[0], cases[i].want);
         CHECK_EQ("clz pc", cpu->r[15], base + 4);
     }
+    /* regression: CLZ into nonzero Rd (r10) must still dispatch as CLZ */
+    bus_write32(nds->bus, base, 0xE16FAF13u); /* CLZ r10, r3 */
+    cpu->r[3] = 0x617730B0u;
+    cpu->cpsr = 0x8000001Fu;
+    cpu_reset(cpu, base);
+    exec_set_trace(0);
+    cpu_step(cpu);
+    CHECK_EQ("clz r10 nonzero rd", cpu->r[10], 1u);
+    CHECK_EQ("clz no flag touch", cpu->cpsr, 0x8000001Fu);
+    CHECK_EQ("clz r10 pc", cpu->r[15], base + 4);
     exec_set_trace(1);
 }
 

@@ -87,6 +87,7 @@ static void irq_hle_restore(arm_cpu_t *cpu)
    返回 0 表示停机（本阶段总是返回 1，停机由死循环达成）。 */
 int cpu_step(arm_cpu_t *cpu)
 {
+    cpu->step_cycles = 1;
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
     /* 21-B9f：先检查 IRQ handler 是否刚弹出返回地址（见函数注释） */
@@ -102,8 +103,10 @@ int cpu_step(arm_cpu_t *cpu)
        NDS9 的 CP15 Halt 只受 IME 门控（IME=0 会永久锁死），不会因 CPSR.I 屏蔽
        而卡住；挂起未到 → PC 不动等待，挂起到 → 清 I 后走正常 IRQ 入口。 */
     if (!cpu->is_arm7 && cpu_fetch(cpu) == 0xEE070F90u) {
-        if (!irq_pending(irq))
+        if (!irq_pending(irq)) {
+            cpu->step_cycles = 0;
             return 1;
+        }
         cpu->cpsr &= ~CPSR_I;
         /* 21-B9s：WFI 被中断唤醒时指令先“完成”再进 IRQ——PC 前进到下一条，
            否则 IRQ 返回后又停在 WFI 上重执行，空闲任务永远走不到后续代码。 */

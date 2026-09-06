@@ -2291,6 +2291,31 @@ static void test_arm9_stm_base_in_list(nds_t *nds)
     CHECK_EQ("arm9 stm no writeback", cpu->r[1], 0x0200A4FCu);
 }
 
+/* ---- 21-B9vv：周期成本骨架：step_cycles 与等待分离 ---- */
+static void test_step_cycles(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+
+    nds->io->irq[0].ifl = 0;
+    nds->io->irq[0].ime = 0;
+    nds->io->irq[0].ie = 0;
+
+    /* 无挂起中断时 WFI 不消耗周期：step_cycles=0 */
+    bus_write32(nds->bus, base, 0xEE070F90u); /* MCR p15,0,r0,c7,c0,4 */
+    cpu_reset(cpu, base);
+    cpu_step(cpu);
+    CHECK_EQ("wfi step_cycles", cpu->step_cycles, 0u);
+    CHECK_EQ("wfi no instruction", (uint32_t)cpu->cycles, 0u);
+
+    /* 普通指令：step_cycles=1，指令计数 +1 */
+    bus_write32(nds->bus, base, 0xEAFFFFFEu); /* B self */
+    cpu_reset(cpu, base);
+    cpu_step(cpu);
+    CHECK_EQ("normal step_cycles", cpu->step_cycles, 1u);
+    CHECK_EQ("normal instruction", (uint32_t)cpu->cycles, 1u);
+}
+
 /* ---- 10.6 用例：乘法 MUL/MLA + 长乘 UMULL/UMLAL/SMULL ---- */
 static void test_mul(nds_t *nds)
 {
@@ -4731,6 +4756,7 @@ int main(void)
         test_block_transfer(nds);
         test_arm7_stm_base_in_list(nds);
         test_arm9_stm_base_in_list(nds);
+        test_step_cycles(nds);
         nds_destroy(nds);
     }
     printf("\n[case 10.6] 乘法 MUL/MLA + 长乘\n");

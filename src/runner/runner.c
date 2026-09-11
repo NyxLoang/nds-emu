@@ -461,13 +461,15 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         uint64_t fr = runner_frame_index(r);
         if ((fr % 100) == 0) {
             printf("headless-frames: f=%llu ARM9=%08X ARM7=%08X disp=%08X"
-                   " if9=%08X if7=%08X cnt=%04X/%04X fifo=%d/%d gx=%u tri=%u\n",
+                   " if9=%08X if7=%08X cnt=%04X/%04X fifo=%d/%d gx=%u tri=%u"
+                   " sp9=%08X lr9=%08X\n",
                    (unsigned long long)fr, nds->cpu->r[15],
                    nds->cpu7->r[15], bus_read32(nds->bus, 0x04000000u),
                    nds->io->irq[0].ifl, nds->io->irq[1].ifl,
                    nds->io->fifo.cnt9, nds->io->fifo.cnt7,
                    nds->io->fifo.from7.count, nds->io->fifo.from9.count,
-                   nds->io->gx.cmd_count, nds->io->gx.tri_count);
+                   nds->io->gx.cmd_count, nds->io->gx.tri_count,
+                   nds->cpu->r[13], nds->cpu->r[14]);
             fflush(stdout);
         }
     }

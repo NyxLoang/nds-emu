@@ -29,7 +29,7 @@ typedef struct nds_timer {
 uint8_t timer_read8(const nds_timer_t *t, uint32_t addr);
 void timer_write8(nds_timer_t *t, uint32_t addr, uint8_t val);
 
-/* 一个周期过去（本模拟器=一条指令）：使能的定时器按分频累计 */
-int timer_advance(nds_timer_t *t);
+/* 经过 cycles 个系统周期：使能的定时器按分频累计（支持一次多周期跳跃） */
+int timer_advance(nds_timer_t *t, uint32_t cycles);
 
 #endif /* NDS_EMU_IO_TIMER_H */

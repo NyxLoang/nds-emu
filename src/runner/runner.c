@@ -68,7 +68,9 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
     uint64_t i = 0;
     uint64_t next_press = key_frame;
     int key_hold = 0;
+    uint64_t last_now = 0;
     while (i < steps) {
+        int was9 = a9_wait, was7 = a7_wait;
         /* 等待本身不消耗指令，但会消耗系统时间：唤醒时把该核的已用周期
            跳到当前系统时间 tm.now（ARM9 时钟为 ARM7 的 2 倍），否则调度器
            会把“暂停期间流逝的时间”误当成积压指令连续补跑，导致 ARM7
@@ -88,6 +90,14 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
             if (next == UINT64_MAX)
                 break;
             timing_advance(&tm, next);
+            {
+                uint64_t delta = tm.now - last_now;
+                last_now = tm.now;
+                if (delta != 0) {
+                    io_advance_timers(nds->io, 0, (uint32_t)delta);
+                    io_advance_timers(nds->io, 1, (uint32_t)delta);
+                }
+            }
             i++;
             if ((i & 0xFFFFFu) == 0xFFFFFu) {
                 printf("headless-cyc: step=%llu both-wait now=%llu next=%llu"
@@ -128,6 +138,14 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
         else
             sys = (cost9 / 2 < cost7) ? cost9 / 2 : cost7;
         timing_advance(&tm, sys);
+        {
+            uint64_t delta = tm.now - last_now;
+            last_now = tm.now;
+            if (delta != 0) {
+                if (was9) io_advance_timers(nds->io, 0, (uint32_t)delta);
+                if (was7) io_advance_timers(nds->io, 1, (uint32_t)delta);
+            }
+        }
         i++;
         if (key_mask != 0) {
             if (key_hold > 0) {

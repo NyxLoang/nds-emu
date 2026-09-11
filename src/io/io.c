@@ -323,12 +323,12 @@ void io_set_touch(io_t *io, uint16_t adc_x, uint16_t adc_y, int down)
     touch_set_pos(&io->touch, adc_x, adc_y, down);
 }
 
-void io_advance_timers(io_t *io, int is_arm7)
+void io_advance_timers(io_t *io, int is_arm7, uint32_t cycles)
 {
     /* 21-B9h：TM0-TM3 溢出对应 IF bit3-bit6，仅 cnt_h bit6（IRQ 使能）时置位 */
     int idx = is_arm7 ? 1 : 0;
     for (int i = 0; i < IO_TIMER_COUNT; i++) {
-        if (timer_advance(&io->timer[is_arm7 ? 1 : 0][i]) &&
+        if (timer_advance(&io->timer[is_arm7 ? 1 : 0][i], cycles) &&
             (io->timer[is_arm7 ? 1 : 0][i].cnt_h & TIMER_CNT_IRQ))
             io->irq[idx].ifl |= (uint32_t)(1u << (3 + i));
     }

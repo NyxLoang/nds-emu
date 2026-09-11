@@ -92,8 +92,8 @@ void io_set_keyinput(io_t *io, uint16_t pressed);
 /* 触摸位置：12 位 ADC 值，down=1 表示笔按下（阶段 17，由窗口鼠标/触摸事件驱动） */
 void io_set_touch(io_t *io, uint16_t adc_x, uint16_t adc_y, int down);
 
-/* 一个周期（一条指令）过去：推进当前核的 4 个使能定时器（6.5，cpu_step 调用） */
-void io_advance_timers(io_t *io, int is_arm7);
+/* 经过 cycles 个系统周期：推进当前核的 4 个使能定时器（cpu_step/事件调度器调用） */
+void io_advance_timers(io_t *io, int is_arm7, uint32_t cycles);
 
 /* 21-B9zb: 一个 ARM9 周期过去时推进卡带数据就绪时钟（cpu_step 调用） */
 void io_advance_cart(io_t *io, int is_arm7);

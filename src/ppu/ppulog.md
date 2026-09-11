@@ -165,3 +165,14 @@
   写进 LCDC VRAM（`0x06800000`，按写块/偏移定位），随后清使能位。`bus.h/.c` 新增 LCDC VRAM 窗口映射到 vram[0]。
 - **踩坑（测试）**：`disp_reg16` 原按基址精确匹配，16 位寄存器写高字节（奇地址）时丢失；改为 `addr & ~1u` 对齐。
 - 验收：`test_blend_regs` + `test_blend_render`（Alpha/增亮/减暗/主亮度像素值精确断言）+ `test_capture_render` + `test_window_render`。
+
+### 21-B9wj — DISPCNT VRAM 直显模式（标题顶屏）
+
+- **现象**：FFXII 标题段主引擎 `DISPCNT=00121F10`，bit16-17=2 表示 VRAM
+  显示模式；旧 `render_engine` 只区分“关（0）/常规（1）”，把这个值当常规
+  2D 图层合成，顶屏一直黑。
+- **实现**：主引擎且 `dmode==2` 时按 DISPCNT bit18-19 选物理 bank，逐像素
+  `bus_vram_phys16(bank,(y*256+x)*2)` 取 RGB555 展开到 framebuffer；副引擎
+  硬件没有该模式（只看 bit16），保持常规路径。
+- **验证**：新增 `[case 21-B9wj]`（bank0 红/蓝、切 bank1 绿），全量 **808 项
+  检查 0 失败**。真 ROM frame1306 顶屏从 49,152 像素全黑变为 2,912 色。

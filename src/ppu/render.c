@@ -475,6 +475,20 @@ static void render_engine(const bus_t *bus, uint32_t *fb, int is_sub)
         fill_fb(fb, 0xFFFFFFFFu);
         return;
     }
+    /* DISPCNT bit16-17 = 2：VRAM 显示模式（仅主引擎）。帧直接来自所选
+       VRAM bank（bit18-19），不做 2D 图层合成；FFXII 标题顶屏用此模式。 */
+    if (!is_sub && dmode == 2) {
+        unsigned vbank = (dispcnt >> 18) & 3u;
+        for (int py = 0; py < RENDER_SCREEN_H; py++) {
+            for (int px = 0; px < RENDER_SCREEN_W; px++) {
+                uint16_t c = bus_vram_phys16(bus, (int)vbank,
+                                             (uint32_t)(py * RENDER_SCREEN_W
+                                                        + px) * 2u);
+                fb[py * RENDER_SCREEN_W + px] = rgb555_to_888(c);
+            }
+        }
+        return;
+    }
 
     comp_t c;
     comp_reset(&c, bus, is_sub);

@@ -4543,6 +4543,31 @@ static void test_capture_render(nds_t *nds)
     CHECK_EQ("cap done clear", bus_read32(nds->bus, IO_DISPCAPCNT) & DISPCAP_ENABLE, 0u);
 }
 
+/* ---- 21-B9wj：DISPCNT VRAM 显示模式（bit16-17=2，FFXII 标题顶屏） ---- */
+static void test_vram_display_mode(nds_t *nds)
+{
+    uint32_t fb_top[RENDER_SCREEN_W * RENDER_SCREEN_H];
+    uint32_t fb_bot[RENDER_SCREEN_W * RENDER_SCREEN_H];
+
+    /* bank0：写 LCDC 窗口（0x06800000 映射到物理 bank A），前两像素红/蓝 */
+    bus_write16(nds->bus, BUS_LCDC_VRAM_BASE + 0x00000u, 0x7C00u);
+    bus_write16(nds->bus, BUS_LCDC_VRAM_BASE + 0x00002u, 0x001Fu);
+    /* bank1：0x06820000 落到物理 bank B，写绿色 */
+    bus_write16(nds->bus, BUS_LCDC_VRAM_BASE + 0x20000u, 0x03E0u);
+
+    /* 主引擎 VRAM 显示模式：2<<16，选 bank0（bit18-19=0） */
+    bus_write32(nds->bus, IO_DISPCNT, 2u << DISPCNT_DISPLAY_MODE_SHIFT);
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("vramdisp bank0 red",  fb_top[0], 0xFFF80000u);
+    CHECK_EQ("vramdisp bank0 blue", fb_top[1], 0xFF0000F8u);
+
+    /* 选 bank1（bit18-19=1）→ 全屏绿首像素 */
+    bus_write32(nds->bus, IO_DISPCNT,
+                (2u << DISPCNT_DISPLAY_MODE_SHIFT) | (1u << 18));
+    render_frame(nds->bus, fb_top, fb_bot);
+    CHECK_EQ("vramdisp bank1 green", fb_top[0], 0xFF00F800u);
+}
+
 /* ---- 阶段 20.3 用例：窗口（WIN0 限定 BG 显示区域） ---- */
 static void test_window_render(nds_t *nds)
 {
@@ -5295,6 +5320,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_capture_render(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wj] DISPCNT VRAM 显示模式（主引擎直读 bank）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_vram_display_mode(nds);
         nds_destroy(nds);
     }
     printf("\n[case 20.3] 窗口（WIN0 限定 BG 显示区域）\n");

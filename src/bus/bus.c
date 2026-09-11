@@ -185,6 +185,18 @@ uint16_t bus_vram_extpal16(const bus_t *bus, int is_sub, int slot,
     return (uint16_t)(p[0] | (uint16_t)(p[1] << 8));
 }
 
+/* DISPCNT VRAM 显示模式（bit16-17=2）按物理 bank 直读，不经逻辑窗口换算。 */
+uint16_t bus_vram_phys16(const bus_t *bus, int bank, uint32_t off)
+{
+    if (bus == NULL || bank < 0 || bank > 8)
+        return 0;
+    uint32_t size = vram_bank_mask[bank] + 1u;
+    if (off + 2u > size)
+        return 0;
+    const uint8_t *p = bus->vram + vram_bank_phys[bank] + off;
+    return (uint16_t)(p[0] | (uint16_t)(p[1] << 8));
+}
+
 /* Shared WRAM 按 WRAMCNT 低 2 位 + 当前访问者切分（阶段 21-B7）。
    真机整片 0x03xxxxxx 区域会按每个核的「基址指针 + 掩码」重复别名，
    这里只处理本项目映射的两个 32KB 口（0x03000000 主区 / 0x037F8000 镜像），

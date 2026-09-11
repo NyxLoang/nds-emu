@@ -122,6 +122,15 @@
 - 验证：全量 **770 项检查 0 失败**；真 ROM 本地 bank H 与参考逐字节一致，
   Engine B 输出与参考同为 81 色/46288 白像素的 SQUARE ENIX 画面。
 
+## 2026-09-06 · 21-B9wj — 物理 VRAM bank 16 位直读
+
+- FFXII 标题顶屏（主引擎）`DISPCNT=00121F10` 的 bit16-17=2 走 **VRAM 显示
+  模式**：像素不再来自 2D 图层，而是直接读 bit18-19 选择的物理 VRAM bank。
+- `bus` 新增 `bus_vram_phys16(bus, bank, off)`：按 `vram_bank_phys[]` 物理基址
+  读 16 位字，带 bank 大小边界检查；不受逻辑窗口与 `active_is_arm7` 影响。
+- 逐字节对照：参考 frame1310 的物理 VRAM 仍是后续标题位流解码的目标，本小步
+  只负责把已写入的 bank 正确显示出来；bus 侧新旧用例保持 0 失败。
+
 ## 2026-09-05 · 21-B7 — Shared WRAM 按 WRAMCNT 双核切分
 
 - **背景**：B1 把 0x03000000 / 0x037F8000 无条件映射给两核同一 32KB，真机则按

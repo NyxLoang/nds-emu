@@ -130,6 +130,9 @@ void bus_vram_reset_default(bus_t *bus);
 uint16_t bus_vram_extpal16(const bus_t *bus, int is_sub, int slot,
                            unsigned pal, unsigned color);
 
+/* DISPCNT VRAM 显示模式直读物理 bank 的 16 位字（off 为字节偏移）。 */
+uint16_t bus_vram_phys16(const bus_t *bus, int bank, uint32_t off);
+
 /* 按 8 位读写一个字节。
    地址换算规则：把总线地址减去区间基址，得到该数组的下标
    （例如 Main RAM 基址 0x02000000，地址 0x02000100 → 下标 0x100）。

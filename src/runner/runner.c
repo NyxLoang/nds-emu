@@ -41,7 +41,9 @@ static void runner_ev_frame(void *ctx)
 }
 
 void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
-                            const char *shot_path)
+                            const char *shot_path,
+                            uint64_t key_frame, uint32_t key_mask,
+                            uint64_t key_period)
 {
     bus_set_diag(nds->bus, 1);
     exec_set_trace(trace);
@@ -64,6 +66,8 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
     uint64_t cost9 = 0, cost7 = 0;
     int a9_wait = 0, a7_wait = 0;
     uint64_t i = 0;
+    uint64_t next_press = key_frame;
+    int key_hold = 0;
     while (i < steps) {
         /* 等待本身不消耗指令，但会消耗系统时间：唤醒时把该核的已用周期
            跳到当前系统时间 tm.now（ARM9 时钟为 ARM7 的 2 倍），否则调度器
@@ -125,6 +129,20 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
             sys = (cost9 / 2 < cost7) ? cost9 / 2 : cost7;
         timing_advance(&tm, sys);
         i++;
+        if (key_mask != 0) {
+            if (key_hold > 0) {
+                key_hold--;
+                if (key_hold == 0) {
+                    io_set_keyinput(nds->io, 0);
+                    next_press += (key_period != 0) ? key_period : UINT64_MAX;
+                }
+            } else if (tm.now / frame_cycles >= next_press) {
+                io_set_keyinput(nds->io, (uint16_t)key_mask);
+                key_hold = 8;
+                printf("headless-cyc: scripted key mask=%04X at frame=%llu\n",
+                       key_mask, (unsigned long long)(tm.now / frame_cycles));
+            }
+        }
         if ((i & 0xFFFFFu) == 0xFFFFFu) {
             printf("headless-cyc: step=%llu ARM9 PC=%08X cyc=%llu cpsr=%08X if=%08X"
                    " | ARM7 PC=%08X cyc=%llu cpsr=%08X if=%08X\n",
@@ -147,12 +165,13 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
     for (size_t vi = 0; vi < BUS_VRAM_SIZE; vi++)
         if (nds->bus->vram[vi]) vram_nz++;
     printf("headless-cyc: summary now=%llu frame=%llu vram-nz=%llu"
-           " disp=%08X dispb=%08X\n",
+           " disp=%08X dispb=%08X irq9=%d irq7=%d\n",
            (unsigned long long)tm.now,
            (unsigned long long)(tm.now / frame_cycles),
            (unsigned long long)vram_nz,
            bus_read32(nds->bus, 0x04000000u),
-           bus_read32(nds->bus, 0x04001000u));
+           bus_read32(nds->bus, 0x04001000u),
+           nds->cpu->irq_hle.log_count, nds->cpu7->irq_hle.log_count);
     if (shot_path != NULL) {
         uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
                                               * RENDER_SCREEN_H);

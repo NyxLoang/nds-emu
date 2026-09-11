@@ -141,3 +141,13 @@
   修正为与 `cartbus` 同一公式：`0xC2 | ((size>>20)-1)<<8`（1MB..128MB）。
 - FFXII 0x02011FE8 会把 CARD_DATA 读回的芯片 ID 与 0x027FFC00 比较；
   旧表导致它走到 service14 错误分支，修正后进入 service11 文件读取流程。
+
+## 2026-09-06 · 21-B9wn — 无头脚本按键与 IRQ 计数诊断
+
+- `main.c`/`runner.c` 增加 `--key-frame N`、`--key-mask M`、`--key-period P`
+  三个可选参数：从第 N 帧起注入按键，保持 8 个调度迭代后释放；period 非 0
+  时每 P 帧再按一次（`0x8` = START）。事件驱动帧数跳跃时也能被游戏读到。
+- 事件 headless 结束摘要补两核 `irq_hle.log_count`：4 亿步/frame684 时
+  ARM9≈3680 次、ARM7≈3514 次中断，VBlank 没有整帧缺失。
+- 真 ROM 验证：标题段之后周期性按 START 能推进场景，输入链路在真实 ROM
+  上可用；开场字幕比参考慢属周期成本模型问题，后续单独校准。

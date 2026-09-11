@@ -12,6 +12,8 @@ void runner_headless(struct nds *nds, uint64_t steps, int trace,
                      const char *shot_path);
 /* 事件目标 headless（周期成本模型实验驱动，固定 2:1 保留在上方函数） */
 void runner_headless_cycles(struct nds *nds, uint64_t steps, int trace,
-                            const char *shot_path);
+                            const char *shot_path,
+                            uint64_t key_frame, uint32_t key_mask,
+                            uint64_t key_period);
 
 #endif /* NDS_EMU_RUNNER_H */

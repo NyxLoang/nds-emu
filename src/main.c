@@ -94,6 +94,9 @@ int main(int argc, char *argv[])
     int headless_trace = 0;
     int headless_cycles = 0;
     const char *headless_shot = NULL;
+    uint64_t key_frame = 0;
+    uint32_t key_mask = 0;
+    uint64_t key_period = 0;
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
         if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
@@ -106,6 +109,12 @@ int main(int argc, char *argv[])
             headless_steps = wcstol(wargv[i + 1], NULL, 10);
             headless_cycles = 1;
         }
+        else if (wcscmp(wargv[i], L"--key-frame") == 0 && i + 1 < wargc)
+            key_frame = _wcstoui64(wargv[i + 1], NULL, 0);
+        else if (wcscmp(wargv[i], L"--key-mask") == 0 && i + 1 < wargc)
+            key_mask = (uint32_t)wcstoul(wargv[i + 1], NULL, 0);
+        else if (wcscmp(wargv[i], L"--key-period") == 0 && i + 1 < wargc)
+            key_period = _wcstoui64(wargv[i + 1], NULL, 0);
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -119,6 +128,12 @@ int main(int argc, char *argv[])
             headless_steps = strtol(argv[i + 1], NULL, 10);
             headless_cycles = 1;
         }
+        else if (strcmp(argv[i], "--key-frame") == 0 && i + 1 < argc)
+            key_frame = strtoull(argv[i + 1], NULL, 0);
+        else if (strcmp(argv[i], "--key-mask") == 0 && i + 1 < argc)
+            key_mask = (uint32_t)strtoul(argv[i + 1], NULL, 0);
+        else if (strcmp(argv[i], "--key-period") == 0 && i + 1 < argc)
+            key_period = strtoull(argv[i + 1], NULL, 0);
     }
 #endif
 
@@ -261,7 +276,8 @@ int main(int argc, char *argv[])
     if (headless_steps > 0) {
         if (headless_cycles)
             runner_headless_cycles(nds, (uint64_t)headless_steps,
-                                   headless_trace, headless_shot);
+                                   headless_trace, headless_shot,
+                                   key_frame, key_mask, key_period);
         else
             runner_headless(nds, (uint64_t)headless_steps, headless_trace,
                             headless_shot);

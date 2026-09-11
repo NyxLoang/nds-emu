@@ -35,6 +35,7 @@
 | 2026-09-06 | 21-B9wn（工具） | 主循环 | 无头脚本按键 CLI：`--key-frame/--key-mask/--key-period`（真实 ROM 上 START 可推进流程）；headless 摘要补两核 IRQ 计数，用于排查开场节奏 | [main](src/mainlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wo（代码/测试） | 时序/IO | 定时器改为按“经过周期”推进（timer_advance 接受 cycles）+ 事件等待期补偿两核定时器：参考字幕阶段 TM0/1 CNT_H=00C1 已使能，修正后同一步数字幕前进约 5%，818 项 0 失败 | [io](src/io/iolog.md) 路 [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wp（验证） | 工程 | 定时器修正后里程碑复测：16.5 亿步到 frame1683 仍渲染出 FINAL FANTASY 标题字（`build/title3_A_x2.png`），ARM7 稳定 0x1158（仅文档） | [21](docs/21-rom-bringup.md) |
+| 2026-09-06 | 21-B9wq（代码/测试） | 主循环/工程 | 窗口模式接入与 headless 同源的持久化帧驱动 runner（`--headless-frames N`）+ 本工程源码 -O2：1700 帧可到标题、约 18fps 等价吞吐，818 项 0 失败 | [main](src/mainlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wf（代码/测试） | CPU/BIOS | ARM7 FreeBIOS 低地址等待路径 HLE：WaitByLoop 真循环节拍 + Halt 暂停/唤醒，790 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [bios](src/bios/bioslog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9we（代码/测试） | 总线/PPU | LCDC 分 bank 映射 + Engine B BG 扩展调色板：SQUARE ENIX 屏亮起，770 项 0 失败 | [bus](src/bus/buslog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wd（代码/测试） | 总线/IO | 实现 VRAMCNT 动态映射：FFXII bank D→A BG/C→B BG/E→A OBJ/H→B OBJ，768 项 0 失败 | [bus](src/bus/buslog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

@@ -93,3 +93,8 @@ enable_testing()
 add_executable(test_nds tests/test_nds.c)
 target_link_libraries(test_nds PRIVATE ndscore)
 add_test(NAME nds_test COMMAND test_nds)
+
+# 21-B9wq：本工程源码用 -O2（第三方 SDL 保持各自默认），提高窗口模式帧率。
+target_compile_options(ndscore PRIVATE -O2)
+target_compile_options(nds-emu PRIVATE -O2)
+target_compile_options(test_nds PRIVATE -O2)

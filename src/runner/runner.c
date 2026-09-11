@@ -40,6 +40,186 @@ static void runner_ev_frame(void *ctx)
     timing_arm(c->tm, 1, c->next_frame - c->tm->now, runner_ev_frame, c);
 }
 
+/* 21-B9wq：持久化帧驱动调度器。窗口模式与 headless-frames 共用同一套
+   事件/周期成本模型；每次 runner_run_frame 推进一个 VBlank 帧。 */
+struct runner {
+    nds_t *nds;
+    timing_t tm;
+    runner_ev_ctx_t ctx;
+    uint64_t frame_cycles;
+    uint64_t cost9, cost7;
+    int a9_wait, a7_wait;
+    uint64_t last_now;
+    uint64_t key_frame, key_period, next_press;
+    uint32_t key_mask;
+    int key_hold;
+};
+
+#define RUNNER_WAKE7_IO(io_) (((io_)->irq[1].ie & (io_)->irq[1].ifl) != 0)
+#define RUNNER_WAKE9_IO(io_) irq_pending(&(io_)->irq[0])
+
+runner_t *runner_create(nds_t *nds)
+{
+    if (nds == NULL)
+        return NULL;
+    runner_t *r = (runner_t *)calloc(1, sizeof(runner_t));
+    if (r == NULL)
+        return NULL;
+    r->nds = nds;
+    r->frame_cycles = 560190;
+    uint64_t line_cycles = r->frame_cycles / 263;
+    timing_init(&r->tm);
+    r->ctx.io = nds->io;
+    r->ctx.tm = &r->tm;
+    r->ctx.line_cycles = line_cycles;
+    r->ctx.frame_cycles = r->frame_cycles;
+    r->ctx.next_line = line_cycles;
+    r->ctx.next_frame = r->frame_cycles;
+    timing_arm(&r->tm, 0, line_cycles, runner_ev_line, &r->ctx);
+    timing_arm(&r->tm, 1, r->frame_cycles, runner_ev_frame, &r->ctx);
+    r->next_press = UINT64_MAX;
+    return r;
+}
+
+void runner_destroy(runner_t *r)
+{
+    free(r);
+}
+
+void runner_set_keys(runner_t *r, uint64_t frame, uint32_t mask,
+                     uint64_t period)
+{
+    if (r == NULL)
+        return;
+    r->key_frame = frame;
+    r->key_period = period;
+    r->key_mask = mask;
+    r->key_hold = 0;
+    r->next_press = (mask != 0) ? frame : UINT64_MAX;
+}
+
+uint64_t runner_frame_index(const runner_t *r)
+{
+    return (r != NULL) ? (r->tm.now / r->frame_cycles) : 0;
+}
+
+uint64_t runner_now(const runner_t *r)
+{
+    return (r != NULL) ? r->tm.now : 0;
+}
+
+/* 帧号到达脚本时刻时注入按键，保持 8 个调度迭代后释放。 */
+static void runner_keys(runner_t *r)
+{
+    if (r->key_mask == 0)
+        return;
+    if (r->key_hold > 0) {
+        r->key_hold--;
+        if (r->key_hold == 0) {
+            io_set_keyinput(r->nds->io, 0);
+            if (r->key_period == 0)
+                r->next_press = UINT64_MAX;
+            else
+                r->next_press += r->key_period;
+        }
+    } else if (runner_frame_index(r) >= r->next_press) {
+        io_set_keyinput(r->nds->io, (uint16_t)r->key_mask);
+        r->key_hold = 8;
+    }
+}
+
+/* 一次调度迭代：返回 0 表示没有后续硬件事件，无法继续推进。 */
+static int runner_step(runner_t *r)
+{
+    nds_t *nds = r->nds;
+    int was9 = r->a9_wait, was7 = r->a7_wait;
+
+    if (r->a9_wait && RUNNER_WAKE9_IO(nds->io)) {
+        r->a9_wait = 0;
+        r->cost9 = r->tm.now * 2;
+    }
+    if (r->a7_wait && RUNNER_WAKE7_IO(nds->io)) {
+        r->a7_wait = 0;
+        r->cost7 = r->tm.now;
+    }
+
+    if (r->a9_wait && r->a7_wait) {
+        uint64_t next = timing_next(&r->tm);
+        if (next == UINT64_MAX)
+            return 0;
+        timing_advance(&r->tm, next);
+        uint64_t delta = r->tm.now - r->last_now;
+        r->last_now = r->tm.now;
+        if (delta != 0) {
+            io_advance_timers(nds->io, 0, (uint32_t)delta);
+            io_advance_timers(nds->io, 1, (uint32_t)delta);
+        }
+        runner_keys(r);
+        return 1;
+    }
+
+    int step7;
+    if (r->a9_wait)
+        step7 = 1;
+    else if (r->a7_wait)
+        step7 = 0;
+    else
+        step7 = (r->cost9 / 2 > r->cost7);
+    if (step7) {
+        cpu_step(nds->cpu7);
+        r->a7_wait = (nds->cpu7->step_cycles == 0);
+        if (!r->a7_wait) r->cost7 += nds->cpu7->step_cycles;
+    } else {
+        cpu_step(nds->cpu);
+        r->a9_wait = (nds->cpu->step_cycles == 0);
+        if (!r->a9_wait) r->cost9 += nds->cpu->step_cycles;
+    }
+
+    uint64_t sys;
+    if (r->a9_wait)
+        sys = r->cost7;
+    else if (r->a7_wait)
+        sys = r->cost9 / 2;
+    else
+        sys = (r->cost9 / 2 < r->cost7) ? r->cost9 / 2 : r->cost7;
+    timing_advance(&r->tm, sys);
+    uint64_t delta = r->tm.now - r->last_now;
+    r->last_now = r->tm.now;
+    if (delta != 0) {
+        if (was9) io_advance_timers(nds->io, 0, (uint32_t)delta);
+        if (was7) io_advance_timers(nds->io, 1, (uint32_t)delta);
+    }
+    runner_keys(r);
+    return 1;
+}
+
+int runner_run_frame(runner_t *r)
+{
+    if (r == NULL)
+        return 0;
+    uint64_t target = runner_frame_index(r) + 1;
+    uint64_t guard = 0;
+    while (runner_frame_index(r) < target) {
+        if (!runner_step(r))
+            return 0;
+        /* 安全上限：正常情况下一个帧远低于该迭代数。 */
+        if (++guard > 50000000ull)
+            return 0;
+    }
+    return 1;
+}
+
+int runner_run_to_frame(runner_t *r, uint64_t target_frame)
+{
+    if (r == NULL)
+        return 0;
+    while (runner_frame_index(r) < target_frame) {
+        if (!runner_run_frame(r))
+            return 0;
+    }
+    return 1;
+}
+
 void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
                             const char *shot_path,
                             uint64_t key_frame, uint32_t key_mask,
@@ -209,6 +389,61 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
     }
     fflush(stdout);
     (void)shot_path;
+}
+
+void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
+                            uint64_t key_frame, uint32_t key_mask,
+                            uint64_t key_period)
+{
+    bus_set_diag(nds->bus, 1);
+    exec_set_trace(0);
+    thumb_set_trace(0);
+
+    runner_t *r = runner_create(nds);
+    if (r == NULL) {
+        printf("headless-frames: runner_create failed\n");
+        return;
+    }
+    runner_set_keys(r, key_frame, key_mask, key_period);
+    uint64_t start = runner_frame_index(r);
+    runner_run_to_frame(r, start + frames);
+
+    printf("headless-frames: done. frame=%llu now=%llu"
+           " | ARM9 PC=%08X cyc=%llu cpsr=%08X"
+           " | ARM7 PC=%08X cyc=%llu cpsr=%08X\n",
+           (unsigned long long)runner_frame_index(r),
+           (unsigned long long)runner_now(r),
+           nds->cpu->r[15], (unsigned long long)nds->cpu->cycles, nds->cpu->cpsr,
+           nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles,
+           nds->cpu7->cpsr);
+    uint64_t vram_nz = 0;
+    for (size_t vi = 0; vi < BUS_VRAM_SIZE; vi++)
+        if (nds->bus->vram[vi]) vram_nz++;
+    printf("headless-frames: summary vram-nz=%llu disp=%08X dispb=%08X"
+           " irq9=%d irq7=%d\n",
+           (unsigned long long)vram_nz,
+           bus_read32(nds->bus, 0x04000000u),
+           bus_read32(nds->bus, 0x04001000u),
+           nds->cpu->irq_hle.log_count, nds->cpu7->irq_hle.log_count);
+    if (shot_path != NULL) {
+        uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
+                                              * RENDER_SCREEN_H);
+        uint32_t *fb_bot = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
+                                              * RENDER_SCREEN_H);
+        if (fb_top != NULL && fb_bot != NULL) {
+            render_frame(nds->bus, fb_top, fb_bot);
+            if (save_bmp(shot_path, fb_top, fb_bot) == 0)
+                printf("headless-frames: screenshot saved to %s\n", shot_path);
+            else
+                printf("headless-frames: screenshot FAILED (%s)\n", shot_path);
+        } else {
+            printf("headless-frames: screenshot OOM\n");
+        }
+        free(fb_top);
+        free(fb_bot);
+    }
+    runner_destroy(r);
+    fflush(stdout);
 }
 
 /* 把两块 256×192 RGBA8888 帧缓冲纵向拼成一张 24 位 BMP（顶屏在上）。

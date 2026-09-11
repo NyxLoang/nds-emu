@@ -1322,3 +1322,28 @@ ARM7 PC=00001158、VRAM 非零 389114、DISPCNT=00161F10；Engine A 画面 OCR
 仍读出 `FINAL FANTASY …`（`fl £ ! E …`，花体字误读），Engine B 为配套画面。
 导出图：`build/title3_A_x2.png`、`build/title3_B_x2.png`。里程碑结论不变：
 hard_title 可达，输入 START 可离开标题；下一步继续做 gameplay/时序校准。
+
+### 21-B9wq（2026-09-06 代码/测试）：帧驱动 runner 接入窗口模式
+
+**问题**：窗口模式此前每帧只跑固定 8 条 CPU 指令再手动置 VBlank，游戏逻辑
+每帧只有个位数指令，实际无法正常游玩；headless 的事件驱动循环才是正确的
+周期/等待模型，但只存在于诊断入口。
+
+**修复**：
+
+- 新增持久化 `runner_t`：封装 timing 事件表（扫描线/VBlank）、ARM9/ARM7
+  周期成本、Halt/WFI 唤醒、等待期定时器补偿与脚本按键；窗口模式与
+  `--headless-frames N` 共用同一调度器；
+- `main.c` 主循环改为每帧 `runner_run_frame()`，不再手动 `io_set_vblank`；
+- 本工程目标加 `-O2`：300 帧从约 5.5s 降到约 2.9s；1700 帧（标题段）
+  约 93s，等价吞吐约 18fps（标题解码段最重），达到可交互量级。
+
+**验收命令（推荐）**：
+
+```
+build\nds-emu.exe "tools\rom_ascii.nds" --headless-frames 1700 --screenshot
+```
+
+期望输出：`frame=1700 ... vram-nz=389114 disp=00161F10`，截图上半为主引擎
+标题画面（OCR 可读出 FINAL FANTASY 花体字）。直接运行不带
+`--headless-frames` 即进入窗口模式，用模拟器主循环逐帧运行同一模型。

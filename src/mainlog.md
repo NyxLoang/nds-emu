@@ -151,3 +151,16 @@
   ARM9≈3680 次、ARM7≈3514 次中断，VBlank 没有整帧缺失。
 - 真 ROM 验证：标题段之后周期性按 START 能推进场景，输入链路在真实 ROM
   上可用；开场字幕比参考慢属周期成本模型问题，后续单独校准。
+
+## 2026-09-06 · 21-B9wq — 帧驱动 runner 接入窗口模式 + -O2
+
+- 新增持久化 `runner_t`（`runner_create/run_frame/run_to_frame/set_keys`）：
+  把事件驱动 headless 的扫描线/VBlank 事件、周期成本、Halt/WFI 唤醒和
+  定时器补偿封装成可复用调度器；`--headless-frames N` 与窗口模式共用。
+- `main.c` 窗口循环不再“每帧固定 8 条指令 + 手动 io_set_vblank”，改为
+  `runner_run_frame()` 每帧推进一个真实 VBlank 周期；输入/渲染路径不变。
+- CMake 给本工程三个目标加 `-O2`（第三方 SDL 不动）：300 帧 headless 从
+  约 5.5s 降到约 2.9s；1700 帧（到标题）约 93s，等价帧吞吐约 18fps
+  （早期帧更轻），窗口模式已达到可交互速度量级。
+- `--headless-frames 1700 --screenshot` 与旧 `--headless-cycles` 结果一致：
+  frame1700、ARM9 PC=02085604、ARM7=0x1158、VRAM 非零 389114。

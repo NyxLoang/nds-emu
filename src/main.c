@@ -93,6 +93,7 @@ int main(int argc, char *argv[])
     long headless_steps = 0;
     int headless_trace = 0;
     int headless_cycles = 0;
+    long headless_frames = 0;
     const char *headless_shot = NULL;
     uint64_t key_frame = 0;
     uint32_t key_mask = 0;
@@ -109,6 +110,8 @@ int main(int argc, char *argv[])
             headless_steps = wcstol(wargv[i + 1], NULL, 10);
             headless_cycles = 1;
         }
+        else if (wcscmp(wargv[i], L"--headless-frames") == 0 && i + 1 < wargc)
+            headless_frames = wcstol(wargv[i + 1], NULL, 10);
         else if (wcscmp(wargv[i], L"--key-frame") == 0 && i + 1 < wargc)
             key_frame = _wcstoui64(wargv[i + 1], NULL, 0);
         else if (wcscmp(wargv[i], L"--key-mask") == 0 && i + 1 < wargc)
@@ -128,6 +131,8 @@ int main(int argc, char *argv[])
             headless_steps = strtol(argv[i + 1], NULL, 10);
             headless_cycles = 1;
         }
+        else if (strcmp(argv[i], "--headless-frames") == 0 && i + 1 < argc)
+            headless_frames = strtol(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--key-frame") == 0 && i + 1 < argc)
             key_frame = strtoull(argv[i + 1], NULL, 0);
         else if (strcmp(argv[i], "--key-mask") == 0 && i + 1 < argc)
@@ -273,8 +278,12 @@ int main(int argc, char *argv[])
 #endif
 
     /* 阶段 21 bring-up：headless 模式下跑完 N 步即退出，不开窗口/音频 */
-    if (headless_steps > 0) {
-        if (headless_cycles)
+    if (headless_steps > 0 || headless_frames > 0) {
+        if (headless_frames > 0)
+            runner_headless_frames(nds, (uint64_t)headless_frames,
+                                   headless_shot,
+                                   key_frame, key_mask, key_period);
+        else if (headless_cycles)
             runner_headless_cycles(nds, (uint64_t)headless_steps,
                                    headless_trace, headless_shot,
                                    key_frame, key_mask, key_period);
@@ -329,8 +338,8 @@ int main(int argc, char *argv[])
     /* 阶段 4.6：默认 2× 缩放启动（菜单下拉可切回 1x/2x） */
     window_set_scale(2);
 
-    /* 每帧执行的 CPU 步数（阶段 3a 起固定 N 步；阶段 4 已能出图） */
-    const int steps_per_frame = 8;
+    /* 21-B9wq：持久化帧驱动调度器（与 headless 共用事件/周期成本模型） */
+    runner_t *frame_runner = runner_create(nds);
 
     /* 阶段 6：SDL 按键 → NDS 按键状态（pressed 位=1 表示按下，按下=0 是 NDS 读值）。
        映射见下方 switch；KEY_* 常量来自 io/key.h。 */
@@ -389,12 +398,8 @@ int main(int argc, char *argv[])
            阶段 8.4：双核按 ARM9:ARM7 = 2:1 交错调度（i%3==2 时跑 ARM7）。
            每 60 周期打一次状态，避免死循环时刷屏。 */
         if (nds->cpu != NULL && nds->cpu7 != NULL) {
-            for (int i = 0; i < steps_per_frame; i++) {
-                if (i % 3 == 2)
-                    cpu_step(nds->cpu7);
-                else
-                    cpu_step(nds->cpu);
-            }
+            if (frame_runner != NULL)
+                runner_run_frame(frame_runner);
             if (nds->cpu->cycles % 60u == 0) {
                 printf("cpu: frame done, ARM9 PC=%08X cycles=%llu | ARM7 PC=%08X cycles=%llu\n",
                        nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
@@ -402,10 +407,6 @@ int main(int argc, char *argv[])
                 fflush(stdout);
             }
         }
-
-        /* 阶段 6.3：指令计数近似产生 VBlank——每帧步数跑完即视为一帧结束。
-           真机是显示硬件自动置位，这里模拟同一件事。 */
-        io_set_vblank(nds->io);
 
         /* 阶段 6.4：最小 IRQ 检测（不进异常向量，仅观察挂起）。
            真机上这时 CPU 会被叫走跑 handler；本阶段只打印一次。 */
@@ -454,6 +455,7 @@ int main(int argc, char *argv[])
     menu_shutdown();
     audio_shutdown();
     window_shutdown();
+    runner_destroy(frame_runner);
     ppu_destroy(ppu);
     nds_destroy(nds);
     cart_free(cart);

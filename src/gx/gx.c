@@ -439,7 +439,10 @@ void gx_write32(gx_t *g, uint32_t addr, uint32_t val)
 void gx_reset(gx_t *g)
 {
     memset(g, 0, sizeof(*g));
-    g->gxstat = GXSTAT_FIFO_EMPTY;
+    /* 21-B9wy：参考核 GPU3D::Read32(0x04000600) 的读数里，
+       fifolevel==0 时同时置 bit25（不足半满）与 bit26（空）。游戏常靠 bit25
+       判断“还能往 FIFO 塞命令”，缺了它会一直等，显示列表永远发不出去。 */
+    g->gxstat = GXSTAT_FIFO_EMPTY | GXSTAT_FIFO_LESS_HALF;
     gx_mat_identity(g->proj);
     gx_mat_identity(g->pos);
     gx_mat_identity(g->tex);

@@ -3278,6 +3278,22 @@ static void test_rtc(nds_t *nds)
     CHECK_EQ("rcnt high byte", io_read8(nds->io, 0x04000135u, 1), 0xA5u);
 }
 
+/* ---- 21-B9wy 用例：GXSTAT 的 FIFO 状态位（bit25/26）----
+   参考核 GPU3D::Read32(0x04000600) 在 FIFO 空时同时置 bit25（不足半满）与
+   bit26（空）；游戏常靠 bit25 判断“还能不能往 FIFO 塞命令”。本地旧实现只有
+   bit26，GXSTAT 读数和参考不一致（0x84000000 vs 0x86000000）。 */
+static void test_gxstat_fifo_bits(nds_t *nds)
+{
+    uint32_t v = bus_read32(nds->bus, GX_GXSTAT);
+    CHECK_EQ("gxstat less-half", v & GXSTAT_FIFO_LESS_HALF, GXSTAT_FIFO_LESS_HALF);
+    CHECK_EQ("gxstat empty", v & GXSTAT_FIFO_EMPTY, GXSTAT_FIFO_EMPTY);
+
+    bus_write8(nds->bus, GX_GXSTAT + 3u, 0x80u);   /* FIFO IRQ 模式 = 2 */
+    v = bus_read32(nds->bus, GX_GXSTAT);
+    CHECK_EQ("gxstat irq mode", v & GXSTAT_IRQ_MODE, 0x80000000u);
+    CHECK_EQ("gxstat fifo bits kept", v & 0x06000000u, 0x06000000u);
+}
+
 /* ---- 21-B9ww 用例：ARM9 DMA 模式 7 = GX 命令 FIFO（显示列表 DMA）----
    真机显示列表不靠 CPU 逐字写端口，而是把主存里的列表用 DMA 送到
    0x04000400（目的地址固定）。本地旧实现只认立即模式与 VBlank/卡带触发，
@@ -5537,6 +5553,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_rtc(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wy] GXSTAT FIFO 状态位（bit25/26）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_gxstat_fifo_bits(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9wu] 无头模式 SPU 时间推进（单发通道清 start 位）\n");

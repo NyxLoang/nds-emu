@@ -175,8 +175,10 @@ int main(int argc, char *argv[])
     const char *headless_shot = NULL;
 #ifdef _WIN32
     const wchar_t *dump_prefix_w = NULL;
+    const wchar_t *shot_path_w = NULL;
 #else
     const char *dump_prefix = NULL;
+    const char *shot_path = NULL;
 #endif
     uint64_t key_frame = 0;
     uint32_t key_mask = 0;
@@ -189,6 +191,13 @@ int main(int argc, char *argv[])
             headless_trace = 1;
         else if (wcscmp(wargv[i], L"--screenshot") == 0)
             headless_shot = "headless_shot.bmp";
+        else if (wcscmp(wargv[i], L"--shot") == 0 && i + 1 < wargc) {
+            shot_path_w = wargv[i + 1];
+            /* 截图写入用窄路径（ASCII 路径可用）：宽→本地代码页转换 */
+            static char shot_buf[512];
+            WideCharToMultiByte(CP_ACP, 0, shot_path_w, -1, shot_buf, 512, NULL, NULL);
+            headless_shot = shot_buf;
+        }
         else if (wcscmp(wargv[i], L"--headless-cycles") == 0 && i + 1 < wargc) {
             headless_steps = wcstol(wargv[i + 1], NULL, 10);
             headless_cycles = 1;
@@ -212,6 +221,10 @@ int main(int argc, char *argv[])
             headless_trace = 1;
         else if (strcmp(argv[i], "--screenshot") == 0)
             headless_shot = "headless_shot.bmp";
+        else if (strcmp(argv[i], "--shot") == 0 && i + 1 < argc) {
+            shot_path = argv[i + 1];
+            headless_shot = shot_path;
+        }
         else if (strcmp(argv[i], "--headless-cycles") == 0 && i + 1 < argc) {
             headless_steps = strtol(argv[i + 1], NULL, 10);
             headless_cycles = 1;

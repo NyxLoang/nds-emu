@@ -77,3 +77,14 @@
 - `gx_t` 增加 `cmd_count / tri_count / fifo_writes / port_writes`：runner 摘要
   打印 `gx3d: fb-nz=... cmd=... tri=... fifo-wr=... port-wr=...`。
   排查「3D 段黑屏」时可直接看出游戏到底有没有提交几何命令、FIFO 通路是否为空。
+
+## 2026-09-12 · 21-B9wy — GXSTAT FIFO 状态位对齐参考核（bit25/26）
+
+- 参考核 `GPU3D::Read32(0x04000600)` 返回
+  `GXStat | (PosStackPtr<<8) | (ProjStackPtr<<13) | (fifolevel<<16) |
+   (fifolevel<128 ? 1<<25 : 0) | (fifolevel==0 ? 1<<26 : 0)`
+  ——FIFO 空时 **bit25 与 bit26 同时置位**。
+- 本地旧实现只置 bit26（`0x84000000`），与参考的 `0x86000000` 不一致；游戏若用
+  bit25 判断“FIFO 还有空间”就会一直等不到。现在 `gx_reset` 同时置位
+  `GXSTAT_FIFO_LESS_HALF | GXSTAT_FIFO_EMPTY`（同步执行模型下 FIFO 始终不满）。
+- 单测 `[case 21-B9wy]` 4 项：两个状态位存在、写 IRQ 模式后仍保留。

@@ -29,6 +29,7 @@
 #define DISP3D_UNDER_OVER  (1u << 12)
 
 /* GXSTAT 位 */
+#define GXSTAT_FIFO_LESS_HALF (1u << 25)  /* 21-B9wy：FIFO 不足半满（有空间收命令） */
 #define GXSTAT_FIFO_EMPTY  (1u << 26)
 #define GXSTAT_BUSY        (1u << 27)
 #define GXSTAT_IRQ_MODE    (3u << 30)

@@ -436,3 +436,12 @@
   切换并恢复 `bus->active_is_arm7`；DMA 完成中断也按属主核写 IF。
 - 新增 `[case 21-B9wu]`：故意把 `active_is_arm7` 污染成 ARM7 再触发 ARM9 的
   VBlank DMA，断言命令仍进 GX（`cmd_count` +2、`mt_mode=2`）且标志原样恢复。
+
+## 2026-09-12 · 21-B9wv — KEYINPUT 复位值（默认“全部松开”）
+
+- **证据**：`--dump` 的两核 IO 快照对照发现 `0x04000130` 本地读 0x00000000、
+  参考读 0x000003FF——本地 `keypad_t` 由 calloc 得到 0，被游戏读成「所有键都按住」
+  （START/A 一直按着）。修好后真 ROM 时间线整体后移约 200 帧、ARM9 在
+  frame1800-2000 落到与参考一致的卡带读循环 `0x020119xx`。
+- **修复**：新增 `key_reset()`（= `key_set_pressed(k, 0)`，低 12 位全 1、高 4 位全 1），
+  `io_create()` 里调用；单测 `[case 6.7]` 增加“复位后默认全松开”。

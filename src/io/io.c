@@ -13,6 +13,7 @@ io_t *io_create(void)
         power_reset(&io->power);   /* 直接启动初值：LCD/2D/3D/喇叭全开 */
         cartbus_init(&io->cartbus);
         gx_reset(&io->gx); /* 矩阵置单位阵 + 视口默认 + GXSTAT 置 FIFO 空 */
+        key_reset(&io->keypad); /* 21-B9wu：默认所有键松开（0 会被读成全按下） */
     }
     return io;
 }

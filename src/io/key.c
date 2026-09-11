@@ -17,3 +17,8 @@ void key_set_pressed(keypad_t *k, uint16_t pressed)
     /* NDS 约定：按下=0。低 12 位取反；高 4 位（bit12-15）恒为 1。 */
     k->input = (uint16_t)((~pressed) & 0x0FFFu) | 0xF000u;
 }
+
+void key_reset(keypad_t *k)
+{
+    key_set_pressed(k, 0);   /* 无按键：全部为“松开” */
+}

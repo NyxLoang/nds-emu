@@ -25,6 +25,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-12 | 21-B9wv（代码/测试） | IO/按键 | KEYINPUT 复位值修正（0=全按下 → 全松开）：游戏不再误判 START/A 一直按着，时间线与参考的卡带读循环对齐；866 项 0 失败 | [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9wu（代码/测试） | IO/音频/主循环 | DMA 按属主核分流 IO（ARM9 显示列表不再被当成音频写）+ 无头模式补推 SPU 时间 + `--dump` 现场导出与逐帧 IPC/IF 诊断：865 项 0 失败 | [io](src/io/iolog.md) 路 [snd](src/snd/sndlog.md) 路 [main](src/mainlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9ws（代码/测试） | BIOS/CPU/总线 | ARM7 FreeBIOS 低地址 Halt/调度路径参考级 HLE：SWI 分发器栈帧/模式、Halt+HALTCNT、IntrWait 软件标志、IRQ 0x1FB0/0x1FC0、SoftReset、WRAM 镜像与 BIOS 影子字节；860 项 0 失败 | [bios](src/bios/bioslog.md) 路 [cpu](src/cpu/cpulog.md) 路 [bus](src/bus/buslog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9wr（代码/测试） | IO/卡带/主循环 | KEYCNT 按键中断 + NDS7 卡带 DMA 触发模式 0x12 + 按键按帧保持：830 项 0 失败 | [io](src/io/iolog.md) 路 [main](src/mainlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

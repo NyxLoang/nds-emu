@@ -30,6 +30,10 @@ typedef struct keypad {
     uint16_t input;
 } keypad_t;
 
+/* 21-B9wu：复位为“所有键都松开”。calloc 出的 0 会被读成“所有键按住”，
+   游戏会以为 START/A 一直按着（FFXII 实测会跳过标题/影响开场流程）。 */
+void key_reset(keypad_t *k);
+
 uint8_t key_read8(const keypad_t *k, uint32_t addr);
 void key_write8(keypad_t *k, uint32_t addr, uint8_t val);
 

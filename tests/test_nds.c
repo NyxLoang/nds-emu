@@ -566,6 +566,11 @@ static void test_timers(nds_t *nds)
 /* ---- 6.6 用例：KEYINPUT 读写（按下=0） ---- */
 static void test_keyinput(nds_t *nds)
 {
+    /* 21-B9wv：复位后的默认值必须是“全部松开”。旧实现 calloc 出 0，
+       KEYINPUT 读成 0（= 所有键按住），游戏会以为 START/A 一直按着。 */
+    CHECK_EQ("keypad default released",
+             bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FFFu);
+
     /* 未按键：全部位为 1（含高 4 位恒 1） */
     io_set_keyinput(nds->io, 0x0000);
     CHECK_EQ("no key pressed", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FFFu);

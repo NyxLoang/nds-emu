@@ -185,7 +185,8 @@
 ## 2026-09-12 · 21-B9wu — `--dump` 现场导出 + 逐帧诊断行扩充
 
 - `--dump <前缀>`：headless 结束后导出 `mainram / arm7wram / sharedwram /
-  vram / itcm / dtcm` 六份原始镜像，便于和参考 harness 的
+  vram / itcm / dtcm` 六份原始镜像，以及两核视角的 IO 寄存器快照
+  `_io9.bin / _io7.bin`（0x04000000-0x04000FFF，各 4KB），便于和参考 harness 的
   `ref_fNNN_*.bin` 逐字节 diff（本步就是靠它确认 ITCM 完全一致、DTCM 只差栈帧）。
 - `--headless-frames` 每 100 帧的进度行补 `if9/if7`、IPC `cnt=..`、FIFO 深度、
   GX 命令/三角形计数；结束摘要补 `gx3d:` 一行（3D 帧缓冲非零像素、GXSTAT、

@@ -121,6 +121,33 @@ static void dump_state(const nds_t *nds,
         }
 #endif
     }
+    /* 21-B9wu：两核视角的 IO 寄存器快照（0x04000000-0x04000FFF），
+       与参考核 ARM9IORead 的 dump 对照，用于定位“同一阶段硬件状态不同”。 */
+    {
+        static uint32_t io9[0x400], io7[0x400];
+        for (uint32_t i = 0; i < 0x400u; i++) {
+            nds->bus->active_is_arm7 = 0;
+            io9[i] = bus_read32(nds->bus, 0x04000000u + i * 4u);
+            nds->bus->active_is_arm7 = 1;
+            io7[i] = bus_read32(nds->bus, 0x04000000u + i * 4u);
+        }
+        nds->bus->active_is_arm7 = 0;
+#ifdef _WIN32
+        wchar_t p9[512], p7[512];
+        _snwprintf(p9, 512, L"%ls_io9.bin", prefix);
+        _snwprintf(p7, 512, L"%ls_io7.bin", prefix);
+        FILE *f9 = _wfopen(p9, L"wb");
+        FILE *f7 = _wfopen(p7, L"wb");
+#else
+        char p9[512], p7[512];
+        snprintf(p9, sizeof p9, "%s_io9.bin", prefix);
+        snprintf(p7, sizeof p7, "%s_io7.bin", prefix);
+        FILE *f9 = fopen(p9, "wb");
+        FILE *f7 = fopen(p7, "wb");
+#endif
+        if (f9) { fwrite(io9, 1, sizeof io9, f9); fclose(f9); }
+        if (f7) { fwrite(io7, 1, sizeof io7, f7); fclose(f7); }
+    }
 }
 
 int main(int argc, char *argv[])

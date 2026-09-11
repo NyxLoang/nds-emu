@@ -1314,3 +1314,11 @@ headless 在单核/双核等待造成时间跳跃时，给等待核补上同样�
 同一步数（13 亿步）下字幕页从 frame≈1475 提前到 frame≈1380（约 5-6%），
 ARM7 仍稳定 0x1158。剩余的字幕/过场偏慢来自尚未完成的逐类指令多周期成本
 模型，后续继续。
+
+### 21-B9wp（2026-09-06 验证）：定时器修正后标题复测
+
+重新运行 `--headless-cycles 1650000000 --screenshot`：终点 frame=1683、
+ARM7 PC=00001158、VRAM 非零 389114、DISPCNT=00161F10；Engine A 画面 OCR
+仍读出 `FINAL FANTASY …`（`fl £ ! E …`，花体字误读），Engine B 为配套画面。
+导出图：`build/title3_A_x2.png`、`build/title3_B_x2.png`。里程碑结论不变：
+hard_title 可达，输入 START 可离开标题；下一步继续做 gameplay/时序校准。

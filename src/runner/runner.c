@@ -63,6 +63,13 @@ struct runner {
 #define RUNNER_WAKE7_IO(io_) (((io_)->irq[1].ie & (io_)->irq[1].ifl) != 0)
 #define RUNNER_WAKE9_IO(io_) irq_pending(&(io_)->irq[0])
 
+/* 21-B9wz 诊断：整段运行的 ARM9 累积热点（hot9: 前 16 + 占比 + 总数）。
+   和参考核的 ins9/hist9 对照用：两边热点集合一致说明代码路径相同，
+   差异只可能在时序/外设状态。 */
+static uint32_t s_h9_pc[1 << 16];
+static uint64_t s_h9_cnt[1 << 16];
+static uint64_t s_h9_total;
+
 runner_t *runner_create(nds_t *nds)
 {
     if (nds == NULL)
@@ -183,6 +190,13 @@ static int runner_step(runner_t *r)
         cpu_step(nds->cpu);
         r->a9_wait = (nds->cpu->step_cycles == 0);
         if (!r->a9_wait) r->cost9 += nds->cpu->step_cycles;
+        {
+            uint32_t pc = nds->cpu->r[15];
+            uint32_t h = (pc >> 4) & 0xFFFFu;
+            s_h9_pc[h] = pc;
+            s_h9_cnt[h]++;
+            s_h9_total++;
+        }
     }
 
     uint64_t sys;
@@ -473,6 +487,19 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     {
         extern unsigned long long g_rtc_reads;
         printf("io: rtc-reads=%llu\n", g_rtc_reads);
+        /* 21-B9wz：ARM9 累积热点前 16（含占比） */
+        for (int hi = 0; hi < 16; hi++) {
+            uint32_t best = 0, bh = 0;
+            for (uint32_t h = 0; h < (1u << 16); h++)
+                if (s_h9_cnt[h] > best) { best = (uint32_t)s_h9_cnt[h]; bh = h; }
+            if (best == 0)
+                break;
+            printf("hot9: pc=%08X cnt=%llu (%.1f%%)\n", s_h9_pc[bh],
+                   (unsigned long long)s_h9_cnt[bh],
+                   s_h9_total ? 100.0 * (double)s_h9_cnt[bh] / (double)s_h9_total : 0.0);
+            s_h9_cnt[bh] = 0;
+        }
+        printf("hot9: total=%llu\n", (unsigned long long)s_h9_total);
         const uint16_t *g3 = gx_framebuffer(&nds->io->gx);
         size_t n3 = 0;
         for (size_t i = 0; i < (size_t)GX_SCREEN_W * GX_SCREEN_H; i++)

@@ -54,6 +54,7 @@ int audio_init(nds_t *nds)
         return -1;
     }
     SDL_PauseAudioDevice(g_audio_dev, 0); /* 开播 */
+    snd_set_host_render_active(1);        /* 21-B9wu：回调负责推进 SPU */
     printf("audio: device opened %d Hz, %d ch, format=%d\n",
            have.freq, have.channels, have.format);
     fflush(stdout);
@@ -66,5 +67,6 @@ void audio_shutdown(void)
         SDL_CloseAudioDevice(g_audio_dev);
         g_audio_dev = 0;
     }
+    snd_set_host_render_active(0);
     g_audio_nds = NULL;
 }

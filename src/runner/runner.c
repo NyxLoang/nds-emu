@@ -8,6 +8,7 @@
 #include "cpu/thumb.h"    /* thumb_set_trace */
 #include "io/io.h"        /* io_set_vblank */
 #include "ppu/render.h"   /* render_frame：双屏纯软件出图 */
+#include "snd/snd.h"      /* snd_advance / snd_host_render_active（21-B9wu） */
 #include "runner.h"
 #include "timing/timing.h"
 
@@ -54,6 +55,7 @@ struct runner {
     uint32_t key_mask;
     int key_down;
     uint64_t key_release_frame;
+    uint64_t snd_done;        /* 21-B9wu：已推进的音频样本数（无头模式补推用） */
 };
 
 #define RUNNER_WAKE7_IO(io_) (((io_)->irq[1].ie & (io_)->irq[1].ifl) != 0)
@@ -212,6 +214,19 @@ int runner_run_frame(runner_t *r)
         if (++guard > 50000000ull)
             return 0;
     }
+    /* 21-B9wu：把这一帧的音频时间补给 SPU。NDS 的 32768Hz = 33.51MHz/1024，
+       无头模式没有 SDL 回调，不补的话游戏轮询 SOUNDxCNT 播放状态会死等
+       （FFXII 开场 ARM7 就卡在这种轮询上）。 */
+    if (!snd_host_render_active()) {
+        uint64_t want = r->tm.now / 1024ull;
+        if (want > r->snd_done) {
+            uint64_t delta = want - r->snd_done;
+            if (delta > 4096ull)
+                delta = 4096ull;
+            snd_advance(&r->nds->io->snd, r->nds->bus, (uint32_t)delta);
+            r->snd_done = want;
+        }
+    }
     return 1;
 }
 
@@ -364,7 +379,7 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
            nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
            nds->cpu->cpsr,
            nds->cpu7->r[15], (unsigned long long)nds->cpu7->cycles,
-           nds->cpu7->cpsr);
+          nds->cpu7->cpsr);
     uint64_t vram_nz = 0;
     for (size_t vi = 0; vi < BUS_VRAM_SIZE; vi++)
         if (nds->bus->vram[vi]) vram_nz++;
@@ -417,9 +432,14 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             break;
         uint64_t fr = runner_frame_index(r);
         if ((fr % 100) == 0) {
-            printf("headless-frames: f=%llu ARM9=%08X ARM7=%08X disp=%08X\n",
+            printf("headless-frames: f=%llu ARM9=%08X ARM7=%08X disp=%08X"
+                   " if9=%08X if7=%08X cnt=%04X/%04X fifo=%d/%d gx=%u tri=%u\n",
                    (unsigned long long)fr, nds->cpu->r[15],
-                   nds->cpu7->r[15], bus_read32(nds->bus, 0x04000000u));
+                   nds->cpu7->r[15], bus_read32(nds->bus, 0x04000000u),
+                   nds->io->irq[0].ifl, nds->io->irq[1].ifl,
+                   nds->io->fifo.cnt9, nds->io->fifo.cnt7,
+                   nds->io->fifo.from7.count, nds->io->fifo.from9.count,
+                   nds->io->gx.cmd_count, nds->io->gx.tri_count);
             fflush(stdout);
         }
     }
@@ -435,6 +455,18 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     uint64_t vram_nz = 0;
     for (size_t vi = 0; vi < BUS_VRAM_SIZE; vi++)
         if (nds->bus->vram[vi]) vram_nz++;
+    /* 21-B9wu：3D 引擎状态摘要（3D 场景是否真的出图） */
+    {
+        const uint16_t *g3 = gx_framebuffer(&nds->io->gx);
+        size_t n3 = 0;
+        for (size_t i = 0; i < (size_t)GX_SCREEN_W * GX_SCREEN_H; i++)
+            if (g3[i] != 0) n3++;
+        printf("gx3d: fb-nz=%zu gxstat=%08X disp3dcnt=%08X cmd=%u tri=%u"
+               " fifo-wr=%u port-wr=%u\n",
+               n3, nds->io->gx.gxstat, nds->io->gx.disp3dcnt,
+               nds->io->gx.cmd_count, nds->io->gx.tri_count,
+               nds->io->gx.fifo_writes, nds->io->gx.port_writes);
+    }
     printf("headless-frames: summary vram-nz=%llu disp=%08X dispb=%08X"
            " irq9=%d irq7=%d\n",
            (unsigned long long)vram_nz,

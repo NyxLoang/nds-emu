@@ -54,10 +54,11 @@ uint8_t dma_read8(const dma_t *dma, uint32_t addr);
 
 /* 写寄存器；若写到某通道 CNT_H 高字节且使能位置位、模式=立即，则同步执行拷贝。
    bus 用于搬运（源/目的可能落在 Main RAM / VRAM / IO / 卡带 CARD_DATA 任意区间）。 */
-void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus);
+void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus,
+                int is_arm7);
 
 /* 触发指定触发模式（VBlank/卡带等）的所有已使能通道。立即模式不在此触发。 */
-void dma_fire(dma_t *dma, struct bus *bus, int start_mode);
+void dma_fire(dma_t *dma, struct bus *bus, int start_mode, int is_arm7);
 
 /* 卡带 DRQ 触发（按核区分语义：ARM9 模式 5，ARM7 模式 = bits13-12|0x10）。 */
 void dma_fire_card(dma_t *dma, struct bus *bus, int is_arm7);

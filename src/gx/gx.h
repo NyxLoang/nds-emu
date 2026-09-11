@@ -93,6 +93,11 @@ typedef struct gx {
 
     /* 当前顶点属性 */
     uint32_t color;      /* 0x20 COLOR */
+    /* 诊断计数（21-B9wu）：命令数 / 光栅化三角形数 / FIFO 与命令端口写入次数 */
+    uint32_t cmd_count;
+    uint32_t tri_count;
+    uint32_t fifo_writes;
+    uint32_t port_writes;
     int32_t tc_s, tc_t;  /* 0x22 TEXCOORD（1.3.12） */
     int32_t px, py, pz;  /* 上一顶点位置（1.3.12） */
 

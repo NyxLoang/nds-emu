@@ -71,3 +71,9 @@
   本地 IF9 一直缺参考里的 0x200000。
 - `gx_write8` 支持 0x04000603 写模式、0x04000601 bit7 清栈标志；
   io 层在 GX 写后同步 IF21（简化：FIFO 同步执行，空即触发）。
+
+## 2026-09-12 · 21-B9wu — 运行计数（命令/三角形/FIFO/端口）
+
+- `gx_t` 增加 `cmd_count / tri_count / fifo_writes / port_writes`：runner 摘要
+  打印 `gx3d: fb-nz=... cmd=... tri=... fifo-wr=... port-wr=...`。
+  排查「3D 段黑屏」时可直接看出游戏到底有没有提交几何命令、FIFO 通路是否为空。

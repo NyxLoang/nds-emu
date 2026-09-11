@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdio.h>
 #include "gx.h"
 
 /* 阶段 19：NDS 3D 几何引擎最小实现。
@@ -72,6 +73,7 @@ static void gx_flush(gx_t *g)
 
 static void gx_enqueue(gx_t *g, uint8_t cmd)
 {
+    g->cmd_count++;
     int n = gx_cmd_nparams(cmd);
     if (g_q_len >= GX_QUEUE_CAP)
         return; /* 队列满：丢弃（正常流程不会发生） */
@@ -228,6 +230,7 @@ static void gx_submit_vertex(gx_t *g, int32_t x, int32_t y, int32_t z)
 static void gx_raster_vert_tri(gx_t *g, const gx_vertex_t *a, const gx_vertex_t *b, const gx_vertex_t *c)
 {
     gx_raster_tri(g, a->sx, a->sy, b->sx, b->sy, c->sx, c->sy, a->color);
+    g->tri_count++;
 }
 
 static void gx_emit_prims(gx_t *g)
@@ -412,6 +415,7 @@ void gx_write8(gx_t *g, uint32_t addr, uint8_t val)
 void gx_write32(gx_t *g, uint32_t addr, uint32_t val)
 {
     if (addr >= GX_GXFIFO && addr < GX_GXFIFO_END) {
+        g->fifo_writes++;
         if (g_pending == 0) {
             /* 命令字：低 4 字节各一条命令（0=NOP） */
             for (int i = 0; i < 4; i++) {
@@ -424,6 +428,7 @@ void gx_write32(gx_t *g, uint32_t addr, uint32_t val)
             gx_feed_param(g, (int32_t)val);
         }
     } else if (addr >= GX_CMD_PORT_BASE && addr < GX_CMD_PORT_END) {
+        g->port_writes++;
         /* 命令端口：地址低字节编码命令码，写入值是该命令的唯一参数 */
         uint8_t cmd = (uint8_t)((addr - GX_GXFIFO) >> 2);
         gx_enqueue(g, cmd);

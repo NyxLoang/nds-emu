@@ -41,20 +41,20 @@ static uint32_t dma_advance(uint32_t a, int mode, uint32_t step)
 
 /* DMA 完成中断（21-B9p）：搬完且 CNT bit14(IRQ) 置位时，把当前核 IF 的
    bit8+通道 置 1（真机 DMA0-3 完成中断 = IF bit8-11）。 */
-static void dma_irq_done(const dma_channel_t *dma, struct bus *bus, int ch)
+static void dma_irq_done(const dma_channel_t *dma, struct bus *bus, int ch,
+                         int is_arm7)
 {
     if (bus == NULL || bus->io == NULL)
         return;
     if ((dma->cnt_h & DMA_CNT_IRQ) == 0)
         return;
-    int idx = bus->active_is_arm7 ? 1 : 0;
-    bus->io->irq[idx].ifl |= (uint32_t)(1u << (8 + ch));
+    bus->io->irq[is_arm7 ? 1 : 0].ifl |= (uint32_t)(1u << (8 + ch));
 }
 
 /* 执行一次拷贝：把 N 个字/半字从源搬到目的。
    源/目的地址控制按增/减/固定处理；搬运走 bus_read/write，源可落在卡带 CARD_DATA。
    非重复搬运搬完自动清使能（真机同款行为）；重复模式保持使能，每次触发都重搬同一块。 */
-static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch)
+static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm7)
 {
     uint32_t n = dma->cnt_l != 0 ? dma->cnt_l : 0x4000u; /* 0 按 GBA/NDS 惯例=0x4000 */
     int is32 = (dma->cnt_h & DMA_CNT_32BIT) != 0;
@@ -64,6 +64,12 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch)
     int src_mode = (dma->cnt_h >> 7) & 3u; /* CNT bit23-24 */
     int dst_mode = (dma->cnt_h >> 5) & 3u; /* CNT bit21-22 */
 
+    /* 21-B9wu：搬运期间把「当前访问者」切到 DMA 属主核。总线按 active_is_arm7
+       分流 IO：0x04000400 在 ARM9 视角是 GX 命令 FIFO、ARM7 视角是音频寄存器；
+       IME/IE/IF 也是两套。不切换的话 ARM9 的显示列表 DMA 会被当成 ARM7 的音频写，
+       GX 收不到几何命令（3D 画面全黑），DMA 完成中断也会挂到错的核心。 */
+    int prev_arm7 = bus->active_is_arm7;
+    bus->active_is_arm7 = is_arm7;
     for (uint32_t i = 0; i < n; i++) {
         /* 21-B9zb: DMA 从 CARD_DATA 取数时按卡带就绪时钟等待 */
         if (src == BUS_CARD_DATA && bus != NULL && bus->io != NULL)
@@ -76,12 +82,14 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch)
         dst = dma_advance(dst, dst_mode, step);
     }
 
+    bus->active_is_arm7 = prev_arm7;
     if ((dma->cnt_h & DMA_CNT_REPEAT) == 0)
         dma->cnt_h &= (uint16_t)~DMA_CNT_ENABLE;
-    dma_irq_done(dma, bus, ch);
+    dma_irq_done(dma, bus, ch, is_arm7);
 }
 
-void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus)
+void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus,
+                int is_arm7)
 {
     dma_channel_t *d = &dma->ch[ch_index(addr)];
     uint32_t off = ch_off(addr);
@@ -100,11 +108,11 @@ void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus)
         /* 触发条件：写 CNT_H 高字节（含使能位）且使能位置位、模式=立即 */
         if (off == 11 && (d->cnt_h & DMA_CNT_ENABLE) != 0 &&
             ((d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT) == DMA_START_IMMED)
-            dma_transfer(d, bus, (int)ch_index(addr));
+            dma_transfer(d, bus, (int)ch_index(addr), is_arm7);
     }
 }
 
-void dma_fire(dma_t *dma, struct bus *bus, int start_mode)
+void dma_fire(dma_t *dma, struct bus *bus, int start_mode, int is_arm7)
 {
     for (int c = 0; c < IO_DMA_COUNT; c++) {
         dma_channel_t *d = &dma->ch[c];
@@ -112,7 +120,7 @@ void dma_fire(dma_t *dma, struct bus *bus, int start_mode)
             continue;
         if (((d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT) != start_mode)
             continue;
-        dma_transfer(d, bus, c);
+        dma_transfer(d, bus, c, is_arm7);
     }
 }
 
@@ -129,6 +137,6 @@ void dma_fire_card(dma_t *dma, struct bus *bus, int is_arm7)
             : (((unsigned)d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT);
         if ((is_arm7 && mode == DMA_START_CARD7) ||
             (!is_arm7 && mode == DMA_START_CARD))
-            dma_transfer(d, bus, c);
+            dma_transfer(d, bus, c, is_arm7);
     }
 }

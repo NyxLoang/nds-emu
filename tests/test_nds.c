@@ -3178,6 +3178,77 @@ static void test_bios7_low_halt_irq(nds_t *nds)
     exec_set_trace(1);
 }
 
+/* ---- 21-B9wu 用例：DMA 搬运期间按属主核分流 IO ----
+   真机 0x04000400 在 ARM9 视角是 GX 命令 FIFO、在 ARM7 视角是音频通道寄存器。
+   本地旧实现搬运时不切 bus->active_is_arm7，若上一步恰好是 ARM7，ARM9 的显示
+   列表 DMA 会被当成音频写丢掉（3D 画面全黑）。 */
+static void test_dma_owner_routing(nds_t *nds)
+{
+    const uint32_t src = 0x02004000u;
+    const uint32_t dma0 = IO_DMA0_BASE;
+
+    /* 两条 GX 命令字：MTX_MODE(0x10)+参数、MTX_IDENTITY(0x15) */
+    bus_write32(nds->bus, src + 0, 0x00000010u);
+    bus_write32(nds->bus, src + 4, 0x00000002u);   /* 参数：position 矩阵 */
+    bus_write32(nds->bus, src + 8, 0x00000015u);
+    bus_write32(nds->bus, src + 12, 0x00000000u);
+    nds->io->gx.mt_mode = 0xAAu;                   /* 记号值 */
+    uint32_t cmds_before = nds->io->gx.cmd_count;
+
+    /* ARM9 的 DMA0：源=RAM、目的=GXFIFO、VBlank 触发、4 字 */
+    nds->bus->active_is_arm7 = 0;
+    bus_write32(nds->bus, dma0 + 0, src);
+    bus_write32(nds->bus, dma0 + 4, 0x04000400u);
+    bus_write16(nds->bus, dma0 + 8, 4u);
+    bus_write16(nds->bus, dma0 + 10,
+                DMA_CNT_32BIT | (DMA_START_VBLANK << DMA_CNT_MODE_SHIFT)
+                | DMA_CNT_ENABLE);
+
+    /* 关键：搬运前把「当前访问者」污染成 ARM7（模拟上一步来自 ARM7） */
+    nds->bus->active_is_arm7 = 1;
+    dma_fire(&nds->io->dma[0], nds->bus, DMA_START_VBLANK, 0);
+    CHECK_EQ("dma gx cmds", nds->io->gx.cmd_count - cmds_before, 2u);
+    CHECK_EQ("dma gx mt_mode", nds->io->gx.mt_mode, 2u);
+    CHECK_EQ("dma restores core flag", nds->bus->active_is_arm7, 1); /* 原样恢复 */
+    nds->bus->active_is_arm7 = 0;
+}
+
+/* ---- 21-B9wu 用例：无头模式按帧推进 SPU，单发通道到末尾清 start 位 ----
+   FFXII 开场 ARM7 会轮询声音通道的播放状态；无头模式没有 SDL 回调推进
+   混音器，旧实现里通道永远“播不完”，游戏就卡在轮询里。 */
+static void test_snd_advance_headless(nds_t *nds)
+{
+    const uint32_t ch0 = SND_BASE;
+    uint8_t wave[32];
+    for (size_t i = 0; i < sizeof wave; i++)
+        wave[i] = (uint8_t)(0x80 + i);
+    for (size_t i = 0; i < sizeof wave; i++)
+        bus_write8(nds->bus, 0x02005000u + (uint32_t)i, wave[i]);
+
+    nds->bus->active_is_arm7 = 1;                  /* 声音寄存器走 ARM7 视角 */
+    bus_write16(nds->bus, SND_SOUNDCNT, 0x8000u);  /* SOUNDCNT bit15：主输出开 */
+    bus_write32(nds->bus, ch0 + 0x00, 0x02005000u);/* SOUND0SAD */
+    bus_write16(nds->bus, ch0 + 0x04, 0);          /* SOUND0TMR=0 → 65536 */
+    bus_write16(nds->bus, ch0 + 0x08, 0);          /* SOUND0PNT */
+    bus_write32(nds->bus, ch0 + 0x0C, 4u);         /* SOUND0LEN = 4 单元 */
+    bus_write32(nds->bus, ch0 + 0x00, 0x02005000u);
+    uint32_t cnt = (uint32_t)SND_FORMAT_PCM8 << SNDCNT_FORMAT_SHIFT;
+    cnt |= (uint32_t)SND_REPEAT_ONESHOT << SNDCNT_REPEAT_SHIFT;
+    cnt |= 0x7Fu;                                  /* 音量 127 */
+    cnt |= 64u << SNDCNT_PAN_SHIFT;
+    cnt |= SNDCNT_START;
+    bus_write32(nds->bus, ch0 + 0x00, 0x02005000u);/* 重新写 SAD（写 CNT 前） */
+    nds->io->snd.ch[0].sad = 0x02005000u;
+    nds->io->snd.ch[0].cnt = cnt;
+    CHECK_EQ("snd starts busy", (nds->io->snd.ch[0].cnt & SNDCNT_START) != 0, 1);
+
+    /* 一帧 ≈ 547 样本；4 个 PCM8 单元 = 16 字节 ≈ 1024 样本 → 两帧内播完 */
+    snd_advance(&nds->io->snd, nds->bus, 2048);
+    CHECK_EQ("snd one-shot cleared start",
+             (nds->io->snd.ch[0].cnt & SNDCNT_START) != 0, 0);
+    nds->bus->active_is_arm7 = 0;
+}
+
 /* ---- 11.7 用例：综合（LZ77 解压到 VRAM + Div + Sqrt 串行） ---- */
 static void test_stage11_integration(nds_t *nds)
 {
@@ -5354,6 +5425,20 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_bios7_low_halt_irq(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wu] DMA 按属主核分流 IO（ARM9 显示列表 → GXFIFO）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_dma_owner_routing(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wu] 无头模式 SPU 时间推进（单发通道清 start 位）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_snd_advance_headless(nds);
         nds_destroy(nds);
     }
     printf("\n[case 11.7] 综合（LZ77 解压 + Div + Sqrt 串行）\n");

@@ -72,6 +72,57 @@ static void direct_boot_tables(cart_t *cart, bus_t *bus)
     printf("boot : direct-boot tables @ 027FFxxx written\n");
 }
 
+/* 21-B9wt：bring-up 内存转储（`--dump <前缀>`）。
+   把两核可见的物理内存整体写盘，便于和参考核 harness 的
+   `ref_fNNN_*.bin` 做逐字节 diff，定位「本地停住、参考继续」这类分歧。
+   结构：<前缀>_mainram.bin / _arm7wram.bin / _sharedwram.bin / _vram.bin /
+   _itcm.bin / _dtcm.bin。 */
+typedef struct dump_part {
+    const char *name;
+    const uint8_t *data;
+    size_t size;
+} dump_part_t;
+
+static void dump_state(const nds_t *nds, 
+#ifdef _WIN32
+                       const wchar_t *prefix
+#else
+                       const char *prefix
+#endif
+                       )
+{
+    dump_part_t parts[] = {
+        { "mainram",    nds->bus->main_ram,    BUS_MAIN_RAM_SIZE },
+        { "arm7wram",   nds->bus->arm7_wram,   BUS_ARM7_WRAM_SIZE },
+        { "sharedwram", nds->bus->shared_wram, BUS_SHARED_WRAM_SIZE },
+        { "vram",       nds->bus->vram,        BUS_VRAM_SIZE },
+        { "itcm",       nds->bus->arm9_itcm,   BUS_ARM9_ITCM_SIZE },
+        { "dtcm",       nds->bus->arm9_dtcm,   BUS_ARM9_DTCM_SIZE },
+    };
+    for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) {
+        FILE *f = NULL;
+#ifdef _WIN32
+        wchar_t path[512];
+        _snwprintf(path, 512, L"%ls_%hs.bin", prefix, parts[i].name);
+        f = _wfopen(path, L"wb");
+        if (f != NULL) {
+            fwrite(parts[i].data, 1, parts[i].size, f);
+            fclose(f);
+            printf("dump : %ls (%zu bytes)\n", path, parts[i].size);
+        }
+#else
+        char path[512];
+        snprintf(path, sizeof path, "%s_%s.bin", prefix, parts[i].name);
+        f = fopen(path, "wb");
+        if (f != NULL) {
+            fwrite(parts[i].data, 1, parts[i].size, f);
+            fclose(f);
+            printf("dump : %s (%zu bytes)\n", path, parts[i].size);
+        }
+#endif
+    }
+}
+
 int main(int argc, char *argv[])
 {
     (void)argc;
@@ -95,6 +146,11 @@ int main(int argc, char *argv[])
     int headless_cycles = 0;
     long headless_frames = 0;
     const char *headless_shot = NULL;
+#ifdef _WIN32
+    const wchar_t *dump_prefix_w = NULL;
+#else
+    const char *dump_prefix = NULL;
+#endif
     uint64_t key_frame = 0;
     uint32_t key_mask = 0;
     uint64_t key_period = 0;
@@ -118,6 +174,8 @@ int main(int argc, char *argv[])
             key_mask = (uint32_t)wcstoul(wargv[i + 1], NULL, 0);
         else if (wcscmp(wargv[i], L"--key-period") == 0 && i + 1 < wargc)
             key_period = _wcstoui64(wargv[i + 1], NULL, 0);
+        else if (wcscmp(wargv[i], L"--dump") == 0 && i + 1 < wargc)
+            dump_prefix_w = wargv[i + 1];
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -139,6 +197,8 @@ int main(int argc, char *argv[])
             key_mask = (uint32_t)strtoul(argv[i + 1], NULL, 0);
         else if (strcmp(argv[i], "--key-period") == 0 && i + 1 < argc)
             key_period = strtoull(argv[i + 1], NULL, 0);
+        else if (strcmp(argv[i], "--dump") == 0 && i + 1 < argc)
+            dump_prefix = argv[i + 1];
     }
 #endif
 
@@ -295,6 +355,13 @@ int main(int argc, char *argv[])
         else
             runner_headless(nds, (uint64_t)headless_steps, headless_trace,
                             headless_shot);
+#ifdef _WIN32
+        if (dump_prefix_w != NULL)
+            dump_state(nds, dump_prefix_w);
+#else
+        if (dump_prefix != NULL)
+            dump_state(nds, dump_prefix);
+#endif
         if (save_path != NULL)
             free(save_path);
         cart_free(cart);

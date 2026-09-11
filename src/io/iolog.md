@@ -425,3 +425,14 @@
   （ARM7 唤醒不看 IME）。
 - BIOS 的 SWI 6 Halt / SWI 7 Stop / CustomHaltPost 与游戏直接写 HALTCNT
   走同一条路径（`power_halt_request`）。
+
+## 2026-09-12 · 21-B9wu — DMA 搬运期间按属主核分流 IO
+
+- **证据**：FFXII 进 3D 段后 GX 只收到寄存器设置类命令、一条顶点命令都没有；
+  追踪发现 ARM9 写 `0x04000400` 被总线当成「ARM7 视角」（=音频通道寄存器）。
+  `dma_transfer()` 走 `bus_read/write`，但搬运期间没有设置 `active_is_arm7`，
+  沿用了上一步 CPU 留下的值——ARM9 的显示列表 DMA 就这样被写进音频寄存器丢掉。
+- **修复**：`dma_transfer/dma_write8/dma_fire` 增加 `is_arm7` 参数，搬运前后
+  切换并恢复 `bus->active_is_arm7`；DMA 完成中断也按属主核写 IF。
+- 新增 `[case 21-B9wu]`：故意把 `active_is_arm7` 污染成 ARM7 再触发 ARM9 的
+  VBlank DMA，断言命令仍进 GX（`cmd_count` +2、`mt_mode=2`）且标志原样恢复。

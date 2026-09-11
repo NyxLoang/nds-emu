@@ -79,4 +79,14 @@ void snd_write8(snd_t *s, uint32_t addr, uint8_t val);
    bus 用于按 SAD 读波形数据；可为 NULL（此时 PCM/ADPCM 读 0）。 */
 void snd_render(snd_t *s, const struct bus *bus, int16_t *out_l, int16_t *out_r, int n);
 
+/* 21-B9wu：按“经过的样本数”推进通道状态（游标推进、单发到末尾清 start 位）。
+   窗口模式有声卡时由 SDL 回调按实时速率调用 snd_render；无头模式（或声卡打开
+   失败）没有回调，游戏若轮询 SOUNDxCNT 的播放状态就会永远等不到“播放结束”。
+   runner 每帧用本函数把这一段时间补上。 */
+void snd_advance(snd_t *s, const struct bus *bus, uint32_t samples);
+
+/* 宿主侧是否已在按实时速率渲染（SDL 回调）；是则 runner 不再重复推进。 */
+void snd_set_host_render_active(int active);
+int  snd_host_render_active(void);
+
 #endif /* NDS_EMU_SND_H */

@@ -210,6 +210,32 @@ static int32_t snd_arith_div(int32_t v, int shift)
     return -((-v) >> shift);
 }
 
+/* 宿主侧渲染标志（audio.c 打开 SDL 设备时置 1）。 */
+static int s_host_render_active;
+
+void snd_set_host_render_active(int active)
+{
+    s_host_render_active = active;
+}
+
+int snd_host_render_active(void)
+{
+    return s_host_render_active;
+}
+
+/* 无头/无声卡时按经过的样本数推进混音器状态：结果丢弃，只保留通道游标与
+   结束标志（游戏轮询 SOUNDxCNT bit31/bit15 时会用到）。 */
+void snd_advance(snd_t *s, const struct bus *bus, uint32_t samples)
+{
+    int16_t scratch[SND_MIX_RATE / 8];      /* 4096 样本/批：一帧约 548 */
+    const uint32_t cap = (uint32_t)(sizeof scratch / sizeof scratch[0]);
+    while (samples > 0) {
+        uint32_t n = (samples > cap) ? cap : samples;
+        snd_render(s, bus, scratch, scratch, (int)n);
+        samples -= n;
+    }
+}
+
 void snd_render(snd_t *s, const struct bus *bus, int16_t *out_l, int16_t *out_r, int n)
 {
     int master = (int)(s->soundcnt & 0x7F);

@@ -189,7 +189,7 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     if (dma_is_addr(addr)) {
         /* 写 CNT_H 且使能=1 时在 dma_write8 内同步触发立即搬运；
            若卡带已就绪且本条是卡带触发源，则在写完后补触发。 */
-        dma_write8(&io->dma[is_arm7 ? 1 : 0], addr, val, io->bus);
+        dma_write8(&io->dma[is_arm7 ? 1 : 0], addr, val, io->bus, is_arm7);
         io_card_dma_check(io, is_arm7);
         return;
     }
@@ -295,8 +295,8 @@ void io_set_vblank(io_t *io)
     io->disp.dispstat = (uint16_t)(io->disp.dispstat | 1u);
     io->disp.dispstat_sub = (uint16_t)(io->disp.dispstat_sub | 1u);
     io->vcount = 0;
-    dma_fire(&io->dma[0], io->bus, DMA_START_VBLANK); /* 双核各自 VBlank DMA */
-    dma_fire(&io->dma[1], io->bus, DMA_START_VBLANK);
+    dma_fire(&io->dma[0], io->bus, DMA_START_VBLANK, 0); /* 双核各自 VBlank DMA */
+    dma_fire(&io->dma[1], io->bus, DMA_START_VBLANK, 1);
 }
 
 void io_advance_scanline(io_t *io)

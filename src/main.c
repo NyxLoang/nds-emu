@@ -212,6 +212,10 @@ int main(int argc, char *argv[])
 
                 /* 阶段 3a：镜像就位后，让 CPU 从 ARM9 入口开始执行 */
                 cpu_reset(nds->cpu, hdr.arm9.entry);
+                /* 21-B9ws：直接启动的寄存器/栈初值按 melonDS SetupDirectBoot 口径
+                   （sp=0x03002F7C、sp_irq=0x03003F80、sp_svc=0x03003FC0），
+                   否则 BIOS 低地址路径压栈会落到栈外。 */
+                cpu_direct_boot(nds->cpu, hdr.arm9.entry);
                 printf("cpu   : reset PC=%08X\n", hdr.arm9.entry);
             }
 
@@ -243,6 +247,7 @@ int main(int argc, char *argv[])
 
                     /* 阶段 8.3：ARM7 镜像就位，让第二颗 CPU 从 ARM7 入口开始执行 */
                     cpu_reset(nds->cpu7, hdr.arm7.entry);
+                    cpu_direct_boot(nds->cpu7, hdr.arm7.entry);
                     printf("cpu7  : reset PC=%08X\n", hdr.arm7.entry);
                 }
             }

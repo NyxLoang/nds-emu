@@ -173,3 +173,11 @@
   并在按下时打印一行 `runner: key mask=.... at frame=` 便于验收对照。
 - `--headless-frames` 每 100 帧打印一行进度（帧号 + 两核 PC + DISPCNT），
   长跑（数千帧、数分钟）时能看到卡在哪一段，不必等结束摘要。
+
+## 2026-09-12 · 21-B9ws — 直接启动的寄存器/栈口径（melonDS SetupDirectBoot）
+
+- 装载完成后除 `cpu_reset(入口)`，再调 `cpu_direct_boot()`：
+  ARM9 `r12/r14=入口、sp=0x03002F7C、sp_irq=0x03003F80、sp_svc=0x03003FC0`；
+  ARM7 `r12/r14=入口、sp=0x0380FD80、sp_irq=0x0380FF80、sp_svc=0x0380FFC0`。
+  参考核在跳卡带入口前就是这么设的；本地旧实现 sp=0，BIOS 低地址路径一旦
+  真的压 SVC/IRQ 帧就会写到栈外。

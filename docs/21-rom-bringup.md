@@ -1383,3 +1383,51 @@ DS 卡带触发；本地旧 `dma_fire` 只按 ARM9 的模式号 5 匹配，ARM7 
 2. `build\nds-emu.exe "tools\rom_ascii.nds" --headless-frames 2600 --screenshot`
    → 进度行里 ARM9 不再长时间停在 `02011C54`；`frame=2600` 结束时摘要为
    `vram-nz≈103264 disp=80111418`、ARM9=0200957C、ARM7=00001158。
+
+### 21-B9ws（2026-09-12 代码/测试）：ARM7 FreeBIOS 低地址 Halt/调度路径参考级 HLE
+
+**这一步做了什么**：把 ARM7 的 SWI/IRQ 进出 BIOS 低地址从模拟器私有桩换成
+与参考核（melonDS + FreeBIOS）逐地址等价的 HLE：
+
+- 新增 `src/bios/bios7_low.{h,c}`：按 FreeBIOS ARM7 镜像反汇编出的地址逐条
+  等价执行 SWI 分发器（0x1080：SVC 栈 4 字 + 切 System + System lr 入栈 +
+  0x10B0 表跳转）、`swi_complete`（0x112C）、Halt（0x114C）、WaitByLoop
+  （0x115C）、interrupt_check（0x1168）、IntrWait/VBlankIntrWait（0x1190/0x1188）、
+  Stop（0x11B8）、CustomHaltPost（0x1FA4）、SoftReset（0x1FD8）、
+  IRQ 入口/返回（0x1FB0/0x1FC0/0x1FC4）；
+- 新增 `src/bios/bios7_image.{h,c}`：向量表 0x00-0x1F 与 SWI 表 0x10B0-0x112B
+  的可读字节影子（游戏恢复「PC 停在 SWI 向量」的现场时，分发器要从 BIOS 取编号）；
+- `cpu_step`：ARM7 HALTCNT 暂停（`(IF&IE)` 唤醒）→ 定时器/卡带推进 → IRQ 检查 →
+  `bios7_low_step()` → 常规取指；异常入口低 8 位改成参考口径（SWI 0x93、
+  未定义 0x9B、IRQ 0xD2，**一律清 T**）；
+- `bus_resolve`：ARM7 视角 0x03800000-0x03FFFFFF 按 64KB 镜像（0x03FFFFFC 与
+  0x0380FFFC 同字节）；`power` 增加 HALTCNT；`cpu_direct_boot()` 按
+  melonDS `SetupDirectBoot` 设置两核 sp/sp_irq/sp_svc。
+
+**参考核对照（本步的关键证据）**：给参考核 ARM7 加低地址事件钩子跑 6000 帧：
+
+- SWI 入口 `pc=00000008 cpsr=60000093 lr=038043CA sp=0380FFC0`（I=1、T 已清）；
+- Halt 函数体 `0x114C cpsr=8000001F` 出现 **542 次**；
+- IRQ 596 次进 `0x18→0x1FB0→0x1FBC`，其中 **543 次 lr=0x115C**——即打断点就是
+  BIOS Halt 的暂停地址 0x1158，不是调用方代码；
+- WaitByLoop 每轮 3 周期（subs 1 + bgt 2）。
+
+本地实现后同一批观测完全对应（首个 ARM7 IRQ 就是 `pc=0000115C cpsr=2000001F`）。
+
+**验证**：`build\test_nds.exe` **860 项检查 0 失败**（新增/改写 30 项 ARM7
+用例）；真 ROM 900 帧：`f=900 ARM7=00001158 cpsr=8000001F`（与参考 Halt 体一致）、
+标题段 `f=300 disp=00161F10` 不回归；2600 帧（1900 帧起按 START）终点
+`ARM9=0200957C`、`ARM7=00001158`、`vram-nz=103264`，与 B9wr 基线一致。
+
+**验收内容**：
+
+1. `build\test_nds.exe` → 末尾 `=== 共 860 项检查，0 项失败 ===`；
+2. `build\nds-emu.exe "tools\rom_ascii.nds" --headless-frames 900` →
+   进度行出现 `ARM7=00001158`，结束摘要 `ARM7 PC=00001158 cpsr=8000001F`；
+   日志开头有 `irq: first arm7 IRQ pc=0000115C cpsr=2000001F ... slot+3FFC=037FB8F4`
+   （被打断点是 BIOS Halt 内部，与参考核 543 次 lr=0x115C 同形）；
+3. `build\nds-emu.exe "tools\rom_ascii.nds" --headless-frames 300 --screenshot`
+   → `disp=00161F10`，截图仍能看出标题画面（本步不改显示链路，作回归用）。
+
+**已知偏差（有意保留）**：SWI 0x1F 按真机 BIOS 口径接 CustomHaltPost；
+低地址只影射向量表/SWI 表，其余读 0；ARM9 的 SWI 仍是阶段 11/12 的直接 HLE。

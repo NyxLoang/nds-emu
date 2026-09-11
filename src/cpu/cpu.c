@@ -5,6 +5,8 @@
 #include "thumb.h"
 #include "bus/bus.h"
 #include "io/io.h"
+#include "io/power.h"
+#include "bios/bios7_low.h"
 
 arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc, int is_arm7)
 {
@@ -31,7 +33,28 @@ void cpu_reset(arm_cpu_t *cpu, uint32_t reset_pc)
     cpu->r[15] = reset_pc;
     cpu->cycles = 0;
     cpu->deadloop_reported = 0;
-    cpu->irq_hle.active = 0;
+    cpu->irq_count = 0;
+}
+
+/* 21-B9ws：直接启动寄存器初值（melonDS NDS::SetupDirectBoot 口径）。
+   ARM9：r12=入口、r13=0x03002F7C、r14=入口、sp_irq=0x03003F80、sp_svc=0x03003FC0
+   ARM7：r12=入口、r13=0x0380FD80、r14=入口、sp_irq=0x0380FF80、sp_svc=0x0380FFC0
+   参考核在跳到卡带入口前就是这么设的；本地旧实现让 sp=0，一旦 BIOS 真的
+   往 SVC/IRQ 栈压帧就会写到栈外。 */
+void cpu_direct_boot(arm_cpu_t *cpu, uint32_t entry)
+{
+    cpu->r[12] = entry;
+    cpu->r[14] = entry;
+    if (cpu->is_arm7) {
+        cpu->r13_sys = 0x0380FD80u;
+        cpu->r13_bank[1] = 0x0380FF80u; /* [1] = IRQ */
+        cpu->r13_bank[2] = 0x0380FFC0u; /* [2] = SVC */
+    } else {
+        cpu->r13_sys = 0x03002F7Cu;
+        cpu->r13_bank[1] = 0x03003F80u;
+        cpu->r13_bank[2] = 0x03003FC0u;
+    }
+    cpu->r[13] = cpu->r13_sys;          /* 当前模式（SVC/System）可见的是主 sp */
 }
 
 /* 3a.3 取指：按 PC 从总线读 32 位指令字（小端拼拆已在 bus_read32 内完成）。 */
@@ -44,41 +67,6 @@ uint32_t cpu_fetch(const arm_cpu_t *cpu)
 uint16_t cpu_fetch16(const arm_cpu_t *cpu)
 {
     return bus_read16(cpu->nds->bus, cpu->r[15]);
-}
-
-/* 21-B9f：IRQ HLE 桩的“返回恢复”（21-B9wa 起仅 ARM7 需要）。
-   ARM9 改用 FreeBIOS 返回桩（bios_irq_tail9）按真机路径弹六字帧；
-   ARM7 没有可执行 BIOS 桩，仍在 handler 弹回返回点后由本函数恢复现场。 */
-static void irq_hle_restore(arm_cpu_t *cpu)
-{
-    if (!cpu->irq_hle.active)
-        return;
-    if ((cpu->cpsr & CPSR_MODE_MASK) != ARM_MODE_IRQ)
-        return;
-    if (cpu->r[15] != cpu->irq_hle.ret_pc)
-        return;
-    for (int i = 0; i < 4; i++)
-        cpu->r[i] = cpu->irq_hle.r[i];
-    cpu->r[12] = cpu->irq_hle.ip;
-    if (!cpu->is_arm7)
-        cpu->r[13] = cpu->irq_hle.saved_irq_sp;
-    /* 恢复 CPSR 也要切回 User/System：经模式同步把 IRQ 私有 r13/r14 存回槽 */
-    exec_apply_cpsr(cpu, cpu->irq_hle.saved_cpsr);
-    /* 21-B9s：ARM7 的 Halt（SWI 0x06，Thumb 编码 DF06）在任意中断到来后应
-       “被唤醒并继续 SWI 之后”，而不是重新执行 Halt——否则中断里做完的事
-       （如 FIFO 请求处理）永远不会落到后续代码，CPU 会再次睡死。
-       这里只在被打断指令确实是 Thumb SWI 6 时跳过该指令；IntrWait 等带条件
-       重试的等待仍走“重执行被打断指令”的旧语义。 */
-    if (cpu->is_arm7 && (cpu->cpsr & CPSR_T) &&
-        cpu_fetch16(cpu) == 0xDF06u) {
-        cpu->r[15] = cpu->irq_hle.ret_pc + 2u;
-    }
-    cpu->irq_hle.active = 0;
-    if (cpu->nds->bus->diag && cpu->irq_hle.log_count < 16) {
-        printf("irq: #%d %s restore ret_pc=%08X cpsr=%08X\n",
-               cpu->irq_hle.log_count, cpu->is_arm7 ? "arm7" : "arm9",
-               cpu->r[15], cpu->cpsr);
-    }
 }
 
 /* 21-B9wa（实验）：ARM9 FreeBIOS IRQ 尾部。
@@ -112,41 +100,9 @@ static int bios_irq_tail9(arm_cpu_t *cpu)
     cpu->r[15] = ret;
     exec_apply_cpsr(cpu, saved);
     cpu->step_cycles = 2;
-    if (cpu->nds->bus->diag && cpu->irq_hle.log_count < 16) {
+    if (cpu->nds->bus->diag && cpu->irq_count < 16) {
         printf("irq: arm9 bios tail ret=%08X cpsr=%08X\n", ret, cpu->cpsr);
-        cpu->irq_hle.log_count++;
     }
-    return 1;
-}
-
-/* 21-B9wf（第二步）：ARM7 FreeBIOS IRQ 尾部。
-   真机 0x1FB0 入口先 stmdb sp!,{r0-r3,r12,lr} 压六字帧并把 lr 设成
-   0x1FC0 返回桩；用户 handler/调度器最终 ldmia sp!,{pc} 弹回该桩后，
-   0x1FC0 弹六字帧、0x1FC4 subs pc,r14,#4 用 SPSR_irq 恢复被打断现场。
-   与 ARM9 0xFFFF06F0 的 FreeBIOS 尾部对称，IRQ HLE 私有恢复不再需要。 */
-static int bios_irq_tail7(arm_cpu_t *cpu)
-{
-    if (!cpu->is_arm7)
-        return 0;
-    if ((cpu->cpsr & CPSR_MODE_MASK) != ARM_MODE_IRQ)
-        return 0;
-    if (cpu->r[15] != 0x00001FC0u)
-        return 0;
-
-    uint32_t sp = cpu->r[13];
-    cpu->r[0]  = bus_read32(cpu->nds->bus, sp + 0x00u);
-    cpu->r[1]  = bus_read32(cpu->nds->bus, sp + 0x04u);
-    cpu->r[2]  = bus_read32(cpu->nds->bus, sp + 0x08u);
-    cpu->r[3]  = bus_read32(cpu->nds->bus, sp + 0x0Cu);
-    cpu->r[12] = bus_read32(cpu->nds->bus, sp + 0x10u);
-    cpu->r[14] = bus_read32(cpu->nds->bus, sp + 0x14u);
-    cpu->r[13] = sp + 0x18u;
-
-    uint32_t ret = cpu->r[14] - 4u;
-    uint32_t saved = cpu->spsr[1]; /* SPSR_irq = 被打断 CPSR */
-    cpu->r[15] = ret;
-    exec_apply_cpsr(cpu, saved);
-    cpu->step_cycles = 2;
     return 1;
 }
 
@@ -158,65 +114,25 @@ int cpu_step(arm_cpu_t *cpu)
     cpu->step_cycles = 1;
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
-    /* 21-B9wf：ARM7 FreeBIOS 低地址等待路径必须整步走在 IRQ 检查之前。
-       真机从 Halt 唤醒后会先执行 BIOS 0x1158→0x112C 尾段（把调用方现场
-       恢复出来），IRQ 在尾段结束后才接管；若在 0x1158 处先被 IRQ 抢占，
-       调度器会把 BIOS 内部 PC 当任务现场保存，后续 LDM ^ 恢复出错误地址。 */
-    if (cpu->is_arm7 && cpu->bios7_active) {
-        if (cpu->bios7_halted) {
-            irq_t *hq = &cpu->nds->io->irq[1];
-            if (!(hq->ie & hq->ifl)) {
-                cpu->step_cycles = 0;
-                return 1;
-            }
-            cpu->bios7_halted = 0; /* 唤醒：下面先走 BIOS 尾段 */
-        }
-        if (cpu->bios7_delay) {
-            if (cpu->bios7_pc == 0x0000115Cu) {
-                uint32_t old = cpu->r[0];
-                uint32_t res = old - 1u;
-                cpu->r[0] = res;
-                cpu->cpsr &= ~(CPSR_N | CPSR_Z | CPSR_C | CPSR_V);
-                if (res & 0x80000000u) cpu->cpsr |= CPSR_N;
-                if (res == 0)          cpu->cpsr |= CPSR_Z;
-                if (old >= 1u)         cpu->cpsr |= CPSR_C;
-                if (old == 0x80000000u) cpu->cpsr |= CPSR_V;
-                cpu->step_cycles = 3;
-                if (res == 0) {
-                    cpu->bios7_delay = 0;
-                    cpu->bios7_pc = 0x0000112Cu;
-                    cpu->r[15] = cpu->bios7_pc;
-                    cpu->step_cycles = 2;
-                }
-            }
+    irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
+    /* 21-B9wt：ARM7 的 HALTCNT 暂停（BIOS SWI 6 Halt / SWI 7 Stop / 游戏
+       直接写 0x04000301 都走这里）。唤醒口径与 melonDS HaltInterrupted(1)
+       一致：(IF & IE) != 0 即唤醒，不看 IME；唤醒后清请求，让下面的 IRQ
+       检查先决定“进 handler”还是“继续执行 BIOS 下一条”。 */
+    if (cpu->is_arm7 && power_halt_pending(&cpu->nds->io->power)) {
+        if (!(irq->ie & irq->ifl)) {
+            cpu->step_cycles = 0;
             return 1;
         }
-        if (cpu->bios7_pc == 0x00001158u) {
-            cpu->bios7_pc = 0x0000112Cu;
-            cpu->r[15] = cpu->bios7_pc;
-            cpu->step_cycles = 1;
-            return 1;
-        }
-        if (cpu->bios7_pc == 0x0000112Cu) {
-            cpu->bios7_active = 0;
-            exec_apply_cpsr(cpu, cpu->bios7_cpsr);
-            cpu->r[15] = cpu->bios7_ret;
-            cpu->step_cycles = 2;
-            return 1;
-        }
+        power_halt_wake(&cpu->nds->io->power);
     }
     if (bios_irq_tail9(cpu))
         return 1;
-    if (bios_irq_tail7(cpu))
-        return 1;
-    /* 21-B9f：先检查 IRQ handler 是否刚弹出返回地址（见函数注释） */
-    irq_hle_restore(cpu);
     /* 6.5：按本步消耗的周期推进当前核定时器（分频在 timer.c 内处理） */
     io_advance_timers(cpu->nds->io, cpu->is_arm7, cpu->step_cycles);
     io_advance_cart(cpu->nds->io, cpu->is_arm7);
     /* 12.5：取指前检查 IRQ。条件 = 该核 IF&IE&IME 挂起，且 CPSR 的 I 位未禁止。
        满足则进 IRQ 异常向量（0x18），PC 跳到 handler；被打断指令地址留作返回点。 */
-    irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
     /* 21-B9m：ARM9 的 CP15 WFI（MCR p15,0,r0,c7,c0,4）等价于 NDS7 的 HALTCNT
        ——NDS9 没有 HALTCNT 寄存器，游戏/OS 空闲任务直接执行 WFI 指令。
        NDS9 的 CP15 Halt 只受 IME 门控（IME=0 会永久锁死），不会因 CPSR.I 屏蔽
@@ -265,22 +181,22 @@ int cpu_step(arm_cpu_t *cpu)
                    irq->ime, irq->ie, irq->ifl, slot_f8, slot_fc);
         }
         if (cpu->nds->bus->diag && cpu->irq_dump_done &&
-            cpu->irq_hle.log_count < 16) {
+            cpu->irq_count < 16) {
             printf("irq: #%d %s trigger pc=%08X cpsr=%08X\n",
-                   cpu->irq_hle.log_count + 1, cpu->is_arm7 ? "arm7" : "arm9",
+                   cpu->irq_count + 1, cpu->is_arm7 ? "arm7" : "arm9",
                    cpu->r[15], cpu->cpsr);
         }
-        /* HLE 桩现场：arm_exception 只改 CPSR/r14/r15，r0-r3/r12 仍是被中断值，
-           saved_cpsr/ret_pc 必须在切模式前取。 */
-        uint32_t saved_cpsr = cpu->cpsr;
+        /* ARM9 高向量跳板要在切模式前取被打断 PC（r0-r3/r12 仍是被中断值）。 */
         uint32_t ret_pc = cpu->r[15];
         arm_exception(cpu, EXC_IRQ_OFF, ARM_MODE_IRQ, 4);
+        cpu->irq_count++;
         /* 21-B9c：模拟 ARM9 BIOS 高向量跳板——真机 0xFFFF0018 处的 BIOS 代码会从
            DTCM 末 4 字节（0x3FFC，用户 IRQ handler 指针槽）取地址再跳转。本模拟器
-           没有 BIOS ROM，异常现场建好后直接读槽并改写 PC；FFXII 在复位时把
+          没有 BIOS ROM，异常现场建好后直接读槽并改写 PC；FFXII 在复位时把
            handler 装到 ITCM 0x01FF8000（见 21-B9b 证据）。槽为 0 或 DTCM 未配置
-           时保持旧行为（停在向量区便于诊断）。ARM7 尚未观察到 IRQ 触发，暂不
-           按 0x03FFFFFC 槽跳转，待有真机证据再对称实现。 */
+          时保持旧行为（停在向量区便于诊断）。
+           ARM7 的对应路径已在 21-B9wt 移进 bios7_low.c：异常先落到低向量
+           0x00000018 → 0x1FB0（六字帧 + lr=0x1FC0）→ [0x03FFFFFC] 用户 handler。 */
         if (!cpu->is_arm7 && cpu->nds->bus->arm9_dtcm_on) {
             uint32_t slot_fc = bus_read32(cpu->nds->bus,
                                           cpu->nds->bus->arm9_dtcm_base + 0x3FFCu);
@@ -305,37 +221,15 @@ int cpu_step(arm_cpu_t *cpu)
                     cpu->cpsr &= ~CPSR_T;
                 cpu->r[15] = slot_fc & ~1u;
                 cpu->r[14] = 0xFFFF06F0u;
-                cpu->irq_hle.log_count++;
-            }
-        }
-        /* 21-B9i：ARM7 IRQ 槽在 ARM7 WRAM 顶 0x0380FFFC（FFXII 实测指向
-           0x037FB8F4 的中断分发代码），与 ARM9 同样做 HLE 现场保存/恢复。 */
-        if (cpu->is_arm7) {
-            uint32_t slot_fc = bus_read32(cpu->nds->bus, 0x0380FFFCu);
-            if (slot_fc != 0) {
-                /* 21-B9j：ARM7 调度器在 0x37FBA10 用 ldmib sp!,{...} 从 IRQ 栈
-                   上方 0x380FF80..0x94 取旧任务 r0-r3/r12/lr。真机该区由 BIOS
-                   入口帧预填；这里在跳用户 handler 前等价预填（lr=被打断PC+4）。 */
-                uint32_t isp = cpu->r[13];
-                bus_write32(cpu->nds->bus, isp - 0x18u + 0x00u, cpu->r[0]);
-                bus_write32(cpu->nds->bus, isp - 0x18u + 0x04u, cpu->r[1]);
-                bus_write32(cpu->nds->bus, isp - 0x18u + 0x08u, cpu->r[2]);
-                bus_write32(cpu->nds->bus, isp - 0x18u + 0x0Cu, cpu->r[3]);
-                bus_write32(cpu->nds->bus, isp - 0x18u + 0x10u, cpu->r[12]);
-                bus_write32(cpu->nds->bus, isp - 0x18u + 0x14u, ret_pc + 4u);
-                cpu->r[13] = isp - 0x18u;
-                cpu->irq_hle.active = 0;
-                cpu->irq_hle.log_count++;
-                if (slot_fc & 1u)
-                    cpu->cpsr |= CPSR_T;
-                else
-                    cpu->cpsr &= ~CPSR_T;
-                cpu->r[15] = slot_fc & ~1u;
-                cpu->r[14] = 0x00001FC0u;
             }
         }
         return 1;
     }
+    /* 21-B9wt：ARM7 低地址 BIOS 路径（SWI 分发、等待、IRQ 出入口）按地址等价执行。
+       放在 IRQ 检查之后：真机每步先看中断，再执行当前指令；Halt 暂停点因此在
+       “写 HALTCNT 的下一条”处被 IRQ 打断，与参考核一致。 */
+    if (cpu->is_arm7 && cpu->r[15] < 0x4000u && bios7_low_step(cpu))
+        return 1;
     /* 13.2：按 CPSR.T 位分发——Thumb 取 16 位半字，ARM 取 32 位字。 */
     if (cpu->cpsr & CPSR_T) {
         uint16_t insn16 = cpu_fetch16(cpu);

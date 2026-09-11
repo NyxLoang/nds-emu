@@ -95,6 +95,21 @@
   新暴露下一个 gap——ARM7 写 `0x04000180/81`（IPCSYNC）被当作未知 IO 忽略，留待 B2。
 - **结果**：✅ 用户验收通过（2026-09-05）。
 
+## 2026-09-12 · 21-B9ws — ARM7 WRAM 64KB 镜像 + BIOS 可读字节影子
+
+- **ARM7 WRAM 镜像**：参考核 `memregion_WRAM7` 对 ARM7 视角按 64KB 步长镜像
+  （`addr & 0xFFFF`），所以 0x0380FFFC 与 0x03FFFFFC 是同一字节。FreeBIOS 的
+  IRQ handler 槽 `[0x04000000-4]`、IntrWait 轮询的软件中断标志 0x03FFFFF8
+  都在这个镜像顶上；本地旧映射只覆盖 0x03800000-0x0380FFFF，ARM7 读
+  0x03FFFFFC 得到 0，跳不到用户 handler（表现为 IRQ 入口死等）。
+  `bus_resolve` 增加分支：`active_is_arm7 && addr ∈ [0x03800000, 0x04000000)`
+  → `arm7_wram[addr & 0xFFFF]`。
+- **BIOS 可读字节影子**：`bus_read8` 在 ARM7 视角 0x0000-0x3FFF 先查
+  `bios7_image_read8()`（`src/bios/bios7_image.c`，BSD-2 的 FreeBIOS 向量表
+  8 字 + SWI 表 31 项）。游戏把「PC 停在 SWI 向量 0x08」的现场恢复出来后，
+  BIOS 分发器会用 `ldrb r12,[lr,#-2]` 从 BIOS 里取 SWI 编号字节；影子让这次
+  读取和参考核一致。其余低地址仍读 0（函数体由 HLE 实现，不执行 BIOS 码）。
+
 ## 2026-09-06 · 21-B9wd — VRAMCNT 动态映射
 
 - FFXII 启动后期写 VRAMCNT：A/B=83/8B（3D 纹理）、C=84（Engine B BG）、

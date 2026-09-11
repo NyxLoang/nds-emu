@@ -256,17 +256,33 @@ void exec_apply_cpsr(arm_cpu_t *cpu, uint32_t new_cpsr)
 }
 
 /* ---- 12.2 异常入口 ----
-   硬件动作：SPSR_<新模式> = 当前 CPSR → 写模式位 → IRQ/FIQ 置 I（FIQ 再置 F）→
-   LR = PC + lr_adjust → PC = vector_base + offset。 */
+   硬件动作：SPSR_<新模式> = 当前 CPSR → 写低 8 位（模式 + I/F/T）→
+   LR = PC + lr_adjust → PC = vector_base + offset。
+   21-B9wt 起低 8 位口径与参考核 melonDS 对齐（FIQ/未定义/中止/IRQ/SWI 各自的值）：
+
+     SWI  0x93  未定义 0x9B  中止 0x97  IRQ 0xD2  FIQ 0xD1
+
+   共同点：**异常入口一律清 T**（向量表是 ARM 码，ARM7 的 Thumb SWI 也从此处
+   以 ARM 态执行）；且除了 FIQ 之外都置 I（ARM7TDMI 的 SWI/未定义/中止同样关
+   IRQ，这与 ARMv5 文档里的描述不同，是一切“进 BIOS 后就不会被 IRQ 抢占”的
+   前提——参考核实测 SWI 入口 cpsr=60000093）。 */
 void arm_exception(arm_cpu_t *cpu, uint32_t vector_offset, unsigned new_mode,
                    uint32_t lr_adjust)
 {
     int idx = exec_spsr_index(new_mode);
     if (idx >= 0)
         cpu->spsr[idx] = cpu->cpsr;
-    uint32_t new_cpsr = (cpu->cpsr & ~(uint32_t)CPSR_MODE_MASK) | new_mode;
-    if (new_mode == ARM_MODE_IRQ)      new_cpsr |= CPSR_I;       /* IRQ 入口关 IRQ */
-    else if (new_mode == ARM_MODE_FIQ) new_cpsr |= CPSR_I | CPSR_F; /* FIQ 关 IRQ+FIQ */
+    uint32_t low;
+    switch (vector_offset) {
+    case EXC_SWI_OFF:   low = 0x93u; break;
+    case EXC_UNDEF_OFF: low = 0x9Bu; break;
+    case EXC_PABT_OFF:
+    case EXC_DABT_OFF:  low = 0x97u; break;
+    case EXC_IRQ_OFF:   low = 0xD2u; break;
+    case EXC_FIQ_OFF:   low = 0xD1u; break;
+    default:            low = (uint32_t)new_mode | CPSR_I; break;
+    }
+    uint32_t new_cpsr = (cpu->cpsr & ~0xFFu) | low;
     exec_apply_cpsr(cpu, new_cpsr);
     cpu->r[14] = cpu->r[15] + lr_adjust;
     cpu->r[15] = cpu->vector_base + vector_offset;
@@ -605,14 +621,19 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
     }
 
     /* SWI：bit27-24=1111。24 位立即数 = 注释字段（ARM 状态函数号 = 其 >>16）。
-       阶段 11 起经 BIOS HLE 拦截分发（已知号）；未知号落入 SWI 异常向量 0x08（阶段 12.2），
-       给 SWI 向量留真机路径。已处理 → PC += 4；等待未满足 → PC 不动重跑（等价忙等）。 */
+       ARM7 走真机路径（21-B9wt）：先做 SWI 异常 → 低向量 0x08 → BIOS 0x1080
+       分发器（bios7_low.c 按地址等价执行），模式/栈/返回地址与参考核一致。
+       ARM9 仍用直接 HLE（阶段 11/12 口径）；等待未满足 → PC 不动重跑。 */
     if ((insn & 0x0F000000u) == 0x0F000000u) {
         cpu->swi_num = insn & 0x00FFFFFFu;
         if (g_trace)
             printf("cpu: PC=%08X insn=%08X SWI %u cycles=%llu\n",
                    cpu->r[15], insn, cpu->swi_num,
                    (unsigned long long)cpu->cycles);
+        if (cpu->is_arm7) {
+            arm_exception(cpu, EXC_SWI_OFF, ARM_MODE_SVC, 4);
+            return 1;
+        }
         int ret = bios_dispatch(cpu->swi_num >> 16, cpu);
         if (ret == BIOS_RET_WAIT) {
             /* PC 不动，重跑本 SWI */

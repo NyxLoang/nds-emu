@@ -115,6 +115,41 @@ static uint16_t top_px(nds_t *nds, int x, int y)
                       + (uint32_t)(y * TEST_SCREEN_W + x) * 2u);
 }
 
+/* ---- 21-B9wt ARM7 助手：SWI 走真机低地址路径后，测试要跨多步跑到返回点 ----
+   a7_setup_stacks：给 ARM7 一套合法的 System/IRQ/SVC 栈（真机由直接启动或
+   SoftReset 初始化；不给栈的话 BIOS 压帧会落到栈外）。 */
+static void a7_setup_stacks(arm_cpu_t *cpu)
+{
+    cpu->r13_sys = BUS_ARM7_WRAM_BASE + 0x7000u;
+    cpu->r[13] = cpu->r13_sys;
+    cpu->r13_bank[1] = BUS_ARM7_WRAM_BASE + 0x7400u; /* IRQ */
+    cpu->r13_bank[2] = BUS_ARM7_WRAM_BASE + 0x7800u; /* SVC */
+}
+
+/* 一直单步到 PC == expect（或步数用尽）；返回是否到达。 */
+static int a7_run_to_pc(arm_cpu_t *cpu, uint32_t expect)
+{
+    for (int i = 0; i < 64 && cpu->r[15] != expect; i++)
+        cpu_step(cpu);
+    return cpu->r[15] == expect;
+}
+
+/* 以 ARM7 视角读写（0x0380xxxx 的 WRAM 顶 / BIOS 槽只有 ARM7 视角才映射）。 */
+static uint32_t a7_read32(nds_t *nds, uint32_t addr)
+{
+    nds->bus->active_is_arm7 = 1;
+    uint32_t v = bus_read32(nds->bus, addr);
+    nds->bus->active_is_arm7 = 0;
+    return v;
+}
+
+static void a7_write32(nds_t *nds, uint32_t addr, uint32_t val)
+{
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, addr, val);
+    nds->bus->active_is_arm7 = 0;
+}
+
 /* ---- 阶段 2 迁移：bus 读写换算 + 小端拼拆 + VRAM/IO 桩 ---- */
 static void test_bus_rw(nds_t *nds)
 {
@@ -1459,11 +1494,12 @@ static void test_bios_soundbias(nds_t *nds)
     /* r0≠0 → SOUNDBIAS 电平调到 0x200 */
     bus_write16(nds->bus, SND_SOUNDBIAS, 0x0100u);
     arm_cpu_t *cpu = nds->cpu7;
+    a7_setup_stacks(cpu);
     cpu->r[0] = 0x1234u;
     cpu->r[1] = 8u;
     cpu->cpsr |= CPSR_T;
     cpu_reset(cpu, base);
-    cpu_step(cpu);
+    a7_run_to_pc(cpu, base + 2u);   /* SWI → 低地址分发器 → swi_complete */
     CHECK_EQ("soundbias arm7 pc", cpu->r[15], base + 2u);
     CHECK_EQ("soundbias to 0x200",
              bus_read16(nds->bus, SND_SOUNDBIAS), 0x0200u);
@@ -1472,7 +1508,7 @@ static void test_bios_soundbias(nds_t *nds)
     cpu->r[0] = 0u;
     cpu->cpsr |= CPSR_T;
     cpu_reset(cpu, base);
-    cpu_step(cpu);
+    a7_run_to_pc(cpu, base + 2u);
     CHECK_EQ("soundbias arm7 pc2", cpu->r[15], base + 2u);
     CHECK_EQ("soundbias to 0x000",
              bus_read16(nds->bus, SND_SOUNDBIAS), 0x0000u);
@@ -1497,31 +1533,32 @@ static void test_bios_audio_tables(nds_t *nds)
     nds->bus->active_is_arm7 = 1;
     thumb_write(nds, base, prog, 5);
     arm_cpu_t *cpu = nds->cpu7;
+    a7_setup_stacks(cpu);
 
     cpu->cpsr = CPSR_T;
     cpu->r[0] = 1u; /* sine 索引 1 -> 0x0324 */
     cpu_reset(cpu, base);
-    cpu_step(cpu);
+    a7_run_to_pc(cpu, base + 2u);
     CHECK_EQ("sine pc", cpu->r[15], base + 2u);
     CHECK_EQ("sine r0", cpu->r[0], 0x0324u);
 
     cpu->cpsr = CPSR_T;
     cpu->r[0] = 1u; /* pitch 索引 1 -> 0x003B */
     cpu_reset(cpu, base + 2u);
-    cpu_step(cpu);
+    a7_run_to_pc(cpu, base + 4u);
     CHECK_EQ("pitch pc", cpu->r[15], base + 4u);
     CHECK_EQ("pitch r0", cpu->r[0], 0x003Bu);
 
     cpu->cpsr = CPSR_T;
     cpu->r[0] = 0x2A0u; /* FFXII 实际调用参数 -> 0x47 */
     cpu_reset(cpu, base + 4u);
-    cpu_step(cpu);
+    a7_run_to_pc(cpu, base + 6u);
     CHECK_EQ("volume pc", cpu->r[15], base + 6u);
     CHECK_EQ("volume r0", cpu->r[0], 0x47u);
 
     cpu->cpsr = CPSR_T;
     cpu_reset(cpu, base + 6u);
-    cpu_step(cpu);
+    a7_run_to_pc(cpu, base + 8u);
     CHECK_EQ("boot pc", cpu->r[15], base + 8u);
     CHECK_EQ("boot r0", cpu->r[0], 0x00000A2Eu);
     CHECK_EQ("boot r1", cpu->r[1], 0x00002C3Cu);
@@ -1555,7 +1592,9 @@ static void test_fifo_cnt_combine(nds_t *nds)
     nds->bus->active_is_arm7 = 0;
 }
 
-/* ---- 21-B9i 用例：ARM7 IRQ 槽（0x0380FFFC）跳用户 handler + HLE 恢复 ---- */
+/* ---- 21-B9i 用例：ARM7 IRQ 槽（0x0380FFFC）跳用户 handler + FreeBIOS 出入口 ----
+   21-B9wt 起 IRQ 走真机路径：异常 → 低向量 0x18 → 0x1FB0 压六字帧 +
+   lr=0x1FC0 → [0x03FFFFFC] 用户 handler → 0x1FC0 弹帧 → 0x1FC4 异常返回。 */
 static void test_arm7_irq_slot(nds_t *nds)
 {
     arm_cpu_t *cpu = nds->cpu7;
@@ -1574,6 +1613,7 @@ static void test_arm7_irq_slot(nds_t *nds)
     cpu->r[13] = BUS_ARM7_WRAM_BASE + 0x5000;
     exec_apply_cpsr(cpu, ARM_MODE_IRQ | CPSR_I);
     cpu->r[13] = irq_sp;
+    cpu->r13_bank[2] = BUS_ARM7_WRAM_BASE + 0x7800u;       /* SVC 栈（本例不用） */
     exec_apply_cpsr(cpu, ARM_MODE_USER);
     cpu->r[1] = 0xABu;
     nds->io->irq[1].ime = 1;
@@ -1582,16 +1622,24 @@ static void test_arm7_irq_slot(nds_t *nds)
     cpu_reset(cpu, pc);
     exec_set_trace(0);
 
-    cpu_step(cpu);
-    CHECK_EQ("arm7 slot pc=handler", cpu->r[15], handler);
+    cpu_step(cpu);                                        /* IRQ 异常 → 低向量 */
+    CHECK_EQ("arm7 slot pc=vec", cpu->r[15], 0x00000018u);
     CHECK_EQ("arm7 slot mode=IRQ", cpu->cpsr & CPSR_MODE_MASK, ARM_MODE_IRQ);
     nds->io->irq[1].ifl = 0;
+    cpu_step(cpu);                                        /* 向量 → 0x1FB0 */
+    cpu_step(cpu);                                        /* 压六字帧 */
+    cpu_step(cpu);                                        /* mov r0,#0x04000000 */
+    cpu_step(cpu);                                        /* mov lr,pc → 0x1FC0 */
+    cpu_step(cpu);                                        /* ldr pc,[0x03FFFFFC] → handler */
+    CHECK_EQ("arm7 slot pc=handler", cpu->r[15], handler);
     cpu_step(cpu); /* STMFD sp!,{lr} */
     cpu_step(cpu); /* MOV r1,#0x11 */
     CHECK_EQ("arm7 slot r1 clobbered", cpu->r[1], 0x11u);
     cpu_step(cpu); /* LDMFD sp!,{pc} -> 返回 FreeBIOS 0x1FC0 桩 */
     CHECK_EQ("arm7 slot tail pc", cpu->r[15], 0x00001FC0u);
-    cpu_step(cpu); /* FreeBIOS 尾部：弹六字帧 + SPSR 恢复 -> 返回被打断点 */
+    cpu_step(cpu); /* FreeBIOS 尾部：弹六字帧 */
+    CHECK_EQ("arm7 slot tail pc2", cpu->r[15], 0x00001FC4u);
+    cpu_step(cpu); /* subs pc,lr,#4 + SPSR 恢复 -> 返回被打断点 */
     CHECK_EQ("arm7 slot ret pc", cpu->r[15], pc);
     cpu_step(cpu); /* 重执行 NOP */
     CHECK_EQ("arm7 slot r1 restored", cpu->r[1], 0xABu);
@@ -2979,64 +3027,154 @@ static void test_bios_wait(nds_t *nds)
     CHECK_EQ("halt PC", nds->cpu->r[15], base + 8);
 }
 
-/* ---- 21-B9wf 用例：ARM7 FreeBIOS 低地址等待路径 HLE ----
-   WaitByLoop（SWI 3）应逐次减 r0（参考 0x115C subs/bgt，约 3 周期/轮），
-   结束后返回调用方并把 r0 归零；Halt（SWI 6）应进入暂停态，只由
-   (IF&IE) 唤醒（不要求 IME）。 */
-static void test_bios_wait_arm7(nds_t *nds)
+/* ---- 21-B9wt 用例一：ARM7 SWI 走真机低地址路径（分发器 + WaitByLoop）----
+   Thumb `swi 3` 的真机流程：
+     1) SWI 异常：SPSR_svc=调用方 CPSR、lr_svc=返回地址、PC=0x00000008；
+     2) 向量 b 0x1080；
+     3) 0x1080 分发器：SVC 栈压 r4/r12/lr/SPSR 四字、切 System（I 取自 SPSR）、
+        压 System lr、r12=编号、按表跳 0x115C；
+     4) 0x115C subs/bgt 逐轮减 r0；5) 0x112C swi_complete 恢复现场返回。 */
+static void test_bios7_low_wait(nds_t *nds)
 {
     arm_cpu_t *cpu7 = nds->cpu7;
     const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t sp_sys = 0x0380FD80u, sp_svc = 0x0380FFC0u;
 
-    /* WaitByLoop：Thumb swi 3，r0=3 → 3 轮循环后回到 base+2 */
-    bus_write16(nds->bus, base + 0, 0xDF03u);
-    bus_write16(nds->bus, base + 2, 0xE7FEu); /* B self（占位） */
-    cpu7->cpsr = ARM_MODE_SYS | CPSR_T | CPSR_I;
-    cpu7->r[0] = 3;
-    cpu_reset(cpu7, base);
-    exec_set_trace(0);
-    cpu_step(cpu7); /* SWI 分发：进入低地址 0x115C 状态 */
-    CHECK_EQ("a7 delay enter pc", cpu7->r[15], 0x0000115Cu);
-    CHECK_EQ("a7 delay active", cpu7->bios7_active, 1);
-    CHECK_EQ("a7 delay mode", cpu7->cpsr & CPSR_MODE_MASK, ARM_MODE_SYS);
-    CHECK_EQ("a7 delay thumb off", cpu7->cpsr & CPSR_T, 0u);
-    cpu_step(cpu7);
-    CHECK_EQ("a7 delay r0-1", cpu7->r[0], 2u);
-    CHECK_EQ("a7 delay cost", cpu7->step_cycles, 3u);
-    cpu_step(cpu7);
-    CHECK_EQ("a7 delay r0-2", cpu7->r[0], 1u);
-    cpu_step(cpu7);
-    CHECK_EQ("a7 delay r0-3", cpu7->r[0], 0u);
-    CHECK_EQ("a7 delay tail pc", cpu7->r[15], 0x0000112Cu);
-    cpu_step(cpu7); /* BIOS 尾部：恢复调用方 CPSR/PC */
-    CHECK_EQ("a7 delay ret pc", cpu7->r[15], base + 2);
-    CHECK_EQ("a7 delay ret cpsr", cpu7->cpsr,
-             ARM_MODE_SYS | CPSR_T | CPSR_I);
-    CHECK_EQ("a7 delay inactive", cpu7->bios7_active, 0);
-
-    /* Halt：无 (IF&IE) 时暂停且不消耗周期；置位后唤醒并返回调用方 */
-    bus_write16(nds->bus, base + 0, 0xDF06u);
-    bus_write16(nds->bus, base + 2, 0xE7FEu);
-    cpu7->cpsr = ARM_MODE_SYS | CPSR_T;
-    cpu7->r[0] = 0;
+    bus_write16(nds->bus, base + 0, 0xDF03u);   /* Thumb swi 3 */
+    bus_write16(nds->bus, base + 2, 0xE7FEu);   /* 占位（B self） */
     nds->io->irq[1].ime = 0;
     nds->io->irq[1].ie = 0;
     nds->io->irq[1].ifl = 0;
+    power_halt_wake(&nds->io->power);
+    cpu7->cpsr = ARM_MODE_SYS | CPSR_T | CPSR_I;
+    cpu7->r[0] = 3;
+    cpu7->r13_sys = sp_sys; cpu7->r[13] = sp_sys;
+    cpu7->r13_bank[2] = sp_svc;                 /* SVC 栈（分发器压帧用） */
     cpu_reset(cpu7, base);
-    cpu_step(cpu7); /* SWI 分发：写 HALTCNT 后暂停，pc=0x1158 */
+
+    exec_set_trace(0);
+    cpu_step(cpu7);                             /* SWI 异常 */
+    CHECK_EQ("a7 swi vec pc", cpu7->r[15], 0x00000008u);
+    CHECK_EQ("a7 swi mode", cpu7->cpsr & CPSR_MODE_MASK, ARM_MODE_SVC);
+    CHECK_EQ("a7 swi lr (thumb +2)", cpu7->r[14], base + 2);
+    CHECK_EQ("a7 swi spsr", cpu7->spsr[2], ARM_MODE_SYS | CPSR_T | CPSR_I);
+
+    cpu_step(cpu7);                             /* 向量 → 0x1080 */
+    CHECK_EQ("a7 vec to handler", cpu7->r[15], 0x00001080u);
+
+    cpu_step(cpu7);                             /* 分发器 */
+    CHECK_EQ("a7 disp body pc", cpu7->r[15], 0x0000115Cu);
+    CHECK_EQ("a7 disp mode sys", cpu7->cpsr & CPSR_MODE_MASK, ARM_MODE_SYS);
+    CHECK_EQ("a7 disp t cleared", cpu7->cpsr & CPSR_T, 0u);
+    CHECK_EQ("a7 disp i from spsr", cpu7->cpsr & CPSR_I, CPSR_I);
+    CHECK_EQ("a7 disp swi num", cpu7->r[12], 3u);
+    CHECK_EQ("a7 disp sp_svc -0x10", cpu7->r13_bank[2], sp_svc - 16u);
+    CHECK_EQ("a7 disp sp_sys -4", cpu7->r[13], sp_sys - 4u);
+    CHECK_EQ("a7 disp stk r4", a7_read32(nds, sp_svc - 12u), 0u);
+    CHECK_EQ("a7 disp stk svc lr", a7_read32(nds, sp_svc - 4u), base + 2);
+    CHECK_EQ("a7 disp stk spsr", a7_read32(nds, sp_svc - 16u),
+             ARM_MODE_SYS | CPSR_T | CPSR_I);
+    CHECK_EQ("a7 disp stk sys lr", a7_read32(nds, sp_sys - 4u),
+             cpu7->r[14]);                     /* 压的是调用时的 System lr */
+
+    cpu_step(cpu7);                             /* subs r0,#1 */
+    CHECK_EQ("a7 loop r0-1", cpu7->r[0], 2u);
+    cpu_step(cpu7);                             /* bgt（取）*/
+    CHECK_EQ("a7 loop take pc", cpu7->r[15], 0x0000115Cu);
+    CHECK_EQ("a7 loop cost", cpu7->step_cycles, 2u); /* subs 1 + bgt 2 = 3/轮 */
+    cpu_step(cpu7);                             /* subs */
+    cpu_step(cpu7);                             /* bgt（取）*/
+    cpu_step(cpu7);                             /* subs → 0 */
+    CHECK_EQ("a7 loop r0-3", cpu7->r[0], 0u);
+    cpu_step(cpu7);                             /* bgt（不取，Z=1）*/
+    CHECK_EQ("a7 loop fall pc", cpu7->r[15], 0x00001164u);
+
+    for (int i = 0; i < 32 && cpu7->r[15] != base + 2; i++)
+        cpu_step(cpu7);
+    CHECK_EQ("a7 swi ret pc", cpu7->r[15], base + 2);
+    CHECK_EQ("a7 swi ret cpsr", cpu7->cpsr, ARM_MODE_SYS | CPSR_T | CPSR_I);
+    CHECK_EQ("a7 swi ret sp_sys", cpu7->r[13], sp_sys);
+    CHECK_EQ("a7 swi ret sp_svc", cpu7->r13_bank[2], sp_svc);
+    exec_set_trace(1);
+}
+
+/* ---- 21-B9wt 用例二：ARM7 Halt 暂停 + IRQ 打断顺序（参考级关键点）----
+   真机 Halt 执行到 0x1154 写完 HALTCNT 后暂停，被打断的是 0x1158（b
+   swi_complete），不是调用方代码；IRQ 入口在 0x1FB0 压六字帧并跳到
+   [0x03FFFFFC] 的 game handler，返回后 SWI 才在 0x112C 收尾。 */
+static void test_bios7_low_halt_irq(nds_t *nds)
+{
+    arm_cpu_t *cpu7 = nds->cpu7;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    const uint32_t sp_sys = 0x0380FD80u, sp_svc = 0x0380FFC0u;
+    const uint32_t sp_irq = 0x0380FF80u;
+    const uint32_t handler = base + 0x40u;
+
+    bus_write16(nds->bus, base + 0, 0xDF06u);   /* Thumb swi 6（Halt） */
+    bus_write16(nds->bus, base + 2, 0xE7FEu);
+    a7_write32(nds, 0x03FFFFFCu, handler);      /* 用户 IRQ handler 槽 */
+    a7_write32(nds, 0x03FFFFF8u, 0);            /* 软件中断标志字 */
+    nds->io->irq[1].ime = 1;
+    nds->io->irq[1].ie = 0;
+    nds->io->irq[1].ifl = 0;
+    power_halt_wake(&nds->io->power);
+    cpu7->cpsr = ARM_MODE_SYS | CPSR_T;         /* I=0：Halt 期间允许 IRQ */
+    cpu7->r[0] = 0x1234u;
+    cpu7->r[1] = 0x5678u;
+    cpu7->r[12] = 0x9ABCu;
+    cpu7->r13_sys = sp_sys; cpu7->r[13] = sp_sys;
+    cpu7->r13_bank[1] = sp_irq;
+    cpu7->r13_bank[2] = sp_svc;
+    cpu_reset(cpu7, base);
+
+    exec_set_trace(0);
+    for (int i = 0; i < 12 && cpu7->r[15] != 0x00001158u; i++)
+        cpu_step(cpu7);
     CHECK_EQ("a7 halt pc", cpu7->r[15], 0x00001158u);
-    CHECK_EQ("a7 halt flag", cpu7->bios7_halted, 1);
-    cpu_step(cpu7); /* 无唤醒条件：不消耗周期 */
+    CHECK_EQ("a7 halt pending", power_halt_pending(&nds->io->power), 1);
+    CHECK_EQ("a7 halt mode sys", cpu7->cpsr & CPSR_MODE_MASK, ARM_MODE_SYS);
+
+    cpu_step(cpu7);                             /* 无中断：保持暂停、不耗周期 */
     CHECK_EQ("a7 halt wait pc", cpu7->r[15], 0x00001158u);
     CHECK_EQ("a7 halt wait cost", cpu7->step_cycles, 0u);
+
     nds->io->irq[1].ie = IO_IF_VBLANK;
     nds->io->irq[1].ifl = IO_IF_VBLANK;
-    cpu_step(cpu7); /* 唤醒：先执行 BIOS b 0x112C */
-    CHECK_EQ("a7 halt wake tail", cpu7->r[15], 0x0000112Cu);
-    CHECK_EQ("a7 halt flag cleared", cpu7->bios7_halted, 0);
-    cpu_step(cpu7); /* BIOS 尾部：恢复调用方 PC */
-    CHECK_EQ("a7 halt ret pc", cpu7->r[15], base + 2);
-    CHECK_EQ("a7 halt inactive", cpu7->bios7_active, 0);
+    cpu_step(cpu7);                             /* 唤醒：IRQ 先于 BIOS 收尾 */
+    CHECK_EQ("a7 halt wake pc", cpu7->r[15], 0x00000018u);
+    CHECK_EQ("a7 halt wake mode", cpu7->cpsr & CPSR_MODE_MASK, ARM_MODE_IRQ);
+    CHECK_EQ("a7 halt irq lr", cpu7->r[14], 0x0000115Cu); /* 打断的是 0x1158 */
+    CHECK_EQ("a7 halt flag cleared", power_halt_pending(&nds->io->power), 0);
+
+    cpu_step(cpu7);                             /* 向量 → 0x1FB0 */
+    CHECK_EQ("a7 irq handler pc", cpu7->r[15], 0x00001FB0u);
+    cpu_step(cpu7);                             /* 压六字帧 */
+    CHECK_EQ("a7 irq push pc", cpu7->r[15], 0x00001FB4u);
+    /* IRQ 模式下可见 r13 就是 IRQ 栈指针（bank 值只在切模式时同步） */
+    CHECK_EQ("a7 irq sp -0x18", cpu7->r[13], sp_irq - 0x18u);
+    CHECK_EQ("a7 irq frame r0", a7_read32(nds, sp_irq - 0x18u), 0x04000000u);
+    CHECK_EQ("a7 irq frame r12", a7_read32(nds, sp_irq - 8u), 6u);
+    CHECK_EQ("a7 irq frame lr", a7_read32(nds, sp_irq - 4u), 0x0000115Cu);
+    cpu_step(cpu7);                             /* mov r0,#0x04000000 */
+    cpu_step(cpu7);                             /* mov lr,pc → 0x1FC0 */
+    CHECK_EQ("a7 irq ret stub", cpu7->r[14], 0x00001FC0u);
+    cpu_step(cpu7);                             /* ldr pc,[0x03FFFFFC] */
+    CHECK_EQ("a7 irq to handler", cpu7->r[15], handler);
+
+    cpu7->r[15] = 0x00001FC0u;                  /* 模拟 handler 弹回 BIOS 桩 */
+    cpu_step(cpu7);
+    CHECK_EQ("a7 irq pop pc", cpu7->r[15], 0x00001FC4u);
+    cpu_step(cpu7);                             /* subs pc,lr,#4 → 0x1158 */
+    CHECK_EQ("a7 irq ret pc", cpu7->r[15], 0x00001158u);
+    CHECK_EQ("a7 irq ret mode", cpu7->cpsr & CPSR_MODE_MASK, ARM_MODE_SYS);
+    CHECK_EQ("a7 irq ret sp_sys", cpu7->r[13], sp_sys - 4u); /* lr 还压在 System 栈 */
+
+    nds->io->irq[1].ie = 0;
+    nds->io->irq[1].ifl = 0;
+    for (int i = 0; i < 32 && cpu7->r[15] != base + 2; i++)
+        cpu_step(cpu7);
+    CHECK_EQ("a7 halt swi done", cpu7->r[15], base + 2);
+    CHECK_EQ("a7 halt swi cpsr", cpu7->cpsr, ARM_MODE_SYS | CPSR_T);
     exec_set_trace(1);
 }
 
@@ -5202,7 +5340,20 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_bios_wait(nds);
-        test_bios_wait_arm7(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wt] ARM7 SWI/Halt 低地址路径（分发器 + swi_complete）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bios7_low_wait(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wt] ARM7 Halt 暂停 + IRQ 打断顺序（0x1FB0/0x1FC0）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_bios7_low_halt_irq(nds);
         nds_destroy(nds);
     }
     printf("\n[case 11.7] 综合（LZ77 解压 + Div + Sqrt 串行）\n");

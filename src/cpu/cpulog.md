@@ -624,3 +624,22 @@
   “CMP 不是 DSP 乘法”回归；全量 **818 项检查 0 失败**。修复后同一段
   trace 连续 **42,899 条指令**寄存器与参考完全一致，ARM7 长跑稳定在
   0x1158，不再因子虚乌有的 DSP 指令掉未定义向量。
+
+## 2026-09-12 · 21-B9ws — 异常入口 CPSR 口径 + ARM7 低地址路径接进 cpu_step
+
+- `arm_exception` 的低 8 位改为参考核口径（SWI 0x93 / 未定义 0x9B / 中止 0x97 /
+  IRQ 0xD2 / FIQ 0xD1）：**入口一律清 T**、SWI 与未定义同样置 I。此前
+  Thumb SWI 进向量时 T 还在，游戏把「PC 停在 0x08 向量」的现场存进任务上下文后，
+  恢复出来的 CPU 状态与参考不同，会走到分发器读错编号的岔路（实测导致 SWI 0
+  SoftReset 被误触发、旧栈帧弹到野地址）。
+- `cpu_step` 的顺序改为：① ARM7 HALTCNT 暂停检查（`(IF&IE)` 唤醒，step_cycles=0
+  表示仍在暂停）→ ② 定时器/卡带推进 → ③ IRQ 检查（含 ARM9 WFI 特例）→
+  ④ ARM7 低地址 BIOS 路径 `bios7_low_step()` → ⑤ 常规取指执行。
+  这样 IRQ 会在与真机相同的边界插入：被打断的是 BIOS 里的 0x1158（b swi_complete），
+  而不是调用方代码——参考核实测 543/596 次 IRQ 正是打断在这个地址。
+- 删除模拟器私有桩：`bios7_active/delay/halted/pc/ret/cpsr` 字段、
+  `bios_irq_tail7()`、`irq_hle_restore()`、ARM7 IRQ 槽跳转块；`irq_hle_ctx_t`
+  随之删除，诊断计数改名为 `arm_cpu_t.irq_count`（runner 摘要沿用）。
+- 新增 `cpu_direct_boot()`：按 melonDS `SetupDirectBoot` 设置两核
+  r12/r13/r14 与 sp_irq/sp_svc（ARM7 0x0380FD80/FF80/FFC0、
+  ARM9 0x03002F7C/3F80/3FC0）。

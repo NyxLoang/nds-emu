@@ -415,3 +415,13 @@
   永不触发（FFXII ARM7 实测 CNT_H=AF00 → bit13-12=2，正好是 0x12）。
 - 测试：`[case 21-B9wr]` 8 项（模式字段、未激活不搬、4 字内容、搬完清使能、
   ARM9 通道不被误触发）；KEYCNT 4 项（OR 模式、AND 模式部分/全部按下）。
+
+## 2026-09-12 · 21-B9ws — HALTCNT（0x04000301，ARM7）
+
+- `power_t` 增加 `halt_req`：ARM7 写 HALTCNT（bit7=1 进暂停；0xC0=Sleep，
+  0x40=GBA 模式本地按暂停处理）时记录请求；`cpu_step` 在 ARM7 取指前消费：
+  仍满足 `(IF & IE) != 0` 就保持暂停（`step_cycles=0`，事件驱动里让出时间片），
+  有中断待处理就清请求继续执行——与 melonDS `HaltInterrupted(1)` 同口径
+  （ARM7 唤醒不看 IME）。
+- BIOS 的 SWI 6 Halt / SWI 7 Stop / CustomHaltPost 与游戏直接写 HALTCNT
+  走同一条路径（`power_halt_request`）。

@@ -420,7 +420,7 @@
 | 阶段 | 做什么 | 验收 | 状态 |
 |------|--------|------|------|
 | Phase A | bring-up 设施（修 ARM7 装载 + 诊断/headless + 跑 FFXII 出首份 gap 清单） | 首份 gap 清单 | ✅ 完成 |
-| Phase B | 按 gap 清单迭代修，直到 FFXII 进标题 | hard_title | ⏳ 进行中（21-B1..B8 已完成，当前 B9） |
+| Phase B | 按 gap 清单迭代修，直到 FFXII 进标题 | hard_title | ⏳ 进行中（21-B1..B8 已完成，B9 系列到 21-B9ws；hard_title 已达成候选，当前追游戏内进度） |
 | Phase C | 更多 ROM 泛化 / 稳定性 | 多款 ROM 进标题 | ⏳ 占位 |
 | Phase D | 性能调优 + 最终整体验收（出图/输入/声音/存档） | 全项通过、不卡顿 | ⏳ 占位 |
 

@@ -4,19 +4,6 @@
 #include <stdint.h>
 #include "nds/nds.h"
 
-/* 21-B9f：IRQ HLE 桩保存的“被中断现场”。真 BIOS 在跳用户 IRQ handler 前会保存
-   r0-r3/r12/SPSR，handler 返回后恢复；本模拟器没有可执行 BIOS 桩代码，改用模拟器
-   私有槽保存，handler 弹出返回地址后由 cpu_step 取指前统一恢复。 */
-typedef struct irq_hle_ctx {
-    int active;          /* 有未恢复的 IRQ 现场 */
-    int log_count;       /* 诊断：已打印过的中断/恢复次数（限前若干次） */
-    uint32_t r[4];       /* 被中断代码的 r0-r3（用户 handler 可能改坏） */
-    uint32_t ip;         /* r12 同 r0-r3 */
-    uint32_t ret_pc;     /* 返回点 = 被打断指令地址 */
-    uint32_t saved_cpsr; /* 被打断时的 CPSR（含模式/I 位） */
-    uint32_t saved_irq_sp;
-} irq_hle_ctx_t;
-
 /* ARM 处理器（ARM946E-S 或 ARM7TDMI）的可见状态。两核共用同一套结构，
    用 is_arm7 区分实例；阶段 3a 只实现「取指 + 推进」，指令语义在 exec.c。 */
 typedef struct arm_cpu {
@@ -40,17 +27,8 @@ typedef struct arm_cpu {
     int deadloop_reported; /* 死循环识别已打印过（避免每步刷屏） */
     int irq_dump_done;     /* 首中断现场快照已打印过（21-B9b，避免每次 IRQ 刷屏） */
     int irq_mask_logged;   /* “IF&IE 已挂起但 CPSR.I 屏蔽”只提示一次（21-B9h） */
-    /* 21-B9wf：ARM7 FreeBIOS 低地址等待路径（参考级 HLE）。
-       真机 SWI 3 WaitByLoop 在 BIOS 0x115C 执行 “subs r0,#1; bgt” 循环，
-       每轮约 3 周期；SWI 6 Halt 先写 HALTCNT 进入暂停。HLE 不执行 BIOS 码，
-       用下面字段模拟循环节拍与暂停/唤醒边界。 */
-    int      bios7_active;   /* ARM7 正在低地址等待路径 */
-    int      bios7_delay;    /* 正在 WaitByLoop 循环中 */
-    int      bios7_halted;   /* Halt 暂停中（只等 IF&IE，不等 IME） */
-    uint32_t bios7_pc;       /* 下一个要模拟的低地址步骤（0x115C/0x112C） */
-    uint32_t bios7_ret;      /* SWI 返回地址 = 调用方下一条指令 */
-    uint32_t bios7_cpsr;     /* 调用方 CPSR（低路径结束时恢复） */
-    irq_hle_ctx_t irq_hle; /* IRQ HLE 桩的现场保存区（21-B9f） */
+    uint32_t irq_count;    /* 已进入 IRQ 异常的次数（诊断/验收用；21-B9wt 前身是
+                              irq_hle.log_count，去掉私有 IRQ 桩后改成纯计数） */
 } arm_cpu_t;
 
 /* 创建 / 销毁 CPU 核。reset_pc：复位后开始执行的地址；is_arm7：实例身份。 */
@@ -59,6 +37,12 @@ void cpu_destroy(arm_cpu_t *cpu);
 
 /* 复位：把 PC 设为入口地址，清零 cycles（装载镜像后调用）。 */
 void cpu_reset(arm_cpu_t *cpu, uint32_t reset_pc);
+
+/* 21-B9ws：直接启动（melonDS SetupDirectBoot 口径）的寄存器/栈初始化。
+   两核的 sp / sp_irq / sp_svc 初值必须与参考核一致，否则 BIOS 的 SWI/IRQ
+   栈帧会落在不同地址，游戏侧的上下文切换（FFXII 会把栈上现场当任务现场
+   保存/恢复）就会对不上。入口仍由调用方通过 cpu_reset 设置。 */
+void cpu_direct_boot(arm_cpu_t *cpu, uint32_t entry);
 
 /* 从 bus 按 PC 取 32 位指令字（3a.3）。 */
 uint32_t cpu_fetch(const arm_cpu_t *cpu);

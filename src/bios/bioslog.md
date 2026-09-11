@@ -110,3 +110,71 @@
   全量 **805 项检查 0 失败**。真 ROM 事件驱动 1.5 亿步内 ARM7 不再出现
   0x00003xxx/0x00xxxxxx 漂移，终点稳定停 0x1158；4 亿/9 亿步同样全程
   无跑飞，ARM7 终点 PC=0x1158。
+
+## 2026-09-12 · 21-B9ws — ARM7 FreeBIOS 低地址 Halt/调度路径参考级 HLE
+
+把 ARM7 的「SWI/IRQ 进出 BIOS 低地址」从模拟器私有桩改成与参考核
+（melonDS + FreeBIOS）逐地址等价的 HLE。新增 `src/bios/bios7_low.{h,c}`
+（低地址路径执行器）与 `src/bios/bios7_image.{h,c}`（可读字节影子），
+`src/bios/bios_wait.c` 的 ARM7 分支全部撤掉（ARM9 保持原样）。
+
+**真机路径（FreeBIOS ARM7 镜像反汇编，地址逐字核对）**：
+
+```
+0x00000008 SWI 向量 → b 0x1080
+0x00001080 SWI 分发器：push {r4,r12,lr} / mrs r4,SPSR / push {r4}
+           r4=(SPSR&0x80)|0x1F / r12=byte[lr-2] / msr CPSR_fc,r4
+           push {lr}(System) / cmp r12,#0x20 / ldr pc,[pc,r12,lsl#2]
+0x000010B0 SWI 函数表（31 项，逐字读出；0x1F 在 FreeBIOS 里落到表外）
+0x0000112C swi_complete：pop System lr → msr CPSR_fc,#0xD3 → pop SPSR →
+           msr SPSR_fc → pop {r4,r12,lr} → movs pc,lr
+0x0000114C Halt（mov r0,#0x04000000 / mov r2,#0x80 / strb → HALTCNT=0x80）
+0x0000115C WaitByLoop（subs r0,#1; bgt，3 周期/轮）
+0x00001168 interrupt_check（软件中断标志 0x03FFFFF8 + IME 0/1 开关）
+0x00001188/0x1190 VBlankIntrWait / IntrWait（HALTCNT + 标志轮询循环）
+0x00001FD8 SoftReset（清 WRAM 顶 512B、重设三套栈、r0-r12=0、movs pc,lr）
+0x00000018 IRQ 向量 → b 0x1FB0
+0x00001FB0 IRQ 入口：push {r0-r3,r12,lr} / ldr pc,[0x04000000-4]=[0x03FFFFFC]
+0x00001FC0 IRQ 返回：pop {r0-r3,r12,lr} + subs pc,lr,#4（SPSR_irq 恢复）
+```
+
+**参考核实测对照**（melonDS 参考树加低地址事件钩子，6000 帧）：
+
+| 事件 | 参考核 | 本地（本步之后） |
+|------|--------|------------------|
+| SWI 入口 | `pc=00000008 cpsr=60000093 lr=038043CA sp=0380FFC0`（I=1、T 已清） | 同样走异常入口，CPSR 低 8 位口径已对齐 `0x93` |
+| 分发器 | `0x1080` → SVC 栈 4 字 → System 模式 → `0x115C/0x114C` | HLE 逐条等价（同栈帧、同模式、同 PC） |
+| WaitByLoop | `0x115C/0x1160` 每轮 3 周期（r0=0xFA 起） | 每轮 subs 1 + bgt 2 周期 |
+| Halt 函数体 | `0x114C cpsr=8000001F`（542 次） | 同地址同 CPSR |
+| IRQ 打断点 | 596 次进 `0x18→0x1FB0→0x1FBC`，其中 **543 次 lr=0x115C**（= Halt 暂停点 0x1158） | 首个 IRQ 即 `pc=0000115C cpsr=2000001F`，帧落在同一 IRQ 栈 |
+| SoftReset | 首 4000 条低地址事件中 0 次 | 仅在游戏自行恢复 BIOS 内部现场时按真机语义执行 |
+
+**几个必须一起改的口径（否则栈帧/模式会对不上）**：
+
+- **异常入口低 8 位**：SWI `0x93`、未定义 `0x9B`、中止 `0x97`、IRQ `0xD2`、
+  FIQ `0xD1`（melonDS 口径）。共同点：**入口一律清 T**（向量表是 ARM 码；
+  参考核实测 Thumb SWI 的入口 CPSR 是 `60000093` 而不是带 T 的值），
+  这让「游戏把被打断现场存进任务上下文再恢复」的路径与参考一致。
+- **HALTCNT（0x04000301，ARM7）**：0x80=Halt、0xC0=Sleep；`cpu_step` 消费暂停请求，
+  唤醒条件与 melonDS `HaltInterrupted(1)` 一致——`(IF & IE) != 0`，不看 IME；
+  唤醒后**先做 IRQ 检查**（真机被打断的是 BIOS 里的 0x1158，不是调用方代码）。
+- **ARM7 WRAM 镜像**：ARM7 视角 0x03800000-0x03FFFFFF 以 64KB 步长镜像，
+  FreeBIOS 的 handler 槽 `[0x04000000-4] = 0x03FFFFFC` 与游戏写的 0x0380FFFC
+  是同一字节；软件中断标志 0x03FFFFF8 同理。
+- **BIOS 可读字节影子**（`bios7_image.c`）：向量表 0x00-0x1F 与 SWI 表
+  0x10B0-0x112B。游戏恢复「PC 停在 SWI 向量」的现场后，分发器会用
+  `ldrb r12,[lr,#-2]` 从 BIOS 里取编号；本地低地址原本读 0，会拿到
+  SoftReset(0) 而不是参考的字节，随后栈帧错位跑飞。
+- **直接启动寄存器初值**（`cpu_direct_boot`，melonDS `SetupDirectBoot`）：
+  ARM7 sp=0x0380FD80 / sp_irq=0x0380FF80 / sp_svc=0x0380FFC0，
+  ARM9 sp=0x03002F7C / sp_irq=0x03003F80 / sp_svc=0x03003FC0。
+  没有 SVC 栈的话，BIOS 分发器的压帧会写到栈外。
+
+**已知偏差（有意保留）**：① SWI 0x1F 在 FreeBIOS 表外会读成代码字，本地按真机
+BIOS 口径接到 CustomHaltPost(0x1FA4)；② 低地址只影射向量表/SWI 表，
+其余读 0；③ ARM9 的 SWI 仍走阶段 11/12 的直接 HLE（本次只改 ARM7）。
+
+**验证**：`[case 21-B9wt]` 两组共 30 项断言（SWI 分发器栈帧/模式/返回、
+Halt 暂停 + IRQ 优先打断顺序 + 0x1FB0/0x1FC0 帧），全量 **860 项检查 0 失败**；
+真 ROM 900 帧 ARM7 稳定停在 BIOS Halt `0x1158 cpsr=8000001F`，标题段
+（f=300 `disp=00161F10`）与 2600 帧终点（ARM9=0200957C）不回归。

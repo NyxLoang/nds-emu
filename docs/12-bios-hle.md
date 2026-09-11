@@ -112,3 +112,24 @@ BIOS 函数按 ARM 调用约定：`r0–r3` 传参，返回多在 `r0/r1`（其�
 **结论**：阶段 11 的目标是**让真正的 `.nds` 代码能调用 BIOS 系统服务**——用 HLE 方式，
 新建 `src/bios/` 模块，`SWI <n>` → `bios_dispatch(n, regs)`，先搭分发框架（11.2），
 再逐个实现除法/开方（11.3）、搬移（11.4）、解压（11.5）、等待（11.6），最后综合验收（11.7）。
+
+## 7. 补充：ARM7 低地址路径的「参考级 HLE」（21-B9ws）
+
+上面的 `bios_dispatch` 是「在 SWI 指令处直接算结果」的简化 HLE，对纯函数
+（除法/开方/解压/查表）足够；但**等待与调度类**（Halt/IntrWait/WaitByLoop）
+不行：真机这些功能是 BIOS 低地址里的机器码，游戏侧（尤其是把被打断现场当
+任务上下文保存的调度器）能看到 BIOS 内部的 PC、栈帧与模式。
+
+21-B9ws 起 ARM7 走「按地址等价执行」的路线（`src/bios/bios7_low.c`）：
+
+- SWI 先做真异常（SVC、lr=返回地址、CPSR 低 8 位=0x93）→ 0x08 向量 → 0x1080
+  分发器（SVC 栈压 r4/r12/lr/SPSR、切 System、压 System lr、查 0x10B0 表）；
+- 函数体按 FreeBIOS 镜像逐条等价：Halt 写 HALTCNT 后暂停在 0x1158、
+  WaitByLoop 逐轮 subs/bgt、IntrWait 轮询软件中断标志 0x03FFFFF8；
+- `swi_complete`（0x112C）恢复 System lr、切回 SVC、`msr SPSR`、`movs pc,lr`；
+- IRQ 走 0x18 → 0x1FB0（六字帧 + lr=0x1FC0）→ `[0x03FFFFFC]` 用户 handler →
+  0x1FC0 弹帧 → `subs pc,lr,#4`；
+- 低地址「可读字节」（向量表/SWI 表）由 `bios7_image.c` 提供影子，
+  这样「游戏恢复 BIOS 内部现场」后分发器读到的编号与参考核一致。
+
+ARM9 仍保留第 6 节的直接 HLE（其 IRQ 尾部在 21-B9wa 已按 FreeBIOS 0xFFFF06F0 等价）。

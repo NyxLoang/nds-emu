@@ -375,7 +375,7 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
            (unsigned long long)vram_nz,
            bus_read32(nds->bus, 0x04000000u),
            bus_read32(nds->bus, 0x04001000u),
-           nds->cpu->irq_hle.log_count, nds->cpu7->irq_hle.log_count);
+        nds->cpu->irq_count, nds->cpu7->irq_count);
     if (shot_path != NULL) {
         uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
                                               * RENDER_SCREEN_H);
@@ -440,7 +440,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
            (unsigned long long)vram_nz,
            bus_read32(nds->bus, 0x04000000u),
            bus_read32(nds->bus, 0x04001000u),
-           nds->cpu->irq_hle.log_count, nds->cpu7->irq_hle.log_count);
+        nds->cpu->irq_count, nds->cpu7->irq_count);
     if (shot_path != NULL) {
         uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
                                               * RENDER_SCREEN_H);

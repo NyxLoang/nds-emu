@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include "bus.h"
 #include "io/io.h"
+#include "bios/bios7_image.h"
 
 bus_t *bus_create(void)
 {
@@ -331,7 +332,18 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr & vram_bank_mask[bank]);
         return 1;
     }
-    /* ARM7 WRAM：64KB（阶段 8，ARM7 镜像装载于此；ARM9 也可访问） */
+    /* ARM7 WRAM：64KB（阶段 8，ARM7 镜像装载于此；ARM9 也可访问）。
+       21-B9wt：ARM7 视角下 0x03800000-0x03FFFFFF 是 64KB 步长的镜像区
+       （参考核 memregion_WRAM7 口径），0x03FFFFFC 与 0x0380FFFC 指向同一
+       字节。FreeBIOS 的 IRQ handler 槽（[0x04000000-4] = 0x03FFFFFC）与
+       IntrWait 轮询的软件中断标志（0x03FFFFF8）都在这个镜像顶上，缺了
+       镜像会让 ARM7 读回 0、跳不到用户 handler。 */
+    if (bus->active_is_arm7 && addr >= BUS_ARM7_WRAM_BASE &&
+        addr < 0x04000000u) {
+        *region = bus->arm7_wram;
+        *off = (size_t)(addr & (BUS_ARM7_WRAM_SIZE - 1));
+        return 1;
+    }
     if (addr >= BUS_ARM7_WRAM_BASE &&
         addr - BUS_ARM7_WRAM_BASE < BUS_ARM7_WRAM_SIZE) {
         *region = bus->arm7_wram;
@@ -397,6 +409,15 @@ uint8_t bus_read8(const bus_t *bus, uint32_t addr)
        active_is_arm7 让中断/FIFO CNT 等按访问者身份分流。 */
     if (addr >= BUS_IO_BASE && addr - BUS_IO_BASE < BUS_IO_SIZE)
         return bus->io != NULL ? io_read8(bus->io, addr, bus->active_is_arm7) : 0;
+    /* 21-B9wt：ARM7 低地址 0x0000-0x3FFF 是 BIOS ROM。本模拟器用 HLE 提供行为，
+       但向量表/SWI 函数表这些“会被读的字节”要与参考镜像一致：游戏恢复
+       BIOS 内部现场后，SWI 分发器会从那里取编号字节（0x08 处的 `b swi_handler`
+       在 [lr-2] 读到 0x04）。 */
+    if (bus->active_is_arm7 && addr < 0x4000u) {
+        uint8_t v;
+        if (bios7_image_read8(addr, &v))
+            return v;
+    }
     const uint8_t *region;
     size_t off;
     if (!bus_resolve(bus, addr, &region, &off))

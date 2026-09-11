@@ -311,9 +311,15 @@ int thumb_step(arm_cpu_t *cpu, uint16_t insn)
     /* ---- 格式 15：bits15-12 = 1101：条件分支（11011111 = SWI） ---- */
     if ((insn >> 12) == 0xDu) {
         if ((insn & 0xFF00u) == 0xDF00u) {
-            /* SWI imm8：经 BIOS HLE 分发（函数号 = imm8） */
+            /* SWI imm8：函数号 = imm8。ARM7 走真机异常 → BIOS 低地址分发器
+               （21-B9wt）；Thumb 的返回地址是 PC+2（BIOS 用 ldrb r12,[lr,#-2]
+               取 SWI 编号，正好落在本指令字节上）。ARM9 仍用直接 HLE。 */
             unsigned fn = insn & 0xFFu;
             cpu->swi_num = fn;
+            if (cpu->is_arm7) {
+                arm_exception(cpu, EXC_SWI_OFF, ARM_MODE_SVC, 2);
+                return 1;
+            }
             int ret = bios_dispatch(fn, cpu);
             if (ret == BIOS_RET_WAIT) return 1;
             if (ret == BIOS_RET_REDIR) return 1;

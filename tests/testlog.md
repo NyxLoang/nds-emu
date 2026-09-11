@@ -765,3 +765,20 @@
   断言模式字段 bit13-12=2；卡带命令未激活时不搬；激活 B7 命令后 4 个 32 位字
   按序落入 RAM；搬完自动清使能；ARM9 的 `dma[0]` 通道未被 ARM7 条件误触发。
 - 全量从 **818 项**增至 **830 项检查，0 项失败**。
+
+## 2026-09-12 · 21-B9ws — ARM7 低地址路径 30 项（新增/改写）
+
+- 新增 `[case 21-B9wt]` 一：Thumb `swi 3` 全路径 21 项——SWI 异常现场
+  （向量 0x08、SVC、lr=返回地址、SPSR=调用方 CPSR）→ 向量 → 分发器
+  （SVC 栈 4 字、切 System、r12=编号、System lr 入栈、表跳 0x115C）→
+  WaitByLoop 逐轮 subs/bgt（3 周期/轮）→ `0x112C` 收尾（切回 SVC、写 SPSR、
+  `movs pc,lr` 回到调用方且 CPSR/两个栈指针复原）。
+- 新增 `[case 21-B9wt]` 二：Halt + IRQ 顺序 14 项——写 HALTCNT 后暂停在
+  0x1158；`(IF&IE)` 唤醒后 **IRQ 先于 BIOS 收尾**（异常 lr=0x115C）；
+  0x1FB0 压六字帧（r0-r3/r12/lr）、lr=0x1FC0、`ldr pc,[0x03FFFFFC]`；
+  0x1FC0 弹帧 + 0x1FC4 `subs pc,lr,#4` 用 SPSR_irq 回到 0x1158；随后
+  SWI 在 0x112C 收尾返回调用方。
+- 改写：`[case 21-B9i]` ARM7 IRQ 路径按真机出入口（0x18→0x1FB0→handler→
+  0x1FC0→0x1FC4）；`[case 11.6]/[case 21-B9wi]` 的 ARM7 SWI 用例改为
+  「跑完低地址路径再断言结果」。
+- 全量从 **830 项**增至 **860 项检查，0 项失败**。

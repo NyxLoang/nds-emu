@@ -1166,6 +1166,74 @@ static void test_clz(nds_t *nds)
 }
 
 /* ---- 21-B9e 用例：ARM BLX Rm（寄存器间接调用，FFXII 0x02006488 依赖） ---- */
+/* ---- 21-B9wk：ARMv5 DSP 乘法（标题位流解码 0x01FFD904 实际依赖） ---- */
+static void test_dsp_mul(nds_t *nds)
+{
+    arm_cpu_t *cpu = nds->cpu;
+    const uint32_t base = BUS_MAIN_RAM_BASE;
+    exec_set_trace(0);
+
+    /* SMULBB r9,r4,r5：低16×低16（FFEE=-18, 0160=352 → FFFFE740） */
+    bus_write32(nds->bus, base, 0xE1690584u);
+    cpu->r[4] = 0xFFFFFFEEu; cpu->r[5] = 0x00000160u;
+    cpu_reset(cpu, base); cpu_step(cpu);
+    CHECK_EQ("smulbb low*low", cpu->r[9], 0xFFFFE740u);
+
+    /* SMULBT r9,r4,r5：低16×高16（FFEE=-18, 高=2 → FFFFFFDC） */
+    bus_write32(nds->bus, base, 0xE16905C4u);
+    cpu->r[4] = 0xFFFFFFEEu; cpu->r[5] = 0x00020000u;
+    cpu_reset(cpu, base); cpu_step(cpu);
+    CHECK_EQ("smulbt low*high", cpu->r[9], 0xFFFFFFDCu);
+
+    /* SMULTB r9,r4,r5：高16×低16（3×16=48） */
+    bus_write32(nds->bus, base, 0xE16905A4u);
+    cpu->r[4] = 0x00030000u; cpu->r[5] = 0x00000010u;
+    cpu_reset(cpu, base); cpu_step(cpu);
+    CHECK_EQ("smultb high*low", cpu->r[9], 48u);
+
+    /* SMLABB r3,r5,r4：7×9+7=70 */
+    bus_write32(nds->bus, base, 0xE1034584u);
+    cpu->r[4] = 7u; cpu->r[5] = 9u;
+    cpu_reset(cpu, base); cpu_step(cpu);
+    CHECK_EQ("smlabb add", cpu->r[3], 70u);
+
+    /* SMLABB 溢出：0x7FFF*0x7FFF + 0x7FFFFFFF → Q(bit27) 置位 */
+    bus_write32(nds->bus, base, 0xE1035684u);
+    cpu->r[4] = 0x7FFFu; cpu->r[5] = 0x7FFFFFFFu; cpu->r[6] = 0x7FFFu;
+    cpu->cpsr = 0;
+    cpu_reset(cpu, base); cpu_step(cpu);
+    CHECK_EQ("smlabb q flag", (cpu->cpsr >> 27) & 1u, 1u);
+
+    /* SMULWy r6,r7,r8：32×低16 → >>16（0x10000×4>>16=4） */
+    bus_write32(nds->bus, base, 0xE12608A7u);
+    cpu->r[7] = 0x00010000u; cpu->r[8] = 4u;
+    cpu_reset(cpu, base); cpu_step(cpu);
+    CHECK_EQ("smulwb", cpu->r[6], 4u);
+
+    /* SMLALBB r0,r1,r2,r3：64 位累加 0+2*3 */
+    bus_write32(nds->bus, base, 0xE1401283u);
+    cpu->r[0] = 0u; cpu->r[1] = 0u; cpu->r[2] = 2u; cpu->r[3] = 3u;
+    cpu_reset(cpu, base); cpu_step(cpu);
+    CHECK_EQ("smlalbb lo", cpu->r[1], 6u);
+    CHECK_EQ("smlalbb hi", cpu->r[0], 0u);
+
+    /* 回归：bit20=1 的 CMP_REG（E15100CC）不是 DSP 乘法，ARM7 不应进未定义异常 */
+    {
+        arm_cpu_t *cpu7 = nds->cpu7;
+        const uint32_t base7 = BUS_ARM7_WRAM_BASE + 0x2000u;
+        bus_write32(nds->bus, base7, 0xE15100CCu); /* cmp r1, r12, asr #1 */
+        cpu7->r[1] = 5u; cpu7->r[12] = 3u;
+        cpu7->cpsr = 0x1Fu;
+        cpu_reset(cpu7, base7);
+        cpu_step(cpu7);
+        CHECK_EQ("cmp not dsp pc", cpu7->r[15], base7 + 4u);
+        CHECK_EQ("cmp not dsp mode", cpu7->cpsr & 0x1Fu, 0x1Fu);
+    }
+
+    exec_set_trace(1);
+}
+
+/* ---- 21-B9e 用例：ARM BLX Rm（寄存器间接调用，FFXII 0x02006488 依赖） ---- */
 static void test_arm_blx_reg(nds_t *nds)
 {
     arm_cpu_t *cpu = nds->cpu;
@@ -4776,6 +4844,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_clz(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wk] ARMv5 DSP 乘法（标题位流解码依赖）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_dsp_mul(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9e] ARM BLX Rm 寄存器间接调用（Thumb/ARM 双路径）\n");

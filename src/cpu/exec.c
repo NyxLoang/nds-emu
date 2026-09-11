@@ -385,6 +385,62 @@ static void exec_mul_long(arm_cpu_t *cpu, uint32_t insn)
 
 /* ---- 10.7 单数据传输 LDR/STR/LDRB/STRB（bit27-26=01） ----
    支持立即偏移/寄存器偏移（可移位）、前/后变址、W 回写、字节/字宽。 */
+/* 21-B9wk：ARMv5 DSP 乘法（ARM9 only）。编码 bits27-20 ∈ {0x10,0x12,0x14,0x16}，
+   bit7=1、bit4=0；bit5/bit6 选择乘数高低半字，按 row 区分指令：
+   0x10=SMLAxy、0x12=SMLAWy/SMULWy、0x14=SMLALxy、0x16=SMULxy。
+   返回 1=已执行；0=ARM7 上未定义（调用方走未定义异常）。 */
+static int exec_dsp_mul(arm_cpu_t *cpu, uint32_t insn)
+{
+    if (cpu->is_arm7)
+        return 0;
+
+    unsigned kind = (insn >> 20) & 0xFu;
+    unsigned rd = (insn >> 16) & 0xFu;
+    unsigned rn = (insn >> 12) & 0xFu;
+    uint32_t rm_full = cpu->r[insn & 0xFu];
+    uint32_t rs_raw = cpu->r[(insn >> 8) & 0xFu];
+    uint32_t rm_sel = (insn & (1u << 5)) ? (rm_full >> 16) : (rm_full & 0xFFFFu);
+    uint32_t rs_sel = (insn & (1u << 6)) ? (rs_raw >> 16) : (rs_raw & 0xFFFFu);
+    int16_t m16 = (int16_t)rm_sel, s16 = (int16_t)rs_sel;
+
+    switch (kind) {
+    case 0: { /* SMLAxy：Rd = (s16)Rm_sel * (s16)Rs_sel + Rn，溢出置 Q(bit27) */
+        uint32_t prod = (uint32_t)((int32_t)m16 * (int32_t)s16);
+        uint32_t add = cpu->r[rn];
+        uint32_t res = prod + add;
+        if (((prod ^ res) & (add ^ res) & 0x80000000u))
+            cpu->cpsr |= 0x08000000u;
+        cpu->r[rd] = res;
+        return 1;
+    }
+    case 2:
+        if (insn & (1u << 5)) { /* SMULWy */
+            int64_t prod = ((int64_t)(int32_t)rm_full * (int64_t)s16) >> 16;
+            cpu->r[rd] = (uint32_t)prod;
+        } else { /* SMLAWy */
+            uint32_t prod = (uint32_t)(((int64_t)(int32_t)rm_full
+                                        * (int64_t)s16) >> 16);
+            uint32_t add = cpu->r[rn];
+            uint32_t res = prod + add;
+            if (((prod ^ res) & (add ^ res) & 0x80000000u))
+                cpu->cpsr |= 0x08000000u;
+            cpu->r[rd] = res;
+        }
+        return 1;
+    case 4: { /* SMLALxy：64 位 {Rd:Rn} += (s16)Rm_sel * (s16)Rs_sel */
+        int64_t prod = (int64_t)m16 * (int64_t)s16;
+        uint64_t acc = (uint64_t)cpu->r[rn] | ((uint64_t)cpu->r[rd] << 32);
+        acc += (uint64_t)prod;
+        cpu->r[rn] = (uint32_t)acc;
+        cpu->r[rd] = (uint32_t)(acc >> 32);
+        return 1;
+    }
+    default: /* 6: SMULxy */
+        cpu->r[rd] = (uint32_t)((int32_t)m16 * (int32_t)s16);
+        return 1;
+    }
+}
+
 static void exec_single_transfer(arm_cpu_t *cpu, uint32_t insn)
 {
     unsigned p = (insn >> 24) & 1u, u = (insn >> 23) & 1u,
@@ -709,6 +765,20 @@ int exec_step(arm_cpu_t *cpu, uint32_t insn)
             msr_write(cpu, value, field);
         }
         cpu->r[15] += 4;
+        return 1;
+    }
+
+    /* 21-B9wk：ARMv5 DSP 乘法（bits27-20=0x1_、bit7=1、bit4=0）。不匹配
+       MUL/MLA（bit4=1）与额外传输，是 ARM9 标题位流解码实际用到的指令族。 */
+    if ((insn & 0x0F900090u) == 0x01000080u) {
+        if (exec_dsp_mul(cpu, insn)) {
+            cpu->r[15] += 4;
+            return 1;
+        }
+        if (g_trace || cpu->nds->bus->diag)
+            printf("cpu: PC=%08X insn=%08X undefined DSP multiply on ARM7 (cycles=%llu)\n",
+                   cpu->r[15], insn, (unsigned long long)cpu->cycles);
+        arm_exception(cpu, EXC_UNDEF_OFF, ARM_MODE_UND, 4);
         return 1;
     }
 

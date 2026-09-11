@@ -205,9 +205,10 @@ static int save_bmp(const char *path, const uint32_t *fb_top,
 
     /* BMP 行自下而上；NDS 帧缓冲行自上而下。 */
     for (int y = 0; y < total_h; y++) {
-        int src_y = total_h - 1 - y;
-        const uint32_t *src = (src_y < h) ? fb_bot : fb_top;
-        if (src_y >= h) src_y -= h;
+        /* BMP 行自下而上：显示顶部应是 fb_top。file row 0 = 图像最底行。 */
+        int disp_y = total_h - 1 - y;
+        const uint32_t *src = (disp_y < h) ? fb_top : fb_bot;
+        int src_y = (disp_y < h) ? disp_y : disp_y - h;
         uint8_t *dst = rows + (size_t)y * row_size;
         for (int x = 0; x < w; x++) {
             uint32_t px = src[(size_t)src_y * w + x];

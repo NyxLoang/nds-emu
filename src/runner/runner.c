@@ -52,7 +52,8 @@ struct runner {
     uint64_t last_now;
     uint64_t key_frame, key_period, next_press;
     uint32_t key_mask;
-    int key_hold;
+    int key_down;
+    uint64_t key_release_frame;
 };
 
 #define RUNNER_WAKE7_IO(io_) (((io_)->irq[1].ie & (io_)->irq[1].ifl) != 0)
@@ -94,7 +95,8 @@ void runner_set_keys(runner_t *r, uint64_t frame, uint32_t mask,
     r->key_frame = frame;
     r->key_period = period;
     r->key_mask = mask;
-    r->key_hold = 0;
+    r->key_down = 0;
+    r->key_release_frame = 0;
     r->next_press = (mask != 0) ? frame : UINT64_MAX;
 }
 
@@ -108,23 +110,27 @@ uint64_t runner_now(const runner_t *r)
     return (r != NULL) ? r->tm.now : 0;
 }
 
-/* 帧号到达脚本时刻时注入按键，保持 8 个调度迭代后释放。 */
+/* 帧号到达脚本时刻时注入按键，保持 8 帧后释放（游戏按帧轮询）。 */
 static void runner_keys(runner_t *r)
 {
     if (r->key_mask == 0)
         return;
-    if (r->key_hold > 0) {
-        r->key_hold--;
-        if (r->key_hold == 0) {
+    uint64_t fr = runner_frame_index(r);
+    if (r->key_down) {
+        if (fr >= r->key_release_frame) {
             io_set_keyinput(r->nds->io, 0);
+            r->key_down = 0;
             if (r->key_period == 0)
                 r->next_press = UINT64_MAX;
             else
                 r->next_press += r->key_period;
         }
-    } else if (runner_frame_index(r) >= r->next_press) {
+    } else if (fr >= r->next_press) {
         io_set_keyinput(r->nds->io, (uint16_t)r->key_mask);
-        r->key_hold = 8;
+        r->key_down = 1;
+        r->key_release_frame = fr + 8;
+        printf("runner: key mask=%04X at frame=%llu\n", r->key_mask,
+               (unsigned long long)fr);
     }
 }
 
@@ -406,7 +412,17 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     }
     runner_set_keys(r, key_frame, key_mask, key_period);
     uint64_t start = runner_frame_index(r);
-    runner_run_to_frame(r, start + frames);
+    for (uint64_t fi = 0; fi < frames; fi++) {
+        if (!runner_run_frame(r))
+            break;
+        uint64_t fr = runner_frame_index(r);
+        if ((fr % 100) == 0) {
+            printf("headless-frames: f=%llu ARM9=%08X ARM7=%08X disp=%08X\n",
+                   (unsigned long long)fr, nds->cpu->r[15],
+                   nds->cpu7->r[15], bus_read32(nds->bus, 0x04000000u));
+            fflush(stdout);
+        }
+    }
 
     printf("headless-frames: done. frame=%llu now=%llu"
            " | ARM9 PC=%08X cyc=%llu cpsr=%08X"

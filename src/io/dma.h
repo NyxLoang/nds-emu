@@ -33,6 +33,7 @@ enum {
     DMA_START_VBLANK = 1,  /* VBlank */
     DMA_START_HBLANK = 2,  /* HBlank（阶段 15 不触发，预留） */
     DMA_START_CARD   = 5,  /* 卡带 DRQ（真游戏读 ROM 的典型路径） */
+    DMA_START_CARD7  = 0x12, /* NDS7 DS 卡带 DRQ（melonDS CheckDMAs(1,0x12)） */
 };
 
 /* 单个 DMA 通道。SAD/DAD 是源/目的地址；CNT_L 是字数；CNT_H 是控制。 */
@@ -57,5 +58,8 @@ void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus);
 
 /* 触发指定触发模式（VBlank/卡带等）的所有已使能通道。立即模式不在此触发。 */
 void dma_fire(dma_t *dma, struct bus *bus, int start_mode);
+
+/* 卡带 DRQ 触发（按核区分语义：ARM9 模式 5，ARM7 模式 = bits13-12|0x10）。 */
+void dma_fire_card(dma_t *dma, struct bus *bus, int is_arm7);
 
 #endif /* NDS_EMU_IO_DMA_H */

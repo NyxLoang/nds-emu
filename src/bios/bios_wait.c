@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdio.h>
 #include "bios.h"
 #include "bios_wait.h"
 #include "cpu/cpu.h"

@@ -1347,3 +1347,39 @@ build\nds-emu.exe "tools\rom_ascii.nds" --headless-frames 1700 --screenshot
 期望输出：`frame=1700 ... vram-nz=389114 disp=00161F10`，截图上半为主引擎
 标题画面（OCR 可读出 FINAL FANTASY 花体字）。直接运行不带
 `--headless-frames` 即进入窗口模式，用模拟器主循环逐帧运行同一模型。
+
+### 21-B9wr（2026-09-12 代码/测试）：KEYCNT 按键中断 + NDS7 卡带 DMA 触发
+
+**证据（卡在 ROMCTRL bit31 的那次长跑）**：ARM9 在 0x02011C54 轮询
+`ROMCTRL(0x040001A4)` bit31 等卡带传输结束，而卡带日志显示每帧只有一次
+「搬 1 个字」的 DMA：`arm7=1 ch=3 n=1 cnt_h=AF00 sad=04100010`。`0xAF00`
+按 NDS7 的定义是 **bit13-12=10b**，即 melonDS `CheckDMAs(1,0x12)` 的
+DS 卡带触发；本地旧 `dma_fire` 只按 ARM9 的模式号 5 匹配，ARM7 的卡带 DMA
+从不触发，于是 512 字节的块只被 CPU 轮询搬走 4 字节就停住。
+
+**修复**：
+
+- `io/dma`：新增 `dma_fire_card(dma,bus,is_arm7)`，ARM9 用模式 5、ARM7 用
+  `((cnt>>12)&3)|0x10 == 0x12`；`io_card_dma_check` 改调它（两核各查各的）；
+- `io/key`：补 KEYCNT（0x04000132，两核各一份）+ 按键中断 IF bit12
+  （OR/AND 两种匹配，边沿触发），标题/菜单的按键唤醒依赖它；
+- `runner`：脚本按键的保持单位从“调度迭代”改为“帧”（8 帧），
+  `--headless-frames` 每 100 帧打印一行进度（帧号 + 两核 PC + DISPCNT）。
+
+**验证**：新增 `[case 21-B9wr]` 8 项 + KEYCNT 4 项，全量 **830 项检查
+0 失败**。真 ROM 长跑
+`--headless-frames 2600 --key-frame 1700 --key-mask 0x8`：
+
+- frame1700 仍是标题（`disp=00161F10`、ARM9=02085604）；
+- frame1900 起 START 生效后 ARM9 落到空闲任务 `0200957C`（`cpsr=0000001F`
+  System 模式），ARM7 稳定停在 BIOS Halt `00001158`（`cpsr=8000001F`），
+  两台核都没有跑飞，`irq9=14215 / irq7=32612`；
+- **不再**出现“ARM9 死等 `ROMCTRL(0x040001A4)` bit31、512 字节块只搬 4 字节”
+  的卡带 DMA 停摆；下一个 gap 是 ARM9 空闲任务等不到 ARM7 调度器派发的任务。
+
+**验收步骤**：
+
+1. `build\test_nds.exe` → 末尾 `830 项检查，0 项失败`；
+2. `build\nds-emu.exe "tools\rom_ascii.nds" --headless-frames 2600 --screenshot`
+   → 进度行里 ARM9 不再长时间停在 `02011C54`；`frame=2600` 结束时摘要为
+   `vram-nz≈103264 disp=80111418`、ARM9=0200957C、ARM7=00001158。

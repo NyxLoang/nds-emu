@@ -115,3 +115,20 @@ void dma_fire(dma_t *dma, struct bus *bus, int start_mode)
         dma_transfer(d, bus, c);
     }
 }
+
+/* 21-B9ws：卡带 DMA 触发。ARM9 用 3 位 start mode（5=DS cart）；
+   ARM7 的 DS cart 模式是 CNT 高半字 bits13-12 | 0x10（melonDS: 0x12）。 */
+void dma_fire_card(dma_t *dma, struct bus *bus, int is_arm7)
+{
+    for (int c = 0; c < IO_DMA_COUNT; c++) {
+        dma_channel_t *d = &dma->ch[c];
+        if ((d->cnt_h & DMA_CNT_ENABLE) == 0)
+            continue;
+        unsigned mode = is_arm7
+            ? ((((unsigned)d->cnt_h >> 12) & 3u) | 0x10u)
+            : (((unsigned)d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT);
+        if ((is_arm7 && mode == DMA_START_CARD7) ||
+            (!is_arm7 && mode == DMA_START_CARD))
+            dma_transfer(d, bus, c);
+    }
+}

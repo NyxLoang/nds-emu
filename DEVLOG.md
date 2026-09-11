@@ -25,6 +25,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-12 | 21-B9wr（代码/测试） | IO/卡带/主循环 | KEYCNT 按键中断 + NDS7 卡带 DMA 触发模式 0x12 + 按键按帧保持：830 项 0 失败 | [io](src/io/iolog.md) 路 [main](src/mainlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wg（代码/测试） | CPU | ARM7 IRQ 入口/尾部改 FreeBIOS 0x1FB0/0x1FC0 参考级 HLE：六字帧 + SPSR 恢复，792 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wh（代码/测试） | CPU | CLZ Rd 掩码修正（0x0FFF0FF0 留出 Rd）：0x847C 的 CLZ r10,r3 不再误判为 CMN，标题位流解码越过 0x86A4，795 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wi（代码/测试） | BIOS/工程 | ARM7 SWI 0x1A-0x1D 音频/启动查表（FreeBIOS）+ headless-cycles 帧/VRAM 摘要与截图：0x0380443C 的 SWI 0x1C 不再掉低地址，805 项 0 失败 | [bios](src/bios/bioslog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

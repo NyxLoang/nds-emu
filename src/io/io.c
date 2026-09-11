@@ -57,7 +57,7 @@ static void io_fifo_update_irq_all(io_t *io)
 static void io_card_dma_check(io_t *io, int is_arm7)
 {
     if (cartbus_ready(&io->cartbus))
-        dma_fire(&io->dma[is_arm7 ? 1 : 0], io->bus, DMA_START_CARD);
+        dma_fire_card(&io->dma[is_arm7 ? 1 : 0], io->bus, is_arm7);
 }
 
 /* 诊断：记录「首次访问的未知 IO 地址」，避免游戏轮询同一寄存器（如 VCOUNT）刷屏。 */
@@ -102,6 +102,10 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
                            [(addr - IO_TIMER0_BASE) / IO_TIMER_STRIDE], addr);
     if (addr >= IO_KEYINPUT_ADDR && addr < IO_KEYINPUT_END)
         return key_read8(&io->keypad, addr);
+    if (addr >= IO_KEYCNT_ADDR && addr < IO_KEYCNT_END) {
+        uint16_t cnt = io->keycnt[is_arm7 ? 1 : 0];
+        return (uint8_t)(cnt >> ((addr - IO_KEYCNT_ADDR) * 8));
+    }
     if (dma_is_addr(addr))
         return dma_read8(&io->dma[is_arm7 ? 1 : 0], addr);
     if (cartbus_is_addr(addr))
@@ -174,6 +178,12 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     }
     if (addr >= IO_KEYINPUT_ADDR && addr < IO_KEYINPUT_END) {
         key_write8(&io->keypad, addr, val);
+        return;
+    }
+    if (addr >= IO_KEYCNT_ADDR && addr < IO_KEYCNT_END) {
+        uint16_t *cnt = &io->keycnt[is_arm7 ? 1 : 0];
+        unsigned shift = (addr - IO_KEYCNT_ADDR) * 8;
+        *cnt = (uint16_t)((*cnt & ~(0xFFu << shift)) | ((uint32_t)val << shift));
         return;
     }
     if (dma_is_addr(addr)) {
@@ -313,9 +323,39 @@ int io_irq_pending(const io_t *io)
     return irq_pending(&io->irq[0]); /* 主循环关心 ARM9 是否发生中断 */
 }
 
+/* 21-B9wr：KEYCNT 按键中断检查（melonDS CheckKeyIRQ 口径）。
+   bit15=1：掩码内所有键都按下才匹配；bit15=0：任一键按下即匹配。
+   只在“上次不匹配 → 现在匹配”的上升沿置 IF bit12。 */
+static void io_key_irq_check(io_t *io, int is_arm7, uint16_t oldkey,
+                             uint16_t newkey)
+{
+    uint16_t cnt = io->keycnt[is_arm7 ? 1 : 0];
+    if (!(cnt & KEYCNT_IRQ_ENABLE))
+        return;
+    uint16_t mask = cnt & 0x03FFu;
+    uint16_t ok = oldkey & mask;
+    uint16_t nk = newkey & mask;
+    int oldmatch, newmatch;
+    if (cnt & KEYCNT_IRQ_AND) {
+        oldmatch = (ok == 0);
+        newmatch = (nk == 0);
+    } else {
+        oldmatch = (ok != mask);
+        newmatch = (nk != mask);
+    }
+    if (!oldmatch && newmatch)
+        io->irq[is_arm7 ? 1 : 0].ifl |= IO_IF_KEY;
+}
+
 void io_set_keyinput(io_t *io, uint16_t pressed)
 {
+    uint16_t old = io->keypad.input;
     key_set_pressed(&io->keypad, pressed);
+    uint16_t nw = io->keypad.input;
+    if (nw != old) {
+        io_key_irq_check(io, 0, old, nw);
+        io_key_irq_check(io, 1, old, nw);
+    }
 }
 
 void io_set_touch(io_t *io, uint16_t adc_x, uint16_t adc_y, int down)

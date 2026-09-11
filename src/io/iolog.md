@@ -400,3 +400,18 @@
   用例语义不变）。真 ROM 同一步数 13 亿步时，字幕页从修正前 frame≈1475
   提前到 frame≈1380（约 5-6%），ARM7 仍稳定停 0x1158；字幕仍比参考慢，
   剩余差异属于尚未完成的周期成本模型（分支/访存多周期开销）。
+
+## 2026-09-12 · 21-B9wr — KEYCNT 按键中断 + NDS7 卡带 DMA 触发模式
+
+- **KEYCNT（0x04000132）**：两核各一份（`io->keycnt[2]`）。bit0-9 = 键掩码，
+  bit14 = IRQ 使能，bit15 = AND/OR 选择。`io_set_keyinput` 在输入变化时按
+  melonDS `CheckKeyIRQ` 口径做边沿检测（“上次不匹配→现在匹配”置 IF bit12）；
+  AND 模式下掩码内全部键都按下才算匹配，OR 模式下任一键按下即匹配。
+  FFXII 在标题/菜单之外还用它做按键唤醒，不实现会让关键等待卡住。
+- **NDS7 卡带 DMA 模式**：ARM9 的 DS 卡带触发号是 5（CNT 高半字 bit11-13），
+  NDS7 的定义不同——`CheckDMAs(1,0x12)` 判定 `((cnt>>12)&3)|0x10 == 0x12`，
+  即 bit13-12=2。新增 `dma_fire_card(dma,bus,is_arm7)` 按核选择匹配口径，
+  `io_card_dma_check` 改调它；旧实现只按 ARM9 的 5 匹配，ARM7 的卡带 DMA
+  永不触发（FFXII ARM7 实测 CNT_H=AF00 → bit13-12=2，正好是 0x12）。
+- 测试：`[case 21-B9wr]` 8 项（模式字段、未激活不搬、4 字内容、搬完清使能、
+  ARM9 通道不被误触发）；KEYCNT 4 项（OR 模式、AND 模式部分/全部按下）。

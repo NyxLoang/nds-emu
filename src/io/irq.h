@@ -14,6 +14,9 @@
    但 bit3 在真机上是 Timer0；FFXII 引入后需按硬件位映射修正（21-B9h）。 */
 #define IO_IF_VBLANK (1u << 0)
 
+/* 按键中断位（KEYCNT bit14/15 配置，21-B9wr） */
+#define IO_IF_KEY (1u << 12)
+
 /* FIFO 中断位（阶段 8）：bit17 = 发送 FIFO 空，bit18 = 接收 FIFO 非空 */
 #define IO_IF_FIFO_SEND_EMPTY    (1u << 17)
 #define IO_IF_FIFO_RECV_NOT_EMPTY (1u << 18)

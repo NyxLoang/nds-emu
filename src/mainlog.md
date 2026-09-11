@@ -164,3 +164,12 @@
   （早期帧更轻），窗口模式已达到可交互速度量级。
 - `--headless-frames 1700 --screenshot` 与旧 `--headless-cycles` 结果一致：
   frame1700、ARM9 PC=02085604、ARM7=0x1158、VRAM 非零 389114。
+
+## 2026-09-12 · 21-B9wr — 脚本按键按帧保持 + headless-frames 进度行
+
+- 脚本按键的“保持”单位从调度迭代改为**帧**：旧实现 `key_hold=8` 数的是
+  调度循环次数，事件驱动里一次迭代可能跨很多帧，游戏（按帧轮询 KEYINPUT）
+  有时读不到按下状态；现在记 `key_release_frame = 当前帧 + 8`，按帧释放，
+  并在按下时打印一行 `runner: key mask=.... at frame=` 便于验收对照。
+- `--headless-frames` 每 100 帧打印一行进度（帧号 + 两核 PC + DISPCNT），
+  长跑（数千帧、数分钟）时能看到卡在哪一段，不必等结束摘要。

@@ -542,6 +542,25 @@ static void test_keyinput(nds_t *nds)
     /* 按下 UP + B */
     io_set_keyinput(nds->io, KEY_UP | KEY_B);
     CHECK_EQ("UP+B pressed", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FBDu);
+
+    /* 21-B9wr：KEYCNT OR 模式按键中断（ARM9） */
+    nds->io->irq[0].ifl = 0;
+    bus_write16(nds->bus, IO_KEYCNT_ADDR, KEYCNT_IRQ_ENABLE | KEY_A);
+    io_set_keyinput(nds->io, 0);
+    CHECK_EQ("keycnt no irq released", nds->io->irq[0].ifl & IO_IF_KEY, 0u);
+    io_set_keyinput(nds->io, KEY_A);
+    CHECK_EQ("keycnt or irq", nds->io->irq[0].ifl & IO_IF_KEY, IO_IF_KEY);
+
+    /* AND 模式：只有掩码内全部键都按下才触发 */
+    nds->io->irq[0].ifl = 0;
+    bus_write16(nds->bus, IO_KEYCNT_ADDR,
+                KEYCNT_IRQ_ENABLE | KEYCNT_IRQ_AND | KEY_A | KEY_B);
+    io_set_keyinput(nds->io, 0);
+    nds->io->irq[0].ifl = 0;
+    io_set_keyinput(nds->io, KEY_A);
+    CHECK_EQ("keycnt and partial", nds->io->irq[0].ifl & IO_IF_KEY, 0u);
+    io_set_keyinput(nds->io, KEY_A | KEY_B);
+    CHECK_EQ("keycnt and full", nds->io->irq[0].ifl & IO_IF_KEY, IO_IF_KEY);
 }
 
 /* ---- 6.7 用例：等 VBlank（CPU 轮询 IF，置位后写 VRAM） ----
@@ -3776,6 +3795,56 @@ static void test_card_dma(nds_t *nds)
              IO_IF_CARD_DONE);
 }
 
+/* ---- 21-B9wr 用例：NDS7（ARM7）卡带 DMA 触发模式 ----
+   ARM9 的卡带触发模式号是 5（CNT 高半字 bit11-13）；NDS7 的卡带 DMA 模式
+   定义不同：melonDS CheckDMAs(1,0x12) 用 CNT 高半字 bit13-12 = 2（即 0x2000）
+   表示 DS 卡带 DRQ。本地旧实现只按 ARM9 的 5 匹配，ARM7 的卡带 DMA 永远
+   不触发——FFXII 的 ARM7 正是用 0x12 从 CARD_DATA 搬 ROM 数据。 */
+static void test_card_dma7(nds_t *nds)
+{
+    uint8_t rom[0x10000];
+    for (uint32_t i = 0; i < sizeof rom; i++)
+        rom[i] = (uint8_t)(i ^ 0x5Au);
+    io_attach_cart(nds->io, rom, sizeof rom);
+
+    const uint32_t dma0 = IO_DMA0_BASE;   /* ARM7 与 ARM9 的 DMA 寄存器同址、不同基 */
+    const uint32_t dst  = 0x02003000u;
+
+    /* 以 ARM7 视角写寄存器 → 落到 dma[1]，触发模式 bits13-12=2（=0x12） */
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, dma0 + 0, BUS_CARD_DATA);
+    bus_write32(nds->bus, dma0 + 4, dst);
+    bus_write16(nds->bus, dma0 + 8, 4u);
+    bus_write16(nds->bus, dma0 + 10,
+                DMA_CNT_32BIT | DMA_CNT_SRC_FIX | (2u << 12) | DMA_CNT_ENABLE);
+    nds->bus->active_is_arm7 = 0;
+
+    CHECK_EQ("card7 mode field", (nds->io->dma[1].ch[0].cnt_h >> 12) & 3u, 2u);
+    CHECK_EQ("card7 dma not yet", bus_read32(nds->bus, dst), 0u);
+
+    /* 命令 B7 读 0x8100 + 激活 ROMCTRL；就绪边沿应触发 ARM7 的卡带 DMA */
+    static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
+    for (int i = 0; i < 8; i++)
+        bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x81);
+    for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
+        io_advance_cart(nds->io, 0);
+
+    for (int i = 0; i < 4; i++) {
+        uint32_t want = (uint32_t)rom[0x8100 + 4 * i]
+                      | ((uint32_t)rom[0x8100 + 4 * i + 1] << 8)
+                      | ((uint32_t)rom[0x8100 + 4 * i + 2] << 16)
+                      | ((uint32_t)rom[0x8100 + 4 * i + 3] << 24);
+        char nm[32];
+        snprintf(nm, sizeof nm, "card7 dma word[%d]", i);
+        CHECK_EQ(nm, bus_read32(nds->bus, dst + 4u * i), want);
+    }
+    CHECK_EQ("card7 dma enable cleared",
+             nds->io->dma[1].ch[0].cnt_h & DMA_CNT_ENABLE, 0u);
+    /* ARM9（模式 5）不该被 ARM7 的 0x12 触发条件误伤 */
+    CHECK_EQ("card7 arm9 untouched", nds->io->dma[0].ch[0].cnt_h, 0u);
+}
+
 /* ---- 阶段 15.5 用例：CPU 程序设 DMA + 激活卡带命令，DMA 从 ROM 搬数据到 RAM ---- */
 static void test_card_program(nds_t *nds)
 {
@@ -5254,6 +5323,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_card_program(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wr] NDS7 卡带 DMA 触发模式（0x12）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_card_dma7(nds);
         nds_destroy(nds);
     }
     printf("\n[case 16.2] 存档芯片 SPI 状态机（EEPROM）\n");

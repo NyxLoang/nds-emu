@@ -5,7 +5,11 @@
 
 /* KEYINPUT 寄存器地址（16 位只读；高 4 位恒读 1） */
 #define IO_KEYINPUT_ADDR 0x04000130u
-#define IO_KEYINPUT_END  0x04000134u   /* KEYCNT 等后续阶段，上界（不含） */
+#define IO_KEYINPUT_END  0x04000132u   /* KEYINPUT 上界（KEYCNT 紧随其后） */
+#define IO_KEYCNT_ADDR   0x04000132u   /* 按键中断控制：bit0-9 键掩码，bit14 IRQ 使能，bit15 AND/OR */
+#define IO_KEYCNT_END    0x04000134u
+#define KEYCNT_IRQ_ENABLE (1u << 14)
+#define KEYCNT_IRQ_AND    (1u << 15)   /* 1=所有选中键都按下才触发，0=任一选中键按下 */
 
 /* NDS 按键位（KEYINPUT 低 12 位，按下=0） */
 #define KEY_A       (1u << 0)

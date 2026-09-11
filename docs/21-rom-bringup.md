@@ -1239,3 +1239,37 @@ SMULxy/SMULWy（半字选择、Q 标志、64 位累加），识别掩码
    辨认出《最终幻想12 亡灵之翼》标题/标题动画画面。
 4. 若画面不是标题（例如仍是随机纹理、渐变或加载画面），请说明看到的
    主要颜色/图形，后续继续按逐指令对照追画面合成/VRAM 写入路径。
+
+### 21-B9wl（2026-09-06 里程碑）：hard_title 达成候选——本地渲染出标题
+
+**怎么找到的**：对本地逐帧 VRAM bank 图与参考 framebuffer 做 OCR/结构对照：
+
+- frame1000-1475：本地画面是**开场制作人员表**，OCR 稳定读出
+  `MOVIE DIRECTOR EIJI FUJII`、`GRAPHIC DESIGNER SHO OKAMURA`、
+  `(Basiscape Co., Ltd.) KENICHIRO`、`HITOSHI WATANABE / EISUKE YOKOYAMA`
+  等字幕——说明 2D 渲染、VRAM 写入、字体/纹理链路都在正常工作；
+- frame1700-1875：本地 bank A/B 图上 OCR 读出 `FINAL FANTASY …` 标题字样；
+- 参考核 frame100-900 同样经历 SQUARE ENIX / THINK&FEEL / Ivalice
+  Alliance / IMAGINE codec / 制作人员表，frame1000 之后进入无 OCR 文字的
+  画面（标题/场景）。
+
+**结论**：本地已经能持续运行并在 frame≈1700-1875 渲染出标题画面，
+**hard_title 达成候选**。启动后固定跑
+`--headless-cycles 1650000000 --screenshot`（约 frame1790），模拟器自身
+渲染的 Engine A 画面 OCR 可读出 `FINIL III`（“FINAL FANTASY”花体字被
+OCR 误读），Engine B 为标题配套画面。
+
+**已知偏差**：本地开场/字幕时间线比参考晚约 500 帧（参考 frame1000 后
+已离开字幕，本地 frame1500 仍在滚字幕、frame1700 才出标题）。这属于
+周期成本/事件节奏尚未逐项校准的问题，不影响“进入标题”这一里程碑；
+后续对齐 gameplay 时序时继续处理。
+
+**验收步骤**：
+
+1. `build\test_nds.exe` → 末尾 `818 项检查，0 项失败`；
+2. `build\nds-emu.exe "tools\rom_ascii.nds" --headless-cycles 1650000000 --screenshot`
+   → 末尾 `frame=1790`、ARM7 PC=00001158、`disp=00121F10`；
+3. 打开 `headless_shot.bmp`（上半=主引擎 A）或
+   `build\title2_engineA_main_x2.png`，确认是《最终幻想12 亡灵之翼》的
+   标题 logo/标题画面；
+4. 对照参考 `%TEMP%\ref_fb_1310.bin`（或其导出 PNG）确认同为标题段画面。

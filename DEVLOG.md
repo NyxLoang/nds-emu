@@ -30,6 +30,7 @@
 | 2026-09-06 | 21-B9wi（代码/测试） | BIOS/工程 | ARM7 SWI 0x1A-0x1D 音频/启动查表（FreeBIOS）+ headless-cycles 帧/VRAM 摘要与截图：0x0380443C 的 SWI 0x1C 不再掉低地址，805 项 0 失败 | [bios](src/bios/bioslog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wj（代码/测试） | 显示/总线 | DISPCNT VRAM 直显模式（bit16-17=2，物理 bank 直读）：FFXII 标题顶屏从全黑变为 2912 色，808 项 0 失败 | [ppu](src/ppu/ppulog.md) 路 [bus](src/bus/buslog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wk（代码/测试） | CPU/显示 | ARMv5 DSP 乘法（SMLAxy/SMLAWy/SMLALxy/SMULxy/SMULWy）：标题解码 42,899 条指令与参考逐条一致，818 项 0 失败；截图上下屏顺序修正 | [cpu](src/cpu/cpulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
+| 2026-09-06 | 21-B9wl（里程碑） | 工程 | **hard_title 达成候选**：本地连续运行到 frame1790，模拟器自身渲染出标题文字（OCR：FINAL FANTASY…）；此前 OCR 读到开场制作人员表，证明画面链路正常；本地时间线比参考晚约 500 帧（仅文档） | [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wf（代码/测试） | CPU/BIOS | ARM7 FreeBIOS 低地址等待路径 HLE：WaitByLoop 真循环节拍 + Halt 暂停/唤醒，790 项 0 失败 | [cpu](src/cpu/cpulog.md) 路 [bios](src/bios/bioslog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9we（代码/测试） | 总线/PPU | LCDC 分 bank 映射 + Engine B BG 扩展调色板：SQUARE ENIX 屏亮起，770 项 0 失败 | [bus](src/bus/buslog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-06 | 21-B9wd（代码/测试） | 总线/IO | 实现 VRAMCNT 动态映射：FFXII bank D→A BG/C→B BG/E→A OBJ/H→B OBJ，768 项 0 失败 | [bus](src/bus/buslog.md) 路 [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

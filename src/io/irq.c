@@ -34,7 +34,11 @@ static void write_byte(uint32_t *reg, uint32_t addr, uint32_t base, uint8_t val)
 void irq_write8(irq_t *irq, uint32_t addr, uint8_t val)
 {
     if (addr >= IO_IME_ADDR && addr < IO_IME_ADDR + 4) {
-        write_byte(&irq->ime, addr, IO_IME_ADDR, val);
+        /* IME 只有 bit0 有效（melonDS: IME = val & 1）。旧实现把整字写进去，
+           读回会出现 0x04000001 这类高位垃圾（与参考核 dump 对不上）。 */
+        uint32_t shift = (addr - IO_IME_ADDR) * 8;
+        if (shift == 0)
+            irq->ime = (irq->ime & ~1u) | (uint32_t)(val & 1u);
         return;
     }
     if (addr >= IO_IE_ADDR && addr < IO_IE_ADDR + 4) {

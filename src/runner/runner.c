@@ -486,7 +486,9 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     /* 21-B9wu：3D 引擎状态摘要（3D 场景是否真的出图） */
     {
         extern unsigned long long g_rtc_reads;
-        printf("io: rtc-reads=%llu\n", g_rtc_reads);
+        extern unsigned long long g_snd_cnt_writes;
+        printf("io: rtc-reads=%llu snd-cnt-writes=%llu\n", g_rtc_reads,
+               g_snd_cnt_writes);
         /* 21-B9wz：ARM9 累积热点前 16（含占比） */
         for (int hi = 0; hi < 16; hi++) {
             uint32_t best = 0, bh = 0;

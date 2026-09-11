@@ -25,6 +25,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-12 | 21-B9xa（代码/测试） | IO | IME 只保留 bit0（dump 与参考一致）+ 声音驱动诊断 `io: snd-cnt-writes`：879 项 0 失败 | [io](src/io/iolog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9wy（代码/测试） | 3D/IO | GXSTAT FIFO 状态位对齐参考核（bit25+bit26，与参考 0x86000000 一致）：879 项 0 失败 | [gx](src/gx/gxlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9ww/B9wx（代码/测试） | IO/音频/3D | ARM9 DMA 模式 7（GX 显示列表 FIFO）+ NDS RTC 串行时钟（0x04000134/138）：875 项 0 失败 | [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9wv（代码/测试） | IO/按键 | KEYINPUT 复位值修正（0=全按下 → 全松开）：游戏不再误判 START/A 一直按着，时间线与参考的卡带读循环对齐；866 项 0 失败 | [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

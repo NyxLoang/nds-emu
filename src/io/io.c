@@ -6,6 +6,8 @@
 static void io_gx_fifo_irq_sync(io_t *io);
 /* 21-B9wx：RTC/RCnt 读计数（诊断：游戏是否在轮询实时时钟） */
 unsigned long long g_rtc_reads = 0;
+/* 21-B9xa：ARM7 写声音通道 CNT 的次数（诊断：声音驱动是否在跑） */
+unsigned long long g_snd_cnt_writes = 0;
 
 io_t *io_create(void)
 {
@@ -204,6 +206,11 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         unsigned shift = (addr - IO_KEYCNT_ADDR) * 8;
         *cnt = (uint16_t)((*cnt & ~(0xFFu << shift)) | ((uint32_t)val << shift));
         return;
+    }
+    /* 21-B9xa 诊断：ARM7 是否在写声音通道的控制字（声音驱动是否在跑） */
+    if (is_arm7 && addr >= SND_BASE && addr < SND_END &&
+        ((addr - SND_BASE) & 0x0Fu) == 3u) {
+        g_snd_cnt_writes++;
     }
     /* 21-B9wx：RTC 串行接口按字节写（0x04000138 bit0/1/2/4 是数据/时钟/片选/方向） */
     if (is_arm7 && addr >= 0x04000134u && addr < 0x04000140u) {

@@ -34,6 +34,11 @@ enum {
     DMA_START_HBLANK = 2,  /* HBlank（阶段 15 不触发，预留） */
     DMA_START_CARD   = 5,  /* 卡带 DRQ（真游戏读 ROM 的典型路径） */
     DMA_START_CARD7  = 0x12, /* NDS7 DS 卡带 DRQ（melonDS CheckDMAs(1,0x12)） */
+    /* 21-B9ww：NDS9 DMA 模式 7 = GX 命令 FIFO（显示列表 DMA）。
+       melonDS: StartMode==0x07 → GPU3D.CheckFIFODMA()，源在主存、目的固定
+       0x04000400，把显示列表按 FIFO 空位分批送进 GX。本地不建模 FIFO 时序，
+       直接整体搬运（命令内容一致）。 */
+    DMA_START_GXFIFO = 7,
 };
 
 /* 单个 DMA 通道。SAD/DAD 是源/目的地址；CNT_L 是字数；CNT_H 是控制。 */

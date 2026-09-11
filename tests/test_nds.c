@@ -3220,7 +3220,93 @@ static void test_dma_owner_routing(nds_t *nds)
 
 /* ---- 21-B9wu 用例：无头模式按帧推进 SPU，单发通道到末尾清 start 位 ----
    FFXII 开场 ARM7 会轮询声音通道的播放状态；无头模式没有 SDL 回调推进
-   混音器，旧实现里通道永远“播不完”，游戏就卡在轮询里。 */
+  混音器，旧实现里通道永远“播不完”，游戏就卡在轮询里。 */
+/* ---- 21-B9wx 用例：NDS RTC 串行协议（0x04000138）----
+   协议：bit2=片选、bit1=时钟、bit0=数据、bit4=方向（1=主机写、0=主机读）；
+   片选拉高后每个“时钟=0”的写入触发一次采样/移出，低位先出。 */
+static void rtc_send_byte(nds_t *nds, uint8_t val)
+{
+    for (int i = 0; i < 8; i++) {
+        uint8_t bit = (uint8_t)((val >> i) & 1u);
+        io_write8(nds->io, 0x04000138u, (uint8_t)(0x14u | bit), 1); /* 写方向+数据, 时钟低 */
+        io_write8(nds->io, 0x04000138u, (uint8_t)(0x16u | bit), 1); /* 时钟高 */
+    }
+}
+
+static uint8_t rtc_recv_byte(nds_t *nds)
+{
+    uint8_t out = 0;
+    for (int i = 0; i < 8; i++) {
+        io_write8(nds->io, 0x04000138u, 0x04u, 1);                  /* 读方向, 时钟低 */
+        uint8_t v = io_read8(nds->io, 0x04000138u, 1);
+        if (v & 1u) out |= (uint8_t)(1u << i);
+        io_write8(nds->io, 0x04000138u, 0x06u, 1);                  /* 时钟高 */
+    }
+    return out;
+}
+
+static void test_rtc(nds_t *nds)
+{
+    /* 写状态寄存器 1：命令 0x06（写）、数据 0x02（24 小时制） */
+    io_write8(nds->io, 0x04000138u, 0x04u, 1);      /* 片选 */
+    rtc_send_byte(nds, 0x06u);
+    rtc_send_byte(nds, 0x02u);
+    io_write8(nds->io, 0x04000138u, 0x00u, 1);      /* 撤片选 */
+
+    /* 读状态寄存器 1：命令 0x61（真机高半字节按位反转 → 0x86 = 读状态 1） */
+    io_write8(nds->io, 0x04000138u, 0x04u, 1);
+    rtc_send_byte(nds, 0x61u);
+    uint8_t st = rtc_recv_byte(nds);
+    io_write8(nds->io, 0x04000138u, 0x00u, 1);
+    CHECK_EQ("rtc status1 24h", st & 0x02u, 0x02u);
+
+    /* 读日期时间：真机字节 0x65 → 反转表 → 命令 0xA6 = 读 7 字节
+       （年/月/日/星期/时/分/秒，BCD）；bit7=1 才是读命令。 */
+    io_write8(nds->io, 0x04000138u, 0x04u, 1);
+    rtc_send_byte(nds, 0x65u);
+    uint8_t t[7];
+    for (int i = 0; i < 7; i++) t[i] = rtc_recv_byte(nds);
+    io_write8(nds->io, 0x04000138u, 0x00u, 1);
+    CHECK_EQ("rtc datetime year bcd", (t[0] >> 4) & 0xF, 2u);
+    CHECK_EQ("rtc datetime month bcd", t[1], 0x09u);
+    CHECK_EQ("rtc datetime day bcd", t[2], 0x12u);
+
+    /* RCnt（0x04000134）按字节可读写 */
+    io_write8(nds->io, 0x04000134u, 0x5Au, 1);
+    io_write8(nds->io, 0x04000135u, 0xA5u, 1);
+    CHECK_EQ("rcnt write/read", io_read8(nds->io, 0x04000134u, 1), 0x5Au);
+    CHECK_EQ("rcnt high byte", io_read8(nds->io, 0x04000135u, 1), 0xA5u);
+}
+
+/* ---- 21-B9ww 用例：ARM9 DMA 模式 7 = GX 命令 FIFO（显示列表 DMA）----
+   真机显示列表不靠 CPU 逐字写端口，而是把主存里的列表用 DMA 送到
+   0x04000400（目的地址固定）。本地旧实现只认立即模式与 VBlank/卡带触发，
+   模式 7 的搬运从不发生 → GX 永远收不到几何命令（3D 画面全黑）。 */
+static void test_dma_gx_fifo_mode(nds_t *nds)
+{
+    const uint32_t src = 0x02006000u;
+    const uint32_t dma0 = IO_DMA0_BASE;
+
+    bus_write32(nds->bus, src + 0, 0x00000010u);   /* MTX_MODE */
+    bus_write32(nds->bus, src + 4, 0x00000002u);   /* 参数：position */
+    bus_write32(nds->bus, src + 8, 0x00000015u);   /* MTX_IDENTITY */
+    bus_write32(nds->bus, src + 12, 0x00000000u);
+    nds->bus->active_is_arm7 = 0;
+    uint32_t before = nds->io->gx.cmd_count;
+
+    bus_write32(nds->bus, dma0 + 0, src);
+    bus_write32(nds->bus, dma0 + 4, 0x04000400u);  /* GXFIFO */
+    bus_write16(nds->bus, dma0 + 8, 4u);
+    bus_write16(nds->bus, dma0 + 10,
+                DMA_CNT_32BIT | DMA_CNT_DST_FIX
+                | (DMA_START_GXFIFO << DMA_CNT_MODE_SHIFT) | DMA_CNT_ENABLE);
+
+    CHECK_EQ("gxfifo dma cmds", nds->io->gx.cmd_count - before, 2u);
+    CHECK_EQ("gxfifo dma mt_mode", nds->io->gx.mt_mode, 2u);
+    CHECK_EQ("gxfifo dma enable cleared",
+             bus_read16(nds->bus, dma0 + 10) & DMA_CNT_ENABLE, 0u);
+}
+
 static void test_snd_advance_headless(nds_t *nds)
 {
     const uint32_t ch0 = SND_BASE;
@@ -5437,6 +5523,20 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_dma_owner_routing(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9ww] ARM9 DMA 模式 7（GX FIFO 显示列表）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_dma_gx_fifo_mode(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9wx] NDS RTC 串行协议（0x04000134/0x04000138）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_rtc(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9wu] 无头模式 SPU 时间推进（单发通道清 start 位）\n");

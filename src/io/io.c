@@ -4,6 +4,8 @@
 #include "bus/bus.h"
 
 static void io_gx_fifo_irq_sync(io_t *io);
+/* 21-B9wx：RTC/RCnt 读计数（诊断：游戏是否在轮询实时时钟） */
+unsigned long long g_rtc_reads = 0;
 
 io_t *io_create(void)
 {
@@ -14,6 +16,7 @@ io_t *io_create(void)
         cartbus_init(&io->cartbus);
         gx_reset(&io->gx); /* 矩阵置单位阵 + 视口默认 + GXSTAT 置 FIFO 空 */
         key_reset(&io->keypad); /* 21-B9wu：默认所有键松开（0 会被读成全按下） */
+        rtc_reset(&io->rtc);   /* 21-B9wx：RTC 初始为 2026-09-12 12:00:00（24 小时制） */
     }
     return io;
 }
@@ -103,9 +106,24 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
                            [(addr - IO_TIMER0_BASE) / IO_TIMER_STRIDE], addr);
     if (addr >= IO_KEYINPUT_ADDR && addr < IO_KEYINPUT_END)
         return key_read8(&io->keypad, addr);
+    if (addr >= 0x04000134u && addr < 0x04000140u && is_arm7) {
+        g_rtc_reads++;
+    }
     if (addr >= IO_KEYCNT_ADDR && addr < IO_KEYCNT_END) {
         uint16_t cnt = io->keycnt[is_arm7 ? 1 : 0];
         return (uint8_t)(cnt >> ((addr - IO_KEYCNT_ADDR) * 8));
+    }
+    /* 21-B9wx：ARM7 的 RCnt(0x04000134)/键高半字(0x04000136)/RTC(0x04000138) */
+    if (is_arm7 && addr >= 0x04000134u && addr < 0x04000140u) {
+        switch (addr) {
+        case 0x04000134u: return (uint8_t)(io->rcnt & 0xFFu);
+        case 0x04000135u: return (uint8_t)(io->rcnt >> 8);
+        case 0x04000136u: return 0x7Fu;   /* X/Y 等高位按键：1=松开 */
+        case 0x04000137u: return 0x00u;
+        case 0x04000138u: return (uint8_t)(rtc_read16(&io->rtc) & 0xFFu);
+        case 0x04000139u: return (uint8_t)(rtc_read16(&io->rtc) >> 8);
+        default:          return 0x00u;
+        }
     }
     if (dma_is_addr(addr))
         return dma_read8(&io->dma[is_arm7 ? 1 : 0], addr);
@@ -186,6 +204,16 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         unsigned shift = (addr - IO_KEYCNT_ADDR) * 8;
         *cnt = (uint16_t)((*cnt & ~(0xFFu << shift)) | ((uint32_t)val << shift));
         return;
+    }
+    /* 21-B9wx：RTC 串行接口按字节写（0x04000138 bit0/1/2/4 是数据/时钟/片选/方向） */
+    if (is_arm7 && addr >= 0x04000134u && addr < 0x04000140u) {
+        switch (addr) {
+        case 0x04000134u: io->rcnt = (uint16_t)((io->rcnt & 0xFF00u) | val); return;
+        case 0x04000135u: io->rcnt = (uint16_t)((io->rcnt & 0x00FFu) | ((uint16_t)val << 8)); return;
+        case 0x04000138u: rtc_write16(&io->rtc, val, 1); return;
+        case 0x04000139u: rtc_write16(&io->rtc, (uint16_t)((uint16_t)val << 8), 1); return;
+        default: return;   /* 0x04000136/37/3A-3F：只读或无实现 */
+        }
     }
     if (dma_is_addr(addr)) {
         /* 写 CNT_H 且使能=1 时在 dma_write8 内同步触发立即搬运；

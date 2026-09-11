@@ -9,6 +9,7 @@
 #include "fifo.h"
 #include "disp.h"
 #include "touch.h"
+#include "rtc.h"
 #include "memctl.h"
 #include "power.h"
 #include "math.h"
@@ -30,6 +31,8 @@ typedef struct io {
     nds_timer_t timer[2][IO_TIMER_COUNT]; /* 定时器：ARM9/ARM7 各 0-3（真机两套） */
     keypad_t keypad;                  /* KEYINPUT */
     uint16_t keycnt[2];               /* KEYCNT：ARM9/ARM7 各一套（按键中断控制） */
+    rtc_t rtc;                        /* 21-B9wx：实时时钟（ARM7 专属，0x04000134/138） */
+    uint16_t rcnt;                    /* 21-B9wx：RTC 控制寄存器（0x04000134） */
     dma_t dma[2];                     /* DMA：ARM9/ARM7 各 4 通道（真机两套） */
     ipc_fifo_t fifo;                  /* IPC FIFO（阶段 8：双核通信） */
     ipc_sync_t sync;                  /* IPCSYNC（阶段 21-B2：双核同步寄存器） */

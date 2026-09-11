@@ -105,10 +105,14 @@ void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus,
     } else {
         uint32_t shift = (off - 10) * 8;
         d->cnt_h = (uint16_t)((d->cnt_h & ~(0xFFu << shift)) | ((uint32_t)val << shift));
-        /* 触发条件：写 CNT_H 高字节（含使能位）且使能位置位、模式=立即 */
-        if (off == 11 && (d->cnt_h & DMA_CNT_ENABLE) != 0 &&
-            ((d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT) == DMA_START_IMMED)
-            dma_transfer(d, bus, (int)ch_index(addr), is_arm7);
+        /* 触发条件：写 CNT_H 高字节（含使能位）且使能位置位；
+           模式 0=立即、模式 7=GX FIFO（仅 ARM9）都在这里同步搬运。 */
+        if (off == 11 && (d->cnt_h & DMA_CNT_ENABLE) != 0) {
+            unsigned mode = ((d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT);
+            if (mode == DMA_START_IMMED ||
+                (!is_arm7 && mode == DMA_START_GXFIFO))
+                dma_transfer(d, bus, (int)ch_index(addr), is_arm7);
+        }
     }
 }
 

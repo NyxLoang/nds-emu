@@ -9,6 +9,7 @@
 #include "io/io.h"        /* io_set_vblank */
 #include "ppu/render.h"   /* render_frame：双屏纯软件出图 */
 #include "snd/snd.h"      /* snd_advance / snd_host_render_active（21-B9wu） */
+#include "io/rtc.h"       /* rtc_advance_seconds（21-B9wx） */
 #include "runner.h"
 #include "timing/timing.h"
 
@@ -56,6 +57,7 @@ struct runner {
     int key_down;
     uint64_t key_release_frame;
     uint64_t snd_done;        /* 21-B9wu：已推进的音频样本数（无头模式补推用） */
+    uint64_t rtc_done;        /* 21-B9wx：已推进的 RTC 秒数 */
 };
 
 #define RUNNER_WAKE7_IO(io_) (((io_)->irq[1].ie & (io_)->irq[1].ifl) != 0)
@@ -225,6 +227,18 @@ int runner_run_frame(runner_t *r)
                 delta = 4096ull;
             snd_advance(&r->nds->io->snd, r->nds->bus, (uint32_t)delta);
             r->snd_done = want;
+        }
+    }
+    /* 21-B9wx：RTC 走时（1 秒 = 33513982 个 ARM9 周期）。游戏读日期/时间时
+       会看到连续递增的时间，不会因为秒数永远不变而卡住。 */
+    {
+        uint64_t want = r->tm.now / 33513982ull;
+        if (want > r->rtc_done) {
+            uint64_t delta = want - r->rtc_done;
+            if (delta > 600ull)
+                delta = 600ull;
+            rtc_advance_seconds(&r->nds->io->rtc, (uint32_t)delta);
+            r->rtc_done = want;
         }
     }
     return 1;
@@ -457,6 +471,8 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         if (nds->bus->vram[vi]) vram_nz++;
     /* 21-B9wu：3D 引擎状态摘要（3D 场景是否真的出图） */
     {
+        extern unsigned long long g_rtc_reads;
+        printf("io: rtc-reads=%llu\n", g_rtc_reads);
         const uint16_t *g3 = gx_framebuffer(&nds->io->gx);
         size_t n3 = 0;
         for (size_t i = 0; i < (size_t)GX_SCREEN_W * GX_SCREEN_H; i++)

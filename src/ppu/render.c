@@ -259,12 +259,16 @@ static uint8_t tile_pixel(const bus_t *bus, uint32_t tile_addr, int px, int py, 
 {
     if (is_256)
         return bus_read8(bus, tile_addr + (uint32_t)(py * 8 + px));
+    /* 21-B9yi(续45)：**NDS 的 16 色图块是「半字节打包线性」格式，不是 GBA 的位平面**。
+       每个图块 32 字节 = 8 行 × 4 字节；每字节两个像素，**低半字节在左**。
+       口径来自 melonDS `SoftRenderer2D::DrawBG_Text` 的 16-color 分支：
+         `pixelsaddr = tilesetaddr + (tile<<5) + (row<<2)`
+         `color = (x&1) ? (byte>>4) : (byte&0x0F)`
+       本地此前按 GBA 位平面解码（每行 4 字节各取 1 位），于是**所有 4bpp 图层都碎成
+       竖条**——对话框文字读不成字、也解释了长期悬而未决的「条纹」现象。 */
     uint32_t row = tile_addr + (uint32_t)py * 4u;
-    int bit = 7 - px;
-    uint8_t idx = 0;
-    for (int b = 0; b < 4; b++)
-        idx |= (uint8_t)(((bus_read8(bus, row + b) >> bit) & 1u) << b);
-    return idx;
+    uint8_t b = bus_read8(bus, row + (uint32_t)(px >> 1));
+    return (uint8_t)((px & 1) ? (b >> 4) : (b & 0x0Fu));
 }
 
 /* 绘制一个 tile 图层：对每个屏幕像素，经 tilemap 找 tile → 取索引 → 查调色板。

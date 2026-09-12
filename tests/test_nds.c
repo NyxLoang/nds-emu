@@ -2228,8 +2228,10 @@ static void test_tile_render(nds_t *nds)
     bus_write32(nds->bus, IO_DISPCNT, DISPCNT_BG0 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
     /* BG0CNT：屏幕基址块 1(=0x800)，字符基址块 0，16 色 */
     bus_write16(nds->bus, IO_BGCNT_BASE, 0x0100u);
-    /* tile0（4bpp）：只让像素(0,0)=索引1，其余索引0（透明） */
-    bus_write8(nds->bus, BUS_VRAM_BASE, 0x80u);
+    /* tile0（4bpp）：只让像素(0,0)=索引1，其余索引0（透明）。
+       21-B9yi(续45)：NDS 的 16 色图块是**半字节打包线性**格式（不是 GBA 位平面）——
+       每行 4 字节、每字节两个像素、**低半字节在左**。所以像素(0,0)=1 是字节 0x01。 */
+    bus_write8(nds->bus, BUS_VRAM_BASE, 0x01u);
 
     render_frame(nds->bus, fb_top, fb_bot);
     CHECK_EQ("tile4 px00 red",      fb_top[0],   0xFFFB0000u);
@@ -2263,8 +2265,9 @@ static void test_engine_b(nds_t *nds)
     bus_write16(nds->bus, BUS_PALETTE_BASE + 0x402, 0x03E0u);
     bus_write32(nds->bus, IO_DISPCNT_SUB, DISPCNT_BG0 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
     bus_write16(nds->bus, IO_BGCNT_SUB_BASE, 0x0100u);
-    /* tile0（4bpp）：清空位面1-3，仅位面0 让像素(0,0)=索引1 */
-    bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 0, 0x80u);
+    /* tile0（4bpp）：21-B9yi(续45) 按 NDS 的**半字节打包**格式写（低半字节在左），
+       让像素(0,0)=索引1、像素(1,0)=0。 */
+    bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 0, 0x01u);
     bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 1, 0x00u);
     bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 2, 0x00u);
     bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 3, 0x00u);
@@ -2287,8 +2290,9 @@ static void test_obj_render(nds_t *nds)
     /* DISPCNT：mode 0（无 BG）+ OBJ 开启 + 显示模式 1 */
     bus_write32(nds->bus, IO_DISPCNT, DISPCNT_OBJ | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
 
-    /* OBJ 图形（0x06400000 主 OBJ 窗口）tile0（4bpp）：像素(0,0)=索引1，其余 0（透明） */
-    bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 0, 0x80u);
+    /* OBJ 图形（0x06400000 主 OBJ 窗口）tile0（4bpp）：像素(0,0)=索引1，其余 0（透明）。
+       21-B9yi(续45)：NDS 16 色图块是半字节打包（低半字节在左）⇒ 字节 0x01。 */
+    bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 0, 0x01u);
     bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 1, 0x00u);
     bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 2, 0x00u);
     bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 3, 0x00u);
@@ -2347,9 +2351,11 @@ static void test_2d_scene(nds_t *nds)
     bus_write16(nds->bus, IO_BGCNT_BASE,
                 BGCNT_COLORS_256 | (1u << BGCNT_SCREEN_BASE_SHIFT));
 
-    /* OBJ：蓝色 8×8 方块 @ (16,16)，16 色，tile0 全索引1 */
+    /* OBJ：蓝色 8×8 方块 @ (16,16)，16 色，tile0 全索引1。
+       21-B9yi(续45)：NDS 的 16 色图块是**半字节打包**（每字节两个像素、低半字节在左），
+       所以「全索引 1」= 每字节 0x11（旧用例按 GBA 位平面写成 0xFF）。 */
     for (int r = 0; r < 8; r++) {
-        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 0u, 0xFFu);
+        bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 0u, 0x11u);
         bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 1u, 0x00u);
         bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 2u, 0x00u);
         bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 4u * r + 3u, 0x00u);

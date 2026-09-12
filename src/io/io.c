@@ -84,15 +84,17 @@ static void io_card_dma_check(io_t *io, int is_arm7)
 }
 
 /* 诊断：记录「首次访问的未知 IO 地址」，避免游戏轮询同一寄存器（如 VCOUNT）刷屏。 */
-static uint32_t io_seen[256];
-static int io_seen_count = 0;
+/* 21-B9yi(续44)：原来用 256 项数组 + **线性扫描**判断「是否首次访问」，而这个判断
+   在**每次 IO 访存**时都要做（游戏大量轮询 VBlank/GXSTAT/按键等寄存器）⇒
+   每次最多 256 次比较。改成按地址偏移的位图（0x04000000-0x04001FFF = 8KB），O(1)。 */
+static uint8_t io_seen_map[0x2000];
+
 static int io_addr_first_seen(uint32_t addr)
 {
-    for (int i = 0; i < io_seen_count; i++)
-        if (io_seen[i] == addr)
-            return 0;
-    if (io_seen_count < (int)(sizeof(io_seen) / sizeof(io_seen[0])))
-        io_seen[io_seen_count++] = addr;
+    uint32_t off = addr - 0x04000000u;
+    if (off >= sizeof(io_seen_map) || io_seen_map[off] != 0)
+        return 0;
+    io_seen_map[off] = 1;
     return 1;
 }
 

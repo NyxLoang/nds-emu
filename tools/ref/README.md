@@ -74,3 +74,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\ref\fb2bmp.ps1 `
 * `906e9eb` 这一版 master 与「历史那份参考核」从 f=40 起就不一样（见
   `docs/21-rom-bringup.md` 续29），所以它只能做**结构性/早期帧**对照，
   不能当作后期帧的逐像素判定依据。
+
+## 触摸诊断补丁（21-B9yi 续59）—— 两处小改动，用在临时参考核树里
+
+结论先写：参考核证明「**游戏靠 EXTKEYIN bit6（PENIRQ，低有效）判断有没有触摸，
+有触摸才去轮询 SPI 取坐标**」。本地此前 `EXTKEYIN` 恒返回 0x7F（永远“抬起”），
+于是运行期从不读触摸数据寄存器；补上这一位后本地与参考核行为一致
+（注入触摸时每秒帧读 SPI ~24 次，不触摸时一次不读）。
+
+参考核（`%TEMP%\melonds-ref`，属临时树，改动不入库）需要两处：
+
+1. `src/SPI.cpp`：在 `namespace melonDS {` 之后加一个全局计数
+   ```cpp
+   unsigned long long SPI_DataReadCount = 0;
+   ```
+   并在 `SPIHost::ReadData()` 的 `if (dev < SPIDevice_MAX)` 分支里
+   `SPI_DataReadCount++;`（可再打印前 40 次的 PC 定位读取者）。
+2. `src/ref_harness.cpp`：加触摸注入开关
+   `REF_TOUCH_FRAME / REF_TOUCH_X / REF_TOUCH_Y / REF_TOUCH_PERIOD`
+   （坐标是**原始 ADC**，与本地 `adc = 0x200 + (px-33)*16` 同口径），
+   帧循环里到点调 `nds->TouchScreen(x, y)`、保持 12 帧后 `nds->ReleaseScreen()`
+   （与本地 `--touch-*` 的按/抬时序一致）；结束打印 `refspi: datareads=…`。
+
+实测（12500 帧、满键、f=11800 起每 40 帧点一次）：
+
+```
+参考核 不触摸：refspi: datareads=842          本地 不触摸：842（同）
+参考核 注入触摸：refspi: datareads=18122      本地（修复前）：842（漏）
+                                              本地（修复后）：70080/3000 帧（≈24/帧，同参考核）
+```

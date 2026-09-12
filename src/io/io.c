@@ -141,7 +141,13 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         switch (addr) {
         case 0x04000134u: return (uint8_t)(io->rcnt & 0xFFu);
         case 0x04000135u: return (uint8_t)(io->rcnt >> 8);
-        case 0x04000136u: return 0x7Fu;   /* X/Y 等高位按键：1=松开 */
+        /* 21-B9yi(续59)：EXTKEYIN（0x04000136）bit6 = PENIRQ（触摸笔按下位，低有效）。
+           参考核 melonDS 把它建模在 KeyInput bit22（= EXTKEYIN bit6）：
+           笔按下清 0、抬起置 1（见 melonDS `TSC::SetTouchCoords`）。
+           游戏正是靠这一位判断「有没有触摸」，再决定去不去轮询 SPI 取坐标——
+           此前这里恒返回 0x7F（永远“抬起”），于是游戏运行期**从不读触摸数据寄存器**
+           （续58 的悬案），触摸注入也就永远不产生游戏侧效果。 */
+        case 0x04000136u: return (uint8_t)(io->touch.down ? 0x3Fu : 0x7Fu);
         case 0x04000137u: return 0x00u;
         case 0x04000138u: return (uint8_t)(rtc_read16(&io->rtc) & 0xFFu);
         case 0x04000139u: return (uint8_t)(rtc_read16(&io->rtc) >> 8);

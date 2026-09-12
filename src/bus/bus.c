@@ -65,6 +65,30 @@ void bus_set_watch(bus_t *bus, int idx, uint32_t lo, uint32_t hi)
     bus->watch_hi[idx] = hi;
 }
 
+void bus_set_watch_read(bus_t *bus, int idx, uint32_t lo, uint32_t hi)
+{
+    if (bus == NULL || idx < 0 || idx >= 4)
+        return;
+    bus->watch_r_lo[idx] = lo;
+    bus->watch_r_hi[idx] = hi;
+}
+
+/* 读监视：把读到的值与读取者一起打出来（用于“谁在什么时候取走了报文”）。 */
+static void bus_dbg_watch_read(const bus_t *bus, uint32_t addr, int width,
+                               uint32_t val)
+{
+    for (int i = 0; i < 4; i++) {
+        if (bus->watch_r_lo[i] == bus->watch_r_hi[i])
+            continue;
+        if (addr < bus->watch_r_lo[i] || addr >= bus->watch_r_hi[i])
+            continue;
+        printf("watchr: arm%d w%d a=%08X v=%08X pc=%08X lr=%08X sp=%08X f=%llu\n",
+               bus->active_is_arm7 ? 7 : 9, width * 8, addr, val,
+               bus->dbg_pc, bus->dbg_lr, bus->dbg_sp, g_dbg_frame);
+        return;
+    }
+}
+
 static void bus_dbg_watch(const bus_t *bus, uint32_t addr, int width,
                           uint32_t val)
 {
@@ -500,8 +524,12 @@ void bus_write16(bus_t *bus, uint32_t addr, uint16_t val)
 uint32_t bus_read32(const bus_t *bus, uint32_t addr)
 {
     /* IPC FIFO RECV（0x04100000）在 IO 区间外，需整体读（拆字节会破坏队列） */
-    if (addr == BUS_IPC_FIFO_RECV)
-        return bus->io != NULL ? io_recv32(bus->io, bus->active_is_arm7) : 0;
+    if (addr == BUS_IPC_FIFO_RECV) {
+        uint32_t v = bus->io != NULL ? io_recv32(bus->io, bus->active_is_arm7) : 0;
+        if (bus->diag)
+            bus_dbg_watch_read(bus, addr, 4, v);
+        return v;
+    }
     /* 卡带数据端口 CARD_DATA（0x04100010）在 IO 区间外，需整体读（读自动推进地址） */
     if (addr == BUS_CARD_DATA)
         return bus->io != NULL ? io_card_data_read32(bus->io) : 0xFFFFFFFFu;

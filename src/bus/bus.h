@@ -114,6 +114,9 @@ typedef struct bus {
     uint32_t dbg_sp;   /* 21-B9xj：写监视打印的 SP 与栈上 4 个字（找调用链） */
     uint32_t watch_lo[4];
     uint32_t watch_hi[4];
+    /* 21-B9xk：读监视（谁在读这个寄存器）。比如看 ARM9 何时从 IPC FIFO 取报文。 */
+    uint32_t watch_r_lo[4];
+    uint32_t watch_r_hi[4];
 } bus_t;
 
 bus_t *bus_create(void);
@@ -123,6 +126,8 @@ void bus_destroy(bus_t *bus);
 void bus_set_diag(bus_t *bus, int on);
 /* 21-B9xj：设置写监视区间（最多 4 组，lo==hi 表示关闭）。 */
 void bus_set_watch(bus_t *bus, int idx, uint32_t lo, uint32_t hi);
+/* 21-B9xk：设置读监视区间（最多 4 组，lo==hi 表示关闭）。 */
+void bus_set_watch_read(bus_t *bus, int idx, uint32_t lo, uint32_t hi);
 
 /* CP15 更新 ARM9 DTCM 映射（阶段 21-B8）：enabled=0 时 0x027E0000 等地址走 Main RAM
    镜像；enabled=1 时 ARM9 对 [base, base+size) 的读写改走私有 DTCM。 */

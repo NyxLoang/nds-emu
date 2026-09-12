@@ -10,6 +10,8 @@ extern unsigned long long g_dbg_frame;
 /* 21-B9xj：CLI `--watch LO-HI` 配置的写监视区间（最多 4 组）。 */
 static uint32_t s_watch_lo[4];
 static uint32_t s_watch_hi[4];
+static uint32_t s_watch_r_lo[4];
+static uint32_t s_watch_r_hi[4];
 
 void runner_set_watch(int idx, uint32_t lo, uint32_t hi)
 {
@@ -19,10 +21,20 @@ void runner_set_watch(int idx, uint32_t lo, uint32_t hi)
     s_watch_hi[idx] = hi;
 }
 
+void runner_set_watch_read(int idx, uint32_t lo, uint32_t hi)
+{
+    if (idx < 0 || idx >= 4)
+        return;
+    s_watch_r_lo[idx] = lo;
+    s_watch_r_hi[idx] = hi;
+}
+
 static void runner_apply_watch(nds_t *nds)
 {
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 4; i++) {
         bus_set_watch(nds->bus, i, s_watch_lo[i], s_watch_hi[i]);
+        bus_set_watch_read(nds->bus, i, s_watch_r_lo[i], s_watch_r_hi[i]);
+    }
 }
 #include "cpu/cpu.h"      /* cpu_step / arm_cpu_t（r / cycles） */
 #include "cpu/exec.h"     /* exec_set_trace */

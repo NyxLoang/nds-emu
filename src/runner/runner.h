@@ -39,5 +39,7 @@ void runner_headless_frames(struct nds *nds, uint64_t frames,
 /* 21-B9xj：总线写监视（把写入者身份/PC 打出来，用于“谁改了这个寄存器”）。
    idx 0-3；lo==hi 表示该组关闭。配合 CLI `--watch LO-HI` 使用。 */
 void runner_set_watch(int idx, uint32_t lo, uint32_t hi);
+/* 21-B9xk：总线读监视（把读取者与读到的值打出来）。 */
+void runner_set_watch_read(int idx, uint32_t lo, uint32_t hi);
 
 #endif /* NDS_EMU_RUNNER_H */

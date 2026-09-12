@@ -219,6 +219,12 @@ int main(int argc, char *argv[])
             if (swscanf(wargv[i + 1], L"%x-%x", &lo, &hi) == 2)
                 runner_set_watch(watch_n++, lo, hi);
         }
+        else if (wcscmp(wargv[i], L"--watch-r") == 0 && i + 1 < wargc) {
+            /* 21-B9xk：--watch-r LO-HI 读监视（如 --watch-r 04100000-04100004） */
+            uint32_t lo = 0, hi = 0;
+            if (swscanf(wargv[i + 1], L"%x-%x", &lo, &hi) == 2)
+                runner_set_watch_read(watch_n++, lo, hi);
+        }
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -250,6 +256,11 @@ int main(int argc, char *argv[])
             uint32_t lo = 0, hi = 0;
             if (sscanf(argv[i + 1], "%x-%x", &lo, &hi) == 2)
                 runner_set_watch(watch_n++, lo, hi);
+        }
+        else if (strcmp(argv[i], "--watch-r") == 0 && i + 1 < argc) {
+            uint32_t lo = 0, hi = 0;
+            if (sscanf(argv[i + 1], "%x-%x", &lo, &hi) == 2)
+                runner_set_watch_read(watch_n++, lo, hi);
         }
     }
 #endif

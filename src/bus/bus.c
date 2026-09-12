@@ -98,13 +98,17 @@ static void bus_dbg_watch(const bus_t *bus, uint32_t addr, int width,
         if (addr < bus->watch_lo[i] || addr >= bus->watch_hi[i])
             continue;
         printf("watch: arm%d w%d a=%08X v=%08X pc=%08X lr=%08X sp=%08X"
-               " cpsr=%08X st=%08X/%08X/%08X/%08X f=%llu\n",
+               " cpsr=%08X st=%08X/%08X/%08X/%08X/%08X/%08X/%08X/%08X f=%llu\n",
                bus->active_is_arm7 ? 7 : 9, width * 8, addr, val,
                bus->dbg_pc, bus->dbg_lr, bus->dbg_sp,
                bus->dbg_cpsr,
                bus_read32(bus, bus->dbg_sp), bus_read32(bus, bus->dbg_sp + 4u),
                bus_read32(bus, bus->dbg_sp + 8u),
-               bus_read32(bus, bus->dbg_sp + 12u), g_dbg_frame);
+               bus_read32(bus, bus->dbg_sp + 12u),
+               bus_read32(bus, bus->dbg_sp + 16u),
+               bus_read32(bus, bus->dbg_sp + 20u),
+               bus_read32(bus, bus->dbg_sp + 24u),
+               bus_read32(bus, bus->dbg_sp + 28u), g_dbg_frame);
         return;
     }
 }

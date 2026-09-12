@@ -172,6 +172,15 @@ static void cartbus_fetch_delay(cartbus_t *cb, int first)
 static void cartbus_end(cartbus_t *cb)
 {
     int irq_en = (cb->auxspicnt & (1u << 14)) != 0;
+    /* 21-B9yi(续13)：**只有在真的有传输在跑时才算「传输结束」**。
+       起因：本地把「立即模式（模式 0）的 DMA 触发」做成同步执行，游戏每块收尾
+       的 `CNT_H=0x8500` 会在命令发起前就读一次 `CARD_DATA`；此时 `xfer_len==0`
+       （没有传输），但旧代码照样走 `cartbus_end()` → 多挂一次 IF bit19。
+       游戏的任务计数每个完成中断减 0x200，多出来的一次会让它**提前一块**
+       以为搬完，从而在最后一块还没读完时就转去读芯片 ID ⇒ 卡在 ROMCTRL 轮询
+       （实测 f=1888 出现一次 `END pos=0 len=0`，正是这一条）。
+       判据：`xfer_len != 0`（本次传输已锁存）才算真正结束。 */
+    int real_end = (cb->xfer_len != 0);
     {
         /* 21-B9yi 诊断：NDS_CARTLOG2=LO-HI → 该帧区间内打印传输开始/结束/读取 */
         extern unsigned long long g_dbg_frame;
@@ -195,7 +204,7 @@ static void cartbus_end(cartbus_t *cb)
     cb->xfer_len = 0;
     cb->xfer_remaining = 0;
     cb->chip_read = 0;
-    if (irq_en)
+    if (irq_en && real_end)
         cb->end_irq = 1;   /* 由 io_advance_cart 转成两核的卡带 IRQ */
 }
 

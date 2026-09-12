@@ -220,6 +220,32 @@ int cpu_step(arm_cpu_t *cpu)
        定时器会系统性偏慢；melonDS 定时器是挂在系统时钟上的）。 */
     io_advance_timers(cpu->nds->io, cpu->is_arm7, prev_cost ? prev_cost : 1u);
     io_advance_cart(cpu->nds->io, cpu->is_arm7, prev_cost);
+    /* 21-B9yi(续12) 诊断：NDS_PCSAMPLE=LO-HI@N → 帧区间内每 N 条 ARM9 指令打印
+       一次 PC/lr/cpsr（粗粒度执行轨迹，用来判断「某段等待循环是不是被跳过了」）。
+       例：NDS_PCSAMPLE=1903-1905@200 */
+    {
+        extern unsigned long long g_dbg_frame;
+        static int ps_state;
+        static long ps_lo = -2, ps_hi = -2;
+        static unsigned long ps_period, ps_seen;
+        if (ps_state == 0) {
+            const char *e = getenv("NDS_PCSAMPLE");
+            ps_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+            ps_lo = 0; ps_hi = -1; ps_period = 200;
+            if (ps_state == 1 && e != NULL) {
+                long lo = 0, hi = 0; unsigned per = 0;
+                if (sscanf(e, "%ld-%ld@%u", &lo, &hi, &per) == 3) {
+                    ps_lo = lo; ps_hi = hi; if (per > 0) ps_period = per;
+                }
+            }
+        }
+        if (ps_state == 1 && !cpu->is_arm7 &&
+            (long)g_dbg_frame >= ps_lo && (long)g_dbg_frame <= ps_hi) {
+            if ((ps_seen++ % ps_period) == 0)
+                printf("pcsample: f=%llu pc=%08X lr=%08X cpsr=%08X sp=%08X\n",
+                       g_dbg_frame, cpu->r[15], cpu->r[14], cpu->cpsr, cpu->r[13]);
+        }
+    }
     /* 12.5：取指前检查 IRQ。条件 = 该核 IF&IE&IME 挂起，且 CPSR 的 I 位未禁止。
        满足则进 IRQ 异常向量（0x18），PC 跳到 handler；被打断指令地址留作返回点。 */
     /* 21-B9m：ARM9 的 CP15 WFI（MCR p15,0,r0,c7,c0,4）等价于 NDS7 的 HALTCNT

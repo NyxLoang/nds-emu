@@ -25,6 +25,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-12 | 21-B9yc（代码/测试） | 显示 | RGB555→888 换算对齐参考核（`(c5<<3)|(c5>>3)`，白 0xF8→0xFB）+ 28 条颜色期望逐条更新：帧 100 逐像素相同率 0%→**81.9%**（MAD 59.1→51.5），907 项 0 失败 | [ppu](src/ppu/ppulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9xc（代码/测试） | IO/主循环 | VBlank 时序对齐真机（第 192 行触发、帧边界结束）：IF 模式与参考一致，标题 frame1900 仍逐像素一致，885 项 0 失败 | [io](src/io/iolog.md) 路 [main](src/mainlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9xa（代码/测试） | IO | IME 只保留 bit0（dump 与参考一致）+ 声音驱动诊断 `io: snd-cnt-writes`：879 项 0 失败 | [io](src/io/iolog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9wy（代码/测试） | 3D/IO | GXSTAT FIFO 状态位对齐参考核（bit25+bit26，与参考 0x86000000 一致）：879 项 0 失败 | [gx](src/gx/gxlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
@@ -272,3 +273,32 @@
 | 2026-09-12 | 21-B9xi | IO/音频/诊断 | ARM7 BIOS 保护值 0x04000308=0x1204（进 power 模块）+ SOUNDBIAS 上电 0x200/10 位写语义；新增直启表/IPC/TIMER1 诊断，锁定“ARM9 在第 2064 帧关掉 TIMER1、ARM7 因此收不到 0000C187 请求”这一分歧链（894 项检查 0 失败） | [io](src/io/iolog.md) · [snd](src/snd/sndlog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9xj | 显示 IO/诊断设施 | **ARM7 独立 DISPSTAT**（melonDS `DispStat[1]`）：此前两核共用一个寄存器，ARM7 每帧按扫描线写 0x04000004 会把 VCount 比较值与中断使能"写进" ARM9 的 DISPSTAT，导致 ARM9 多出一次 VCount 匹配中断（IF9 bit2 常驻）；同时新增 `--watch LO-HI` 总线写监视（打印写入者 PC/LR/SP/栈顶）与 ARM9/ARM7 事件计数（903 项检查 0 失败） | [io](src/io/iolog.md) · [bus](src/bus/buslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9xq | 内存总线（根因） | **GBA 扩展槽空槽读值**：slot-2 窗口（0x08000000-0x0BFFFFFF）无卡时应对齐参考核返回 0xFF。FFXII 用 DMA1 从这里取 0x40 字节填 `0x02079920-5F`，本地读 0 导致该表（含拷贝到 `0x027FFC30` 的签名）全 0，进而使 ARM7 调度器闸门 `0x0380BA7C` 不置位、心跳条数偏多、ARM9 显示重初始化循环快一倍。修复后 `0x027FFC30`/`0x03808240`/`0x0380BA7C` 与参考核逐项一致（903 项检查 0 失败） | [bus](src/bus/buslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xb（分析） | 诊断 | 进度行补 sp/lr + 服务队列条目对照：分歧定位到 ARM9 任务内容（仅文档） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xd（分析） | 工程 | 两核吞吐差归因（帧延迟空转循环）+ ARM9 深睡例程调用链；当前任务指针差异 02076F24 vs 02076FE4（仅文档） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xf（分析） | 工程 | ARM7 协作式调度器时钟与派发点（`0x03808240` 待办标志差异）（仅文档） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xh（分析） | 工程 | ARM7 调度器任务队列为空（`0x03806E50` 返回 0）⇒ 待办位被清 0（仅文档） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xk（工具/分析） | 诊断设施 | 读监视 `--watch-r`（IPC 收取探针）+ 心跳发送时间表：本地从帧 0 起、参考核帧 539 起 | [io](src/io/iolog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xl（分析） | 工程 | 心跳报文编码解读（`0x03009000+n` 槽）+ 栈快照指向任务条目表同一循环 | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xm（分析） | 工程 | 帧 120 双核快照对照（共享 WRAM/队列/声音寄存器全同）+ ARM7 视角寄存器差异逐条核对 | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xn（分析） | 工程 | 排除 IPC 嫌疑；锁定 ARM7 调度器 tick 次数差异（参考核 6000 帧 2 次 vs 本地每 10 帧一次） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xo（分析） | 卡带/诊断 | 根因锁定=卡带读取路径（`0x04100010` CARD_DATA）；ARM7 tick 闸门 `0x0380BA7C` 与 `0x027FFC30` 的完整链条 | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xr（分析） | 工程 | 心跳由 ARM7 消息队列循环驱动（`0x03804514` 出队 → 类型 1 → `0x03804A54` 槽处理）；四条心跳同源 `0x03804B5C` | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xt（验证） | 工程 | 6000 帧长程验证——GBA 槽修复后本地不再卡死（GX 2595→20435、ARM9 在 ITCM 执行）+ 截图与参考核抽样帧对照（仅文档） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xu（工具） | 主循环 | 画面时间线 `--shot-every N --shot-prefix P`（无头模式每 N 帧存 BMP） | [main](src/mainlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xv（对照） | 工程 | 对照前提修正——参考核从帧 1700 注入按键；对齐后本地 1900 帧偶数列 100% 一致 | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xw（代码/测试） | 3D/总线 | DISP3DCNT bit12/13 写 1 清零 + 3D 图层不再受 bit13 门控；帧 1900 两边 VRAM 逐字节一致 ⇒ 差异锁定 DISPCNT mode2 渲染路径；907 项 0 失败 | [gx](src/gx/gxlog.md) · [bus](src/bus/buslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xx（实验） | 显示 | mode2 VRAM-display 分支试验（无变化，已回退并记录）+ 帧 1900 全量 IO 差异清单 | [ppu](src/ppu/ppulog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xy（代码/测试） | IO | KEYINPUT 高位对齐参考核（0x03FF）+ `0x04000320` 硬编码 46：907 项 0 失败 | [io](src/io/iolog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9xz（结论） | 工程 | BG2/BG3 仿射差异实为 melonDS 读路径缺口（`NDS.cpp` 无 `0x04000020` 分支），本地值才是真值，从待修项划掉（仅文档） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9y0（分析） | 显示 | 条纹来源线索（mode2 分支 + `tri=0` 的 3D 空白）与下一步实验设计（dump 参考核 3D 层输出） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9y1（实验） | 显示 | NO3D 实验证明条纹非 3D 层；16 位寄存器对照引擎 A 全同；剩余未比项=调色板 RAM | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9y2（验证） | 显示 | 调色板逐字节一致（0/1024）+ 复核 mode2 实验 ⇒ 差异在本地 2D 渲染器取数逻辑 | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9y3（诊断） | 显示 | 渲染器 BG 取址诊断 `NDS_BGDBG=1`（帧 1900 仅 BG2 参与合成）+ 截图与 dump 采样时刻不一致的方法论更正 | [ppu](src/ppu/ppulog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9y5（诊断） | 显示 | BG 诊断扩展（tile0 原始字节 + 调色板前 4 项）：帧 1900 BG2 数据非零、主调色板 pal0=001F/pal2=0421 | [ppu](src/ppu/ppulog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9y6（结论） | 显示 | 查表证明本地 BG2 数据解析为青蓝色（非黑）⇒ 问题在合成之后；DISPCNT=80111418 复核 | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9y7（诊断） | 显示 | 合成器里是青色、`comp_finalize` 后变黑；根因=MASTER_BRIGHT 且参考核 dump 是加亮度前画面（新增 `NDS_NOMB`） | [ppu](src/ppu/ppulog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9y8（重要更正） | 工程 | 参考核 framebuffer 是 **32 位/像素**（此前按 16 位读得到“黑+青色条纹”假象）；修正读法后的亮度对照（仅文档） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9y9（对照） | 工程 | 对齐输入 + `NDS_NOMB=1` 逐帧对照：发现两种差异成分（RGB555→888 换算 + 帧 100 已有真实内容分歧） | [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9yb（验证） | 显示 | 色彩换算修正已验证有效（帧 100 相同像素 0%→81.9%），因批量替换误伤 13 条非颜色断言而本轮先回退保持 907 全绿 | [ppu](src/ppu/ppulog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-05 | 21-B9a（代码/测试） | BIOS | SWI 0x0E GetCRC16（CRC-16/IBM）落地：新增 `bios_crc16.*` + ARM/Thumb/ARM7 单测，ARM7 越过 SWI 0x0E | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-06 | 21-B9m（代码/测试） | CPU | ARM9 CP15 WFI（`MCR p15,0,r0,c7,c0,4`）：空闲任务等待 (IE&IF) 唤醒而不是满速空转 | [cpu](src/cpu/cpulog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |

@@ -2179,8 +2179,8 @@ static void test_bitmap_render(nds_t *nds)
 
     render_frame(nds->bus, fb_top, fb_bot);
 
-    CHECK_EQ("bitmap px0 red",  fb_top[0], 0xFFF80000u);
-    CHECK_EQ("bitmap px1 blue", fb_top[1], 0xFF0000F8u);
+    CHECK_EQ("bitmap px0 red",  fb_top[0], 0xFFFB0000u);
+    CHECK_EQ("bitmap px1 blue", fb_top[1], 0xFF0000FBu);
     CHECK_EQ("bitmap px256 next row", fb_top[256], 0xFF000000u); /* 未写区域=0 → 黑色 */
 }
 
@@ -2203,17 +2203,17 @@ static void test_tile_render(nds_t *nds)
     bus_write8(nds->bus, BUS_VRAM_BASE, 0x80u);
 
     render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("tile4 px00 red",      fb_top[0],   0xFFF80000u);
-    CHECK_EQ("tile4 px10 backdrop", fb_top[1],   0xFF00F800u);
-    CHECK_EQ("tile4 row1 backdrop", fb_top[256], 0xFF00F800u);
+    CHECK_EQ("tile4 px00 red",      fb_top[0],   0xFFFB0000u);
+    CHECK_EQ("tile4 px10 backdrop", fb_top[1],   0xFF00FB00u);
+    CHECK_EQ("tile4 row1 backdrop", fb_top[256], 0xFF00FB00u);
 
     /* 切 256 色（bit7=1），tile0(8bpp) 只让像素(0,0)=索引5 */
     bus_write16(nds->bus, IO_BGCNT_BASE, 0x0180u);
     bus_write8(nds->bus, BUS_VRAM_BASE, 5u);
 
     render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("tile8 px00 red",      fb_top[0],   0xFFF80000u);
-    CHECK_EQ("tile8 px10 backdrop", fb_top[1],   0xFF00F800u);
+    CHECK_EQ("tile8 px00 red",      fb_top[0],   0xFFFB0000u);
+    CHECK_EQ("tile8 px10 backdrop", fb_top[1],   0xFF00FB00u);
 }
 
 /* 9.5：副引擎（Engine B）对称渲染——DISPCNT_SUB + 副 BGxCNT + 副调色板 + 副 VRAM */
@@ -2227,7 +2227,7 @@ static void test_engine_b(nds_t *nds)
     bus_write16(nds->bus, IO_BGCNT_SUB_BASE + 4, BGCNT_COLORS_256 | BGCNT_DIRECT_COLOR | (1u << 14));
     bus_write16(nds->bus, BUS_VRAM_SUB_BG_BASE, 0x7C00u);
     render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("engB bmp red", fb_bot[0], 0xFFF80000u);
+    CHECK_EQ("engB bmp red", fb_bot[0], 0xFFFB0000u);
 
     /* 副引擎 tile：副调色板 0x05000400（0=红背景, 1=绿） */
     bus_write16(nds->bus, BUS_PALETTE_BASE + 0x400, 0x7C00u);
@@ -2240,8 +2240,8 @@ static void test_engine_b(nds_t *nds)
     bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 2, 0x00u);
     bus_write8(nds->bus, BUS_VRAM_SUB_BG_BASE + 3, 0x00u);
     render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("engB tile green",    fb_bot[0], 0xFF00F800u); /* 索引1 → 绿 */
-    CHECK_EQ("engB tile backdrop", fb_bot[1], 0xFFF80000u); /* 透明 → 红背景 */
+    CHECK_EQ("engB tile green",    fb_bot[0], 0xFF00FB00u); /* 索引1 → 绿 */
+    CHECK_EQ("engB tile backdrop", fb_bot[1], 0xFFFB0000u); /* 透明 → 红背景 */
 }
 
 /* 9.6：OBJ 最小（一个 sprite：OAM 读取 + 1D tile 映射 + OBJ 调色板） */
@@ -2276,7 +2276,7 @@ static void test_obj_render(nds_t *nds)
 
     render_frame(nds->bus, fb_top, fb_bot);
 
-    CHECK_EQ("obj px at (20,10) red", fb_top[10 * RENDER_SCREEN_W + 20], 0xFFF80000u);
+    CHECK_EQ("obj px at (20,10) red", fb_top[10 * RENDER_SCREEN_W + 20], 0xFFFB0000u);
     CHECK_EQ("obj px transparent",     fb_top[10 * RENDER_SCREEN_W + 21], 0xFF000000u);
     CHECK_EQ("obj px outside",         fb_top[0], 0xFF000000u);
 
@@ -2287,7 +2287,7 @@ static void test_obj_render(nds_t *nds)
     bus_write8(nds->bus, BUS_VRAM_MAIN_OBJ_BASE + 1, 0x00u);
 
     render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("obj 256c px green", fb_top[10 * RENDER_SCREEN_W + 20], 0xFF00F800u);
+    CHECK_EQ("obj 256c px green", fb_top[10 * RENDER_SCREEN_W + 20], 0xFF00FB00u);
 }
 
 /* 9.7：自造数据 2D 场景验收（不依赖旧「VRAM=屏幕 framebuffer」约定）。
@@ -2346,11 +2346,11 @@ static void test_2d_scene(nds_t *nds)
 
     render_frame(nds->bus, fb_top, fb_bot);
 
-    CHECK_EQ("scene top tile0 red",    fb_top[0],              0xFFF80000u);
-    CHECK_EQ("scene top tile1 green",  fb_top[8],              0xFF00F800u);
+    CHECK_EQ("scene top tile0 red",    fb_top[0],              0xFFFB0000u);
+    CHECK_EQ("scene top tile1 green",  fb_top[8],              0xFF00FB00u);
     CHECK_EQ("scene top transparent",  fb_top[16],             0xFF000000u); /* map[2]=透明→黑背景 */
-    CHECK_EQ("scene obj blue",         fb_top[16 * 256 + 16],  0xFF0000F8u);
-    CHECK_EQ("scene bot cyan",         fb_bot[0],              0xFF00F8F8u);
+    CHECK_EQ("scene obj blue",         fb_top[16 * 256 + 16],  0xFF0000FBu);
+    CHECK_EQ("scene bot cyan",         fb_bot[0],              0xFF00FBFBu);
 }
 
 /* ---- 10.2 用例：移位操作数 LSL/LSR/ASR/ROR（立即数移位 + 寄存器移位） ---- */
@@ -4911,7 +4911,7 @@ static void test_gx_layer(nds_t *nds)
     /* 21-B9xw：3D 图层不需要 DISP3DCNT 使能位（melonDS 里 bit12/13 是写 1 清零位，
        参考核帧 1900 的 DISP3DCNT=0x0011 时 3D 内容照样显示）→ 三角形直接覆盖顶屏 */
     render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("gx layer on", fb_top[50 * RENDER_SCREEN_W + 50], 0xFFF80000u);
+    CHECK_EQ("gx layer on", fb_top[50 * RENDER_SCREEN_W + 50], 0xFFFB0000u);
 
     /* DISP3DCNT bit13 的写入语义：写 1 清零、写 0 保持（melonDS GPU3D::Write16） */
     bus_write32(nds->bus, IO_DISP3DCNT, DISP3D_ENABLE);
@@ -4983,8 +4983,8 @@ static void test_affine_render(nds_t *nds)
 
     render_frame(nds->bus, fb_top, fb_bot);
 
-    CHECK_EQ("aff id red",      fb_top[0],  0xFFF80000u);  /* (0,0)→tile0 红 */
-    CHECK_EQ("aff id green",    fb_top[8],  0xFF00F800u);  /* (8,0)→tile1 绿 */
+    CHECK_EQ("aff id red",      fb_top[0],  0xFFFB0000u);  /* (0,0)→tile0 红 */
+    CHECK_EQ("aff id green",    fb_top[8],  0xFF00FB00u);  /* (8,0)→tile1 绿 */
     CHECK_EQ("aff id backdrop", fb_top[16], 0xFF000000u);  /* (16,0)→tile2 透明→黑 */
 
     /* 2× 缩放：PA=PD=2.0 → 纹理=2×屏幕，红 tile 盖屏幕 0..3、绿盖 4..7、再外透明 */
@@ -4992,8 +4992,8 @@ static void test_affine_render(nds_t *nds)
     bus_write16(nds->bus, IO_BG_AFFINE_BASE + 6, 0x0200u);
     render_frame(nds->bus, fb_top, fb_bot);
 
-    CHECK_EQ("aff 2x red",      fb_top[0], 0xFFF80000u);
-    CHECK_EQ("aff 2x green",    fb_top[4], 0xFF00F800u);
+    CHECK_EQ("aff 2x red",      fb_top[0], 0xFFFB0000u);
+    CHECK_EQ("aff 2x green",    fb_top[4], 0xFF00FB00u);
     CHECK_EQ("aff 2x backdrop", fb_top[8], 0xFF000000u);
 }
 
@@ -5047,8 +5047,8 @@ static void test_blend_render(nds_t *nds)
     /* 混合关闭：红像素直出、透明像素露蓝背景 */
     bus_write16(nds->bus, IO_BLENDCNT, 0u);
     render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("blend off red",      fb_top[0], 0xFFF80000u);
-    CHECK_EQ("blend off backdrop", fb_top[1], 0xFF0000F8u);
+    CHECK_EQ("blend off red",      fb_top[0], 0xFFFB0000u);
+    CHECK_EQ("blend off backdrop", fb_top[1], 0xFF0000FBu);
 
     /* 模式1 Alpha：第一目标=BG0、第二目标=BD、EVA=EVB=8 → 红+蓝各半 (R=15,B=15) */
     bus_write16(nds->bus, IO_BLENDCNT,
@@ -5056,7 +5056,7 @@ static void test_blend_render(nds_t *nds)
     bus_write16(nds->bus, IO_BLENDALPHA, 0x0808u);
     render_frame(nds->bus, fb_top, fb_bot);
     CHECK_EQ("alpha blend red+blue", fb_top[0], 0xFF780078u);
-    CHECK_EQ("alpha blend backdrop", fb_top[1], 0xFF0000F8u);
+    CHECK_EQ("alpha blend backdrop", fb_top[1], 0xFF0000FBu);
 
     /* 模式2 增亮：第一目标=BG0、EVY=8；改测灰 0x4210（R=G=B=16）→ 23 */
     bus_write16(nds->bus, BUS_PALETTE_BASE + 2, 0x4210u);
@@ -5116,14 +5116,14 @@ static void test_vram_display_mode(nds_t *nds)
     /* 主引擎 VRAM 显示模式：2<<16，选 bank0（bit18-19=0） */
     bus_write32(nds->bus, IO_DISPCNT, 2u << DISPCNT_DISPLAY_MODE_SHIFT);
     render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("vramdisp bank0 red",  fb_top[0], 0xFFF80000u);
-    CHECK_EQ("vramdisp bank0 blue", fb_top[1], 0xFF0000F8u);
+    CHECK_EQ("vramdisp bank0 red",  fb_top[0], 0xFFFB0000u);
+    CHECK_EQ("vramdisp bank0 blue", fb_top[1], 0xFF0000FBu);
 
     /* 选 bank1（bit18-19=1）→ 全屏绿首像素 */
     bus_write32(nds->bus, IO_DISPCNT,
                 (2u << DISPCNT_DISPLAY_MODE_SHIFT) | (1u << 18));
     render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("vramdisp bank1 green", fb_top[0], 0xFF00F800u);
+    CHECK_EQ("vramdisp bank1 green", fb_top[0], 0xFF00FB00u);
 }
 
 /* ---- 阶段 20.3 用例：窗口（WIN0 限定 BG 显示区域） ---- */
@@ -5154,7 +5154,7 @@ static void test_window_render(nds_t *nds)
                 DISPCNT_BG0 | (1u << 13) | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
     render_frame(nds->bus, fb_top, fb_bot);
 
-    CHECK_EQ("win in red",    fb_top[0],        0xFFF80000u); /* (0,0) 窗内 → 红 */
+    CHECK_EQ("win in red",    fb_top[0],        0xFFFB0000u); /* (0,0) 窗内 → 红 */
     CHECK_EQ("win out black", fb_top[8],        0xFF000000u); /* (8,0) 窗外 → 黑 */
     CHECK_EQ("win out row",   fb_top[8 * 256],  0xFF000000u); /* (0,8) 窗外 → 黑 */
 }

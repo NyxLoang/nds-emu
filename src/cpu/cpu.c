@@ -16,6 +16,9 @@ int g_pchit_n = 0;
 /* 21-B9xs：命中时 r0 低 4 位的直方图（用于看“投递索引 0..3 各多少次”） */
 unsigned long long g_pchit_hist[16];
 
+/* 21-B9yi(续52)：诊断开关的一次性初始化（见下方定义）。 */
+static void cpu_diag_init(void);
+
 arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc, int is_arm7)
 {
     arm_cpu_t *cpu = calloc(1, sizeof(arm_cpu_t));
@@ -27,6 +30,9 @@ arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc, int is_arm7)
     cpu->r[15] = reset_pc;
     /* 异常向量基址：ARM9 用高向量 0xFFFF0000，ARM7 用低向量 0x00000000（阶段 12） */
     cpu->vector_base = is_arm7 ? 0x00000000u : 0xFFFF0000u;
+    /* 21-B9yi(续52)：把诊断开关的 getenv/解析**一次性**做完（幂等）。
+       此前它们散在热路径里，每条指令都要判一次「是否已初始化」。 */
+    cpu_diag_init();
     return cpu;
 }
 
@@ -143,15 +149,8 @@ void cpu_set_nonseq_cost(int v)
 
 static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
 {
-    if (s_nonseq_cost < 0) {
-        const char *e = getenv("NDS_ARM9_NOSEQ");
-        s_nonseq_cost = 1;   /* 实测默认值：见 docs/21-rom-bringup.md 的 21-B9yi */
-        if (e != NULL) {
-            int v = atoi(e);
-            if (v >= 1 && v <= 8)
-                s_nonseq_cost = v;
-        }
-    }
+    /* 21-B9yi(续52)：惰性初始化已挪到 cpu_diag_init()（cpu_create 时做一次），
+       这里直接读全局值，热路径不再有「是否初始化过」的判断。 */
     if (cpu->is_arm7)
         return 1u;
     if (pc - BUS_ARM9_ITCM_BASE < BUS_ARM9_ITCM_SIZE)
@@ -177,6 +176,11 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
 static unsigned long long s_prof_steps, s_prof_io, s_prof_all;
 static int s_prof_on = -1;
 
+/* 21-B9yi(续52)：`NDS_PCSAMPLE=LO-HI@N` 解析结果（原来在 cpu_step 里惰性解析）。 */
+static int s_ps_on;
+static long s_ps_lo, s_ps_hi;
+static unsigned s_ps_period = 200, s_ps_seen;
+
 static unsigned long long cpu_rdtsc(void)
 {
     unsigned int lo, hi;
@@ -193,14 +197,60 @@ static void cpu_prof_report(void)
            s_prof_steps, io_pct, 100.0 - io_pct);
 }
 
-int cpu_step(arm_cpu_t *cpu)
+/* 21-B9yi(续52)：诊断开关的一次性初始化（由 cpu_create 调用，幂等）。
+
+   动机：这些开关原本在**热路径**里用「静态变量 == -1 就解析一次」的写法，
+   等于每条指令都要多判断一次「初始化过没有」。挪到创建 CPU 时做一次后，
+   热路径只剩普通全局变量读取（`s_nonseq_cost` / `s_ps_on` / `s_prof_on`）。
+
+   注意顺序：`s_prof_on` 初始化时若为真，要注册 `atexit(cpu_prof_report)`。 */
+static void cpu_diag_init(void)
 {
-    if (s_prof_on < 0) {
-        const char *e = getenv("NDS_PROF");
-        s_prof_on = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
+    static int done;
+    if (done)
+        return;
+    done = 1;
+
+    if (s_nonseq_cost < 0) {
+        const char *e = getenv("NDS_ARM9_NOSEQ");
+        s_nonseq_cost = 1;   /* 实测默认值：见 docs/21-rom-bringup.md 的 21-B9yi */
+        if (e != NULL) {
+            int v = atoi(e);
+            if (v >= 1 && v <= 8)
+                s_nonseq_cost = v;
+        }
+    }
+
+    {
+        const char *e = getenv("NDS_PCSAMPLE");
+        s_ps_on = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
+        s_ps_lo = 0;
+        s_ps_hi = -1;
+        s_ps_period = 200;
+        if (s_ps_on && e != NULL) {
+            long lo = 0, hi = 0;
+            unsigned per = 0;
+            if (sscanf(e, "%ld-%ld@%u", &lo, &hi, &per) == 3) {
+                s_ps_lo = lo;
+                s_ps_hi = hi;
+                if (per > 0)
+                    s_ps_period = per;
+            }
+        }
+    }
+
+    {
+        const char *pf = getenv("NDS_PROF");
+        s_prof_on = (pf != NULL && pf[0] != '0' && pf[0] != '\0') ? 1 : 0;
         if (s_prof_on)
             atexit(cpu_prof_report);
     }
+}
+
+int cpu_step(arm_cpu_t *cpu)
+{
+    /* 21-B9yi(续52)：诊断开关已在 cpu_diag_init()（cpu_create）里解析完，
+       热路径只剩一次普通全局变量读取。 */
     unsigned long long prof_t0 = s_prof_on ? cpu_rdtsc() : 0;
     /* 21-B9yi：上一条指令消耗的周期数（本步用于推进卡带时钟，使其与
        参考核一样按系统时钟节奏取数；见 io_advance_cart 注释） */
@@ -253,7 +303,10 @@ int cpu_step(arm_cpu_t *cpu)
         }
         power_halt_wake(&cpu->nds->io->power);
     }
-    if (bios_irq_tail9(cpu))
+    /* 21-B9yi(续52)：先把 bios_irq_tail9 自己的前置条件写在调用点上，
+       绝大多数指令（ARM9 不在 IRQ 模式）因此连函数调用都省了。 */
+    if (!cpu->is_arm7 && (cpu->cpsr & CPSR_MODE_MASK) == ARM_MODE_IRQ &&
+        cpu->r[15] == 0xFFFF06F0u && bios_irq_tail9(cpu))
         return 1;
     /* 6.5：按本步消耗的周期推进当前核定时器（分频在 timer.c 内处理）。
        21-B9yi：传上一条指令的**实际周期数**（此前固定 1/指令，ARM9 平均 ~1.2，
@@ -266,25 +319,11 @@ int cpu_step(arm_cpu_t *cpu)
     /* 21-B9yi(续12) 诊断：NDS_PCSAMPLE=LO-HI@N → 帧区间内每 N 条 ARM9 指令打印
        一次 PC/lr/cpsr（粗粒度执行轨迹，用来判断「某段等待循环是不是被跳过了」）。
        例：NDS_PCSAMPLE=1903-1905@200 */
-    {
+    /* 21-B9yi(续52)：PSAMPLE 的解析已挪到 cpu_diag_init()，这里只留一个开关判断。 */
+    if (s_ps_on && !cpu->is_arm7) {
         extern unsigned long long g_dbg_frame;
-        static int ps_state;
-        static long ps_lo = -2, ps_hi = -2;
-        static unsigned long ps_period, ps_seen;
-        if (ps_state == 0) {
-            const char *e = getenv("NDS_PCSAMPLE");
-            ps_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
-            ps_lo = 0; ps_hi = -1; ps_period = 200;
-            if (ps_state == 1 && e != NULL) {
-                long lo = 0, hi = 0; unsigned per = 0;
-                if (sscanf(e, "%ld-%ld@%u", &lo, &hi, &per) == 3) {
-                    ps_lo = lo; ps_hi = hi; if (per > 0) ps_period = per;
-                }
-            }
-        }
-        if (ps_state == 1 && !cpu->is_arm7 &&
-            (long)g_dbg_frame >= ps_lo && (long)g_dbg_frame <= ps_hi) {
-            if ((ps_seen++ % ps_period) == 0)
+        if ((long)g_dbg_frame >= s_ps_lo && (long)g_dbg_frame <= s_ps_hi) {
+            if ((s_ps_seen++ % s_ps_period) == 0)
                 printf("pcsample: f=%llu pc=%08X lr=%08X cpsr=%08X sp=%08X\n",
                        g_dbg_frame, cpu->r[15], cpu->r[14], cpu->cpsr, cpu->r[13]);
         }
@@ -295,15 +334,28 @@ int cpu_step(arm_cpu_t *cpu)
        ——NDS9 没有 HALTCNT 寄存器，游戏/OS 空闲任务直接执行 WFI 指令。
        NDS9 的 CP15 Halt 只受 IME 门控（IME=0 会永久锁死），不会因 CPSR.I 屏蔽
        而卡住；挂起未到 → PC 不动等待，挂起到 → 清 I 后走正常 IRQ 入口。 */
-    if (!cpu->is_arm7 && cpu_fetch(cpu) == 0xEE070F90u) {
-        if (!irq_pending(irq)) {
-            cpu->step_cycles = 0;
-            return 1;
+    /* 21-B9yi(续52)：WFI（ARM 编码 0xEE070F90）检测的成本削减。
+       旧写法是**每条 ARM9 指令都额外 `cpu_fetch()` 一次内存**去比对 WFI，
+       当指令数到十亿量级时这笔开销很可观。现在：
+         · 只在 ARM 态判断（Thumb 的 WFI 是 0xBF30，旧写法还可能把两个相邻
+           Thumb 指令拼出的字误判成 WFI）；
+         · 读到的指令字**缓存下来给下面的 exec 复用**，ARM 态每条指令只读一次指令。 */
+    uint32_t pre_insn = 0;
+    int pre_insn_valid = 0;
+    if (!cpu->is_arm7 && !(cpu->cpsr & CPSR_T)) {
+        pre_insn = cpu_fetch(cpu);
+        pre_insn_valid = 1;
+        if (pre_insn == 0xEE070F90u) {
+            if (!irq_pending(irq)) {
+                cpu->step_cycles = 0;
+                return 1;
+            }
+            cpu->cpsr &= ~CPSR_I;
+            /* 21-B9s：WFI 被中断唤醒时指令先“完成”再进 IRQ——PC 前进到下一条，
+               否则 IRQ 返回后又停在 WFI 上重执行，空闲任务永远走不到后续代码。 */
+            cpu->r[15] += 4;
+            pre_insn_valid = 0;   /* PC 已改变，缓存的指令字作废 */
         }
-        cpu->cpsr &= ~CPSR_I;
-        /* 21-B9s：WFI 被中断唤醒时指令先“完成”再进 IRQ——PC 前进到下一条，
-           否则 IRQ 返回后又停在 WFI 上重执行，空闲任务永远走不到后续代码。 */
-        cpu->r[15] += 4;
     }
     /* 21-B9h：IF&IE 已挂起却被 CPSR.I 屏蔽时只提示一次 */
     if (irq_pending(irq) && (cpu->cpsr & CPSR_I) && !cpu->irq_mask_logged) {
@@ -436,7 +488,8 @@ int cpu_step(arm_cpu_t *cpu)
         }
         return r;
     }
-    uint32_t insn = cpu_fetch(cpu);
+    /* 21-B9yi(续52)：ARM 态复用上面 WFI 检测时读到的指令字（只读一次指令）。 */
+    uint32_t insn = pre_insn_valid ? pre_insn : cpu_fetch(cpu);
     cpu->cycles++;
     int r = exec_step(cpu, insn);
     {

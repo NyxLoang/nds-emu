@@ -1,4 +1,6 @@
 #include "render.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include "bus/bus.h"
 #include "io/disp.h"
 #include "io/io.h"   /* 3D 图层：读 bus->io->gx 的帧缓冲（阶段 19.4） */
@@ -379,6 +381,22 @@ static void render_tiled(const bus_t *bus, comp_t *c, int is_sub, uint32_t dispc
             uint32_t map_base = gfx_base
                 + ((bgcnt >> BGCNT_SCREEN_BASE_SHIFT) & 0x1Fu) * 0x800u
                 + disp_screen * 0x10000u;
+            /* 21-B9y3 诊断（NDS_BGDBG=1 时生效）：打印本层取址与首个地图项，
+               用于对照 melonDS 的同口径公式、定位"全黑"是取址还是取色问题。 */
+            {
+                static int bgdbg_done = 0;
+                if (!bgdbg_done && getenv("NDS_BGDBG") != NULL) {
+                    uint16_t e0 = bus_read16(bus, map_base);
+                    uint16_t e1 = bus_read16(bus, map_base + 2);
+                    printf("bgdbg: bg=%d prio=%d bgcnt=%04X char=%08X map=%08X"
+                           " e0=%04X e1=%04X 256c=%d ext=%d\n",
+                           bg, prio, bgcnt, char_base, map_base, e0, e1,
+                           (bgcnt & BGCNT_COLORS_256) != 0,
+                           (dispcnt & (1u << 30)) != 0);
+                    if (bg == 3 && prio == 3)
+                        bgdbg_done = 1;
+                }
+            }
             int ext = (dispcnt & (1u << 30)) != 0;
             if (bg_is_affine(bmode, bg))
                 draw_affine_bg(bus, c, bgcnt, char_base, map_base, pal_base, bg, is_sub);

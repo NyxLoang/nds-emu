@@ -178,6 +178,9 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
 static unsigned long long s_prof_steps, s_prof_io, s_prof_all;
 /* 21-B9yi(续53)：更细的归因（取指 / 译码执行），配合 s_prof_io 决定下一刀砍哪里。 */
 static unsigned long long s_prof_fetch, s_prof_exec;
+/* 21-B9yi(续55)：把 IO 推进再拆成「定时器」与「卡带/GX 时钟」两块
+   （两者优化手段完全不同：前者可做事件化，后者可做活动位守卫）。 */
+static unsigned long long s_prof_tmr, s_prof_cart;
 static int s_prof_on = -1;
 /* 插桩宏：`NDS_PROF_BUILD` 构建里按开关决定是否读时钟；
    默认构建里两个宏都退化成「什么都不做 / 常量 0」，编译器会把整段分支消掉。 */
@@ -212,9 +215,11 @@ static void cpu_prof_report(void)
     double io_pct = 100.0 * (double)s_prof_io / (double)s_prof_all;
     double fetch_pct = 100.0 * (double)s_prof_fetch / (double)s_prof_all;
     double exec_pct = 100.0 * (double)s_prof_exec / (double)s_prof_all;
-    printf("prof: steps=%llu  io-advance=%.1f%%  fetch=%.1f%%  exec=%.1f%%"
-           "  other(检查/记账/调用开销)=%.1f%%\n",
-           s_prof_steps, io_pct, fetch_pct, exec_pct,
+    double tmr_pct = 100.0 * (double)s_prof_tmr / (double)s_prof_all;
+    double cart_pct = 100.0 * (double)s_prof_cart / (double)s_prof_all;
+    printf("prof: steps=%llu  timers=%.1f%%  cart/gx=%.1f%%  (io=%.1f%%)  fetch=%.1f%%"
+           "  exec=%.1f%%  other(检查/记账/调用开销)=%.1f%%\n",
+           s_prof_steps, tmr_pct, cart_pct, io_pct, fetch_pct, exec_pct,
            100.0 - io_pct - fetch_pct - exec_pct);
 }
 #endif /* NDS_PROF_BUILD */
@@ -341,8 +346,14 @@ int cpu_step(arm_cpu_t *cpu)
        定时器会系统性偏慢；melonDS 定时器是挂在系统时钟上的）。 */
     unsigned long long prof_io_t0 = PROF_T0();
     io_advance_timers(io, cpu->is_arm7, prev_cost ? prev_cost : 1u);
-    io_advance_cart(io, cpu->is_arm7, prev_cost);
     PROF_ADD(s_prof_io, prof_io_t0);
+    PROF_ADD(s_prof_tmr, prof_io_t0);
+    unsigned long long prof_cart_t0 = PROF_T0();
+    /* 21-B9yi(续56)：GX/卡带都不忙时整段跳过（门控由 io 模块维护，见 io.h）。 */
+    if (io->cart_clock_on)
+        io_advance_cart(io, cpu->is_arm7, prev_cost);
+    PROF_ADD(s_prof_io, prof_cart_t0);
+    PROF_ADD(s_prof_cart, prof_cart_t0);
     /* 21-B9yi(续53)：IF/IE/IME 在这一步里最多被查 3 次（WFI 唤醒、屏蔽提示、
        受理 IRQ）。这里算一次存起来复用 —— timer/card 的 IF 位在上面两行
        （io_advance_*）之后就已经定下来，所以放在这里取是准确的。 */

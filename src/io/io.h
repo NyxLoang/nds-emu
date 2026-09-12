@@ -29,6 +29,17 @@ struct bus; /* 前向声明：io 需要 bus 反指，供 DMA 搬运访存 */
 typedef struct io {
     irq_t irq[2];                     /* 中断：IME/IE/IF 各一套（ARM9/ARM7） */
     nds_timer_t timer[2][IO_TIMER_COUNT]; /* 定时器：ARM9/ARM7 各 0-3（真机两套） */
+    /* 21-B9yi(续55)：当前核「哪几个定时器是开着的」位图（bit i = TMi 使能）。
+       每次整机周期推进都要过一遍 4 个定时器，而本游戏同一时刻通常只开 1-2 个；
+       用位图只推进开着的，能在**每条指令**的路径上省掉 2-3 次函数调用。
+       维护点：io_write8 里写 TMxCNT_H 之后重算（写控制寄存器很罕见）。 */
+    uint8_t timer_on[2];
+    /* 21-B9yi(续56)：ARM9 侧「卡带/GX 时钟」是否还有活干（GX 待处理 / 卡带在传输或
+       FIFO 有数据 / GX 模式 DMA 未搬完 / 卡带完成中断待挂）。派生值：在
+       io_advance_cart() 末尾按各模块状态重算；任何可能产生新活的寄存器写都会先置 1。
+       意义：本游戏大部分时间这三件事都不忙，可以在**每条指令**的路径上整段跳过
+       io_advance_cart（实测是每步最重的一小段）。 */
+    uint8_t cart_clock_on;
     keypad_t keypad;                  /* KEYINPUT */
     uint16_t keycnt[2];               /* KEYCNT：ARM9/ARM7 各一套（按键中断控制） */
     rtc_t rtc;                        /* 21-B9wx：实时时钟（ARM7 专属，0x04000134/138） */

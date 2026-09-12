@@ -1,6 +1,7 @@
 # 构建产物
 build/
 build-prof/
+build-prof2/
 
 # 真实卡带 ROM：体积大且受版权保护，不进入版本库（测试用假 ROM 见 homebrew/）
 tools/*.nds

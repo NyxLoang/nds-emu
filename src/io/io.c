@@ -219,8 +219,16 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         return;
     }
     if (addr >= IO_TIMER0_BASE && addr < IO_TIMER_END) {
-        timer_write8(&io->timer[is_arm7 ? 1 : 0]
-                     [(addr - IO_TIMER0_BASE) / IO_TIMER_STRIDE], addr, val);
+        int ti = is_arm7 ? 1 : 0;
+        timer_write8(&io->timer[ti][(addr - IO_TIMER0_BASE) / IO_TIMER_STRIDE],
+                     addr, val);
+        /* 21-B9yi(续55)：重算「开着的定时器」位图（见 io.h 的说明）。
+           写 CNT_H 才会改使能位，而这个分支只在写定时器寄存器时走到，很少。 */
+        io->timer_on[ti] = (uint8_t)(
+            ((io->timer[ti][0].cnt_h & TIMER_CNT_ENABLE) ? 1u : 0u) |
+            ((io->timer[ti][1].cnt_h & TIMER_CNT_ENABLE) ? 2u : 0u) |
+            ((io->timer[ti][2].cnt_h & TIMER_CNT_ENABLE) ? 4u : 0u) |
+            ((io->timer[ti][3].cnt_h & TIMER_CNT_ENABLE) ? 8u : 0u));
         return;
     }
     if (addr >= IO_KEYINPUT_ADDR && addr < IO_KEYINPUT_END) {
@@ -252,6 +260,8 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         /* 写 CNT_H 且使能=1 时在 dma_write8 内同步触发立即搬运；
            若卡带已就绪且本条是卡带触发源，则在写完后补触发。 */
         dma_write8(&io->dma[is_arm7 ? 1 : 0], addr, val, io->bus, is_arm7);
+        /* 21-B9yi(续56)：DMA 寄存器写可能武装 GX/卡带搬运 ⇒ 时钟有活 */
+        io->cart_clock_on = 1;
         /* 21-B9yi 诊断：NDS_DMALOG=1 → 打印每次 DMA 寄存器写（帧/地址/值/PC） */
         {
             extern unsigned long long g_dbg_frame;
@@ -303,6 +313,7 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
                        io->bus != NULL ? io->bus->dbg_pc : 0u);
         }
         cartbus_write8(&io->cartbus, addr, val);
+        io->cart_clock_on = 1;   /* 21-B9yi(续56)：卡带寄存器写 ⇒ 时钟有活 */
         /* 21-B9yi 诊断：NDS_CARTLOG2=LO-HI → 打印该帧内每次 ROMCTRL 高字节写
            （含发起者 PC/LR/SP），用于判断「哪段代码发起了被放弃的传输」。 */
         if (addr == 0x040001A7u) {
@@ -411,16 +422,21 @@ void io_gx_write32(io_t *io, uint32_t addr, uint32_t val)
 {
     gx_write32(&io->gx, addr, val);
     io_gx_fifo_irq_sync(io);
+    /* 21-B9yi(续56)：GX 收到命令 ⇒ 卡带/GX 时钟有活干了（见 io.h 的说明）。 */
+    io->cart_clock_on = 1;
 }
 
 uint32_t io_card_data_read32(io_t *io)
 {
+    /* 读数据端口会推进卡带取数、可能触发下一字预取 ⇒ 时钟有活 */
+    io->cart_clock_on = 1;
     return cartbus_read32(&io->cartbus);
 }
 
 void io_card_data_write32(io_t *io, uint32_t val)
 {
     (void)val; /* 读 ROM 用不到写端口；EEPROM 等写路径留待后续阶段 */
+    io->cart_clock_on = 1;
 }
 
 void io_attach_cart(io_t *io, const uint8_t *rom, size_t rom_size)
@@ -551,14 +567,40 @@ void io_advance_timers(io_t *io, int is_arm7, uint32_t cycles)
 {
     /* 21-B9h：TM0-TM3 溢出对应 IF bit3-bit6，仅 cnt_h bit6（IRQ 使能）时置位 */
     int idx = is_arm7 ? 1 : 0;
-    for (int i = 0; i < IO_TIMER_COUNT; i++) {
-        if (timer_advance(&io->timer[is_arm7 ? 1 : 0][i], cycles) &&
-            (io->timer[is_arm7 ? 1 : 0][i].cnt_h & TIMER_CNT_IRQ))
+    /* 21-B9yi(续55)：只遍历**开着的**定时器（位图由 io_write8 维护）。
+       未开位图时（一个定时器都没开）这里就是一次读+判断即返回。 */
+    unsigned mask = io->timer_on[idx];
+    while (mask != 0) {
+        int i = __builtin_ctz(mask);   /* 取最低置位：0..3 */
+        mask &= mask - 1u;
+        if (timer_advance(&io->timer[idx][i], cycles) &&
+            (io->timer[idx][i].cnt_h & TIMER_CNT_IRQ))
             io->irq[idx].ifl |= (uint32_t)(1u << (3 + i));
     }
 }
+/* 21-B9yi(续56)：卡带总线上是否还有活要干。
+   三种情况：正在等下一字取数（wait_phase）、预取 FIFO 里还有数据没人取、DRQ 已置位。 */
+static int io_cartbus_busy(const cartbus_t *cb)
+{
+    return cb->wait_phase != 0 || cb->data_count != 0 ||
+           (cb->romctrl & CART_ROMCTRL_DRQ) != 0;
+}
+
+/* GX 模式 DMA 是否还有没搬完的通道（rem != 0 = 已武装但没搬完）。 */
+static int io_dma_gx_busy(const dma_t *dma)
+{
+    for (int c = 0; c < (int)IO_DMA_COUNT; c++)
+        if (dma->ch[c].rem != 0)
+            return 1;
+    return 0;
+}
+
 void io_advance_cart(io_t *io, int is_arm7, uint32_t cycles)
 {
+    /* 21-B9yi(续56)：不忙时整段跳过（调用点也会先判一次 `cart_clock_on`，
+       这里再做一次是为了让从其它路径进来的调用同样安全）。 */
+    if (!io->cart_clock_on)
+        return;
     /* 21-B9zb: 卡带时钟只在 ARM9 指令周期推进；数据就绪边沿触发卡带 IRQ/DMA。
        21-B9yi：按**本步实际消耗的周期数**推进（此前固定 1/指令，而 ARM9 平均
        每条指令 ~1.2 个系统单位，导致卡带取数节奏比参考核慢 ~20%，读卡带阶段
@@ -610,4 +652,11 @@ void io_advance_cart(io_t *io, int is_arm7, uint32_t cycles)
         io->cartbus.end_irq = 0;
         irq_set_card(&io->irq[0]);
     }
+    /* 21-B9yi(续56)：重算「卡带/GX 时钟」门控。
+       GX 还有排队/忙周期、卡带在取数或 FIFO 有货、GX 模式 DMA 没搬完、完成中断待挂，
+       任一为真就保持开启；全闲就关掉 ⇒ 之后每条指令都能整段跳过 io_advance_cart。 */
+    io->cart_clock_on = (uint8_t)(io_cartbus_busy(&io->cartbus) ||
+                                  gx_pending(&io->gx) ||
+                                  io_dma_gx_busy(&io->dma[0]) ||
+                                  io->cartbus.end_irq != 0);
 }

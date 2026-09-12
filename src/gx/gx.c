@@ -1731,6 +1731,16 @@ void gx_advance(gx_t *g, uint32_t cycles)
     gx_run_due(g, cycles);
 }
 
+/* 21-B9yi(续56)：GX 是否还有活（见 gx.h 说明）。读取的都是本文件的状态：
+   busy_cycles=引擎剩余工作周期；g_q_len/g_e_len=待执行/未解码完的条目；
+   g_need=当前命令还缺多少参数。四者全 0 时 gx_advance 什么也不会做。 */
+int gx_pending(const gx_t *g)
+{
+    if (g->busy_cycles > 0)
+        return 1;
+    return g_q_len > 0 || g_e_len > 0 || g_need > 0;
+}
+
 uint32_t gx_fifo_free_words(const gx_t *g)
 {
     /* 21-B9yi(续27/续33)：按 melonDS 的**条目**口径（112 条），不是字数。

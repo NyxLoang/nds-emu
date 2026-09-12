@@ -239,6 +239,10 @@ void gx_cmd_hist_dump(void);
 /* 21-B9yi(续16)：按系统时钟消耗 3D 引擎工作周期（到 0 时清 GXSTAT bit27）。 */
 void gx_advance(gx_t *g, uint32_t cycles);
 
+/* 21-B9yi(续56)：GX 引擎此刻是否还有活要干（忙周期 / 待执行条目 / 待收参数）。
+   给 io 的「卡带/GX 时钟」门控用：都不忙时整段跳过推进。 */
+int gx_pending(const gx_t *g);
+
 /* 21-B9yi(续22)：GX 命令 FIFO 的剩余空间（字）。模式 7 DMA 用它决定一次搬多少。 */
 uint32_t gx_fifo_free_words(const gx_t *g);
 int gx_fifo_can_accept(const gx_t *g);

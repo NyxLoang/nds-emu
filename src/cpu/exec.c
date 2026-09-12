@@ -240,11 +240,20 @@ void exec_apply_cpsr(arm_cpu_t *cpu, uint32_t new_cpsr)
     if (!cpu->is_arm7 && old_mode != new_mode) {
         extern unsigned long long g_dbg_frame;
         static int modelog_state, modelog_n;
+        static long modelog_lo = -2, modelog_hi = -2;
         if (modelog_state == 0) {
             const char *e = getenv("NDS_MODELOG");
             modelog_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+            modelog_lo = 0; modelog_hi = -1;
+            if (modelog_state == 1 && e != NULL) {
+                long lo = 0, hi = 0;
+                if (sscanf(e, "%ld-%ld", &lo, &hi) == 2) {
+                    modelog_lo = lo; modelog_hi = hi;   /* 21-B9yi(续12)：支持帧区间 */
+                }
+            }
         }
-        if (modelog_state == 1 && modelog_n < 200000) {
+        if (modelog_state == 1 && modelog_n < 200000 &&
+            (long)g_dbg_frame >= modelog_lo && (long)g_dbg_frame <= modelog_hi) {
             modelog_n++;
             printf("modelog: f=%llu pc=%08X %02X->%02X lr=%08X sp=%08X\n",
                    g_dbg_frame, cpu->r[15], old_mode, new_mode,

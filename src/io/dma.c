@@ -2,6 +2,7 @@
 #include "bus/bus.h"
 #include "io/io.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 /* 通道内字节偏移（相对本通道基址）：0-3=SAD、4-7=DAD、8-9=CNT_L、10-11=CNT_H */
 static uint32_t ch_off(uint32_t addr)
@@ -89,10 +90,13 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm
     int prev_dma = g_dma_active;
     g_dma_active = 1;
     for (uint32_t i = 0; i < n; i++) {
-        /* 21-B9zb: DMA 从 CARD_DATA 取数时按卡带就绪时钟等待（保留：让 DMA
-           读到的都是真实 ROM 数据，而不是 FIFO 残留值）。 */
-        if (src == BUS_CARD_DATA && bus != NULL && bus->io != NULL)
-            cartbus_advance(&bus->io->cartbus, 100000u);
+        /* 21-B9yi(续12)：**去掉 21-B9zb 的「瞬间推进卡带时钟」hack**。
+           真机/melonDS 的卡带 DMA 不推进卡带时钟：数据由卡带侧按自己的节拍
+           取进 2 字 FIFO 并拉 DRQ（`ROMReceiveData`），DMA 只是把 FIFO 里
+           已经就绪的字搬走。本地旧实现每次 DMA 读都 `cartbus_advance(…,100000)`
+           把等待一次性跳过，于是同一笔传输在本地只用参考核 1/4 的帧数就跑完
+           （实测 205 块/帧 vs 参考 50 块/帧），游戏侧「哪一块该由谁搬」的
+           计数随之错位。数据是否就绪由 `dma_fire_card` 的 DRQ 门控保证。 */
         if (is32)
             bus_write32(bus, dst, bus_read32(bus, src));
         else
@@ -164,17 +168,60 @@ void dma_fire_card(dma_t *dma, struct bus *bus, int is_arm7)
        FIFO 里的残留值（实测游戏缓冲被写进 0xFFFFFFFF，随后逻辑走飞）。 */
     if (bus == NULL || bus->io == NULL)
         return;
-    if ((bus->io->cartbus.romctrl & CART_ROMCTRL_DRQ) == 0)
-        return;
-    for (int c = 0; c < IO_DMA_COUNT; c++) {
-        dma_channel_t *d = &dma->ch[c];
-        if ((d->cnt_h & DMA_CNT_ENABLE) == 0)
-            continue;
-        unsigned mode = is_arm7
-            ? ((((unsigned)d->cnt_h >> 12) & 3u) | 0x10u)
-            : (((unsigned)d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT);
-        if ((is_arm7 && mode == DMA_START_CARD7) ||
-            (!is_arm7 && mode == DMA_START_CARD))
-            dma_transfer(d, bus, c, is_arm7);
+    /* 21-B9yi(续12) 诊断：NDS_DMAFBG=LO-HI → 每次卡带 DMA 触发点打印
+       （DRQ、每个通道的使能/模式、最终是否真的搬了），用于定位
+       「武装了但没人搬 / 触发了但 FIFO 是空」这类停摆。 */
+    static int fbg_state;
+    static long fbg_lo = -2, fbg_hi = -2;
+    if (fbg_state == 0) {
+        extern unsigned long long g_dbg_frame;
+        const char *e = getenv("NDS_DMAFBG");
+        fbg_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+        fbg_lo = 0; fbg_hi = -1;
+        if (fbg_state == 1 && e != NULL) {
+            long lo = 0, hi = 0;
+            if (sscanf(e, "%ld-%ld", &lo, &hi) == 2) { fbg_lo = lo; fbg_hi = hi; }
+        }
+    }
+    int fbg_on = 0;
+    if (fbg_state == 1) {
+        extern unsigned long long g_dbg_frame;
+        fbg_on = ((long)g_dbg_frame >= fbg_lo && (long)g_dbg_frame <= fbg_hi);
+    }
+    if (fbg_on) {
+        extern unsigned long long g_dbg_frame;
+        printf("dmafbg: f=%llu arm%d drq=%d cnt3=%04X/%04X cnt2=%04X/%04X\n",
+               g_dbg_frame, is_arm7 ? 7 : 9,
+               (bus->io->cartbus.romctrl & CART_ROMCTRL_DRQ) ? 1 : 0,
+               dma->ch[3].cnt_h, dma->ch[3].cnt_l,
+               dma->ch[2].cnt_h, dma->ch[2].cnt_l);
+    }
+    /* 21-B9yi(续12)：**电平敏感的搬完再检查**。melonDS 的 `DMA::Run9()` 收尾是
+       `if (StartMode == 0x05) NDSCartSlots[0]->CheckDMA();`，而 `CheckDMA()`
+       第一行就是「DRQ 未置位直接返回」——于是「FIFO 里还有字」这件事会立刻
+       把同一通道再拉起来搬下一个字，直到 FIFO 被读空、DRQ 落下为止。
+       本地旧实现只在「卡带又取到一个字」的边沿触发一次，FIFO 装满 2 字后
+       卡带不再取数（`data_late`）、DMA 也不再被拉起 ⇒ 最后 1 个字没人读、
+       传输永远不结束（bit31 不清、完成中断不来）。这里按参考核的语义补上
+       循环重检；每轮至少搬 1 个字，FIFO 最多 2 字 ⇒ 循环有界。 */
+    for (int guard = 0; guard < 8; guard++) {
+        int fired = 0;
+        if ((bus->io->cartbus.romctrl & CART_ROMCTRL_DRQ) == 0)
+            break;
+        for (int c = 0; c < IO_DMA_COUNT; c++) {
+            dma_channel_t *d = &dma->ch[c];
+            if ((d->cnt_h & DMA_CNT_ENABLE) == 0)
+                continue;
+            unsigned mode = is_arm7
+                ? ((((unsigned)d->cnt_h >> 12) & 3u) | 0x10u)
+                : (((unsigned)d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT);
+            if ((is_arm7 && mode == DMA_START_CARD7) ||
+                (!is_arm7 && mode == DMA_START_CARD)) {
+                dma_transfer(d, bus, c, is_arm7);
+                fired = 1;
+            }
+        }
+        if (!fired)
+            break;
     }
 }

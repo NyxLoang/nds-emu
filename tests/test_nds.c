@@ -4344,8 +4344,14 @@ static void test_card_dma(nds_t *nds)
 
     /* 搬完自动清使能 */
     CHECK_EQ("card dma enable cleared", bus_read16(nds->bus, dma0 + 10) & DMA_CNT_ENABLE, 0u);
-    /* 21-B9zb: DMA 触发后硬件继续预取下一字，DRQ 仍就绪；块未耗尽 */
+    /* 21-B9yi(续12)：melonDS 口径——读走一个字就清 DRQ（`ReadROMData` 里的
+       `ROMCnt &= ~(1<<23)`），卡带取到下一个字才由 `RaiseDRQ()` 重新置位。
+       所以「刚搬完」这一刻 DRQ 必须是 0；推进卡带时钟取到下一字后回到 1。 */
     CHECK_EQ("card romctrl DRQ after dma",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ, 0u);
+    for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
+        io_advance_cart(nds->io, 0, 1u);
+    CHECK_EQ("card romctrl DRQ refilled",
              bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
              CART_ROMCTRL_DRQ);
     /* 21-B9yi：melonDS 口径——数据就绪（DRQ）只触发 DMA，**不**挂卡带中断；
@@ -4381,9 +4387,13 @@ static void test_card_dma7(nds_t *nds)
     nds->bus->active_is_arm7 = 1;
     bus_write32(nds->bus, dma0 + 0, BUS_CARD_DATA);
     bus_write32(nds->bus, dma0 + 4, dst);
-    bus_write16(nds->bus, dma0 + 8, 4u);
+    /* 21-B9yi(续12)：真机用法是 CNT_L=1 + 重复位（游戏写 `AF000001`），
+       每个 DRQ 搬 1 字、重复位保持使能；一次武装 4 字会把空 FIFO 读成
+       0xFFFFFFFF（旧用例的口径不符合真机节奏）。 */
+    bus_write16(nds->bus, dma0 + 8, 1u);
     bus_write16(nds->bus, dma0 + 10,
-                DMA_CNT_32BIT | DMA_CNT_SRC_FIX | (2u << 12) | DMA_CNT_ENABLE);
+                DMA_CNT_32BIT | DMA_CNT_SRC_FIX | DMA_CNT_REPEAT
+                | (2u << 12) | DMA_CNT_ENABLE);
     nds->bus->active_is_arm7 = 0;
 
     CHECK_EQ("card7 mode field", (nds->io->dma[1].ch[0].cnt_h >> 12) & 3u, 2u);
@@ -4398,17 +4408,23 @@ static void test_card_dma7(nds_t *nds)
     for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
         io_advance_cart(nds->io, 0, 1u);
 
+    /* 21-B9yi(续12)：卡带每取到一个字（DRQ 边沿）才把该字交给 DMA；
+       循环推进卡带时钟，让 4 个字依次落进 dest（真机用法 CNT_L=1 + 重复位）。 */
     for (int i = 0; i < 4; i++) {
         uint32_t want = (uint32_t)rom[0x8100 + 4 * i]
                       | ((uint32_t)rom[0x8100 + 4 * i + 1] << 8)
                       | ((uint32_t)rom[0x8100 + 4 * i + 2] << 16)
                       | ((uint32_t)rom[0x8100 + 4 * i + 3] << 24);
         char nm[32];
+        for (int spin = 0; spin < 200000 &&
+             bus_read32(nds->bus, dst + 4u * i) != want; spin++)
+            io_advance_cart(nds->io, 0, 1u);
         snprintf(nm, sizeof nm, "card7 dma word[%d]", i);
         CHECK_EQ(nm, bus_read32(nds->bus, dst + 4u * i), want);
     }
-    CHECK_EQ("card7 dma enable cleared",
-             nds->io->dma[1].ch[0].cnt_h & DMA_CNT_ENABLE, 0u);
+    CHECK_EQ("card7 dma enable stays (repeat)",
+             nds->io->dma[1].ch[0].cnt_h & DMA_CNT_ENABLE, DMA_CNT_ENABLE);
+    bus_write16(nds->bus, dma0 + 10, 0u);   /* 收尾：撤下武装 */
     /* ARM9（模式 5）不该被 ARM7 的 0x12 触发条件误伤 */
     CHECK_EQ("card7 arm9 untouched", nds->io->dma[0].ch[0].cnt_h, 0u);
 }
@@ -4442,9 +4458,12 @@ static void test_card_program(nds_t *nds)
         /* 0x18 */ 0xE3A02402, /* MOV r2, #0x02000000       r2 = Main RAM 基址 */
         /* 0x1C */ 0xE2822C20, /* ADD r2, r2, #0x2000       r2 = 0x02002000（dest） */
         /* 0x20 */ 0xE5802004, /* STR r2, [r0, #4]          DAD = dest */
-        /* 0x24 */ 0xE3A034AD, /* MOV r3, #0xAD000000       r3 = CNT_H<<16 */
-        /* 0x28 */ 0xE3833004, /* ORR r3, r3, #0x04         r3 = 0xAD000004（CNT_L=4） */
-        /* 0x2C */ 0xE5803008, /* STR r3, [r0, #8]          CNT=0xAD000004（卡带模式） */
+        /* 0x24 */ 0xE3A034AF, /* MOV r3, #0xAF000000       r3 = CNT_H<<16
+                                   （0xAF00：使能+模式5+32 位+源固定+**重复位 bit25**） */
+        /* 0x28 */ 0xE3833001, /* ORR r3, r3, #0x01         r3 = 0xAF000001
+                                   21-B9yi(续12)：真机/游戏用法（游戏写 `AF000001`）：
+                                   每个 DRQ 搬 1 字、重复位让通道保持使能 */
+        /* 0x2C */ 0xE5803008, /* STR r3, [r0, #8]          CNT=0xAF000001（卡带模式） */
         /* 0x30 */ 0xE3A01404, /* MOV r1, #0x04000000       r1 = 0x04000000 */
         /* 0x34 */ 0xE28110A4, /* ADD r1, r1, #0xA4         r1 = 0x040000A4 */
         /* 0x38 */ 0xE2811C01, /* ADD r1, r1, #0x100        r1 = 0x040001A4（ROMCTRL） */
@@ -4474,7 +4493,11 @@ static void test_card_program(nds_t *nds)
         snprintf(nm, sizeof nm, "card prog word[%d]", i);
         CHECK_EQ(nm, bus_read32(nds->bus, dst + 4u * i), want);
     }
-    CHECK_EQ("card prog enable cleared", bus_read16(nds->bus, IO_DMA0_BASE + 10) & DMA_CNT_ENABLE, 0u);
+    /* 21-B9yi(续12)：重复位置位时搬完不自动清使能——这正是游戏把整段
+       512 字节交给卡带 DMA 逐字搬完的机制（旧用例断言「自动清使能」不符合）。 */
+    CHECK_EQ("card prog enable stays (repeat)",
+             bus_read16(nds->bus, IO_DMA0_BASE + 10) & DMA_CNT_ENABLE,
+             DMA_CNT_ENABLE);
 }
 
 /* ---- 阶段 16.2 用例：存档芯片 SPI 状态机（EEPROM） ---- */

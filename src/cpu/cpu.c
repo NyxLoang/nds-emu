@@ -251,15 +251,24 @@ int cpu_step(arm_cpu_t *cpu)
         {
             extern unsigned long long g_dbg_frame;
             static int irqlog_state, irqlog_n;
+            static long irqlog_lo = -2, irqlog_hi = -2;
             if (irqlog_state == 0) {
                 const char *e = getenv("NDS_IRQLOG");
                 irqlog_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+                irqlog_lo = 0; irqlog_hi = -1;   /* 默认全覆盖 */
+                if (irqlog_state == 1 && e != NULL) {
+                    long lo = 0, hi = 0;
+                    if (sscanf(e, "%ld-%ld", &lo, &hi) == 2) {
+                        irqlog_lo = lo; irqlog_hi = hi;  /* 21-B9yi(续12)：支持帧区间 */
+                    }
+                }
             }
-            if (irqlog_state == 1 && !cpu->is_arm7 && irqlog_n < 400000) {
+            if (irqlog_state == 1 && !cpu->is_arm7 && irqlog_n < 400000 &&
+                (long)g_dbg_frame >= irqlog_lo && (long)g_dbg_frame <= irqlog_hi) {
                 irqlog_n++;
-                printf("locirq: f=%llu pc=%08X cpsr=%08X lr=%08X t=%llu\n",
+                printf("locirq: f=%llu pc=%08X cpsr=%08X lr=%08X if=%08X ie=%08X t=%llu\n",
                        g_dbg_frame, cpu->r[15], cpu->cpsr, cpu->r[14],
-                       (unsigned long long)cpu->cycles);
+                       irq->ifl, irq->ie, (unsigned long long)cpu->cycles);
             }
         }
         /* 21-B9b：诊断首中断现场——FFXII 的 ARM9 第一次 IRQ 会跳到高向量 0xFFFF0018，

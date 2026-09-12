@@ -254,15 +254,24 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         {
             extern unsigned long long g_dbg_frame;
             static int dmallog_state, dmallog_n;
+            static long dmallog_lo = -2, dmallog_hi = -2;
             if (dmallog_state == 0) {
                 const char *e = getenv("NDS_DMALOG");
                 dmallog_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+                dmallog_lo = 0; dmallog_hi = -1;
+                if (dmallog_state == 1 && e != NULL) {
+                    long lo = 0, hi = 0;
+                    if (sscanf(e, "%ld-%ld", &lo, &hi) == 2) {   /* 21-B9yi(续12)：帧区间 */
+                        dmallog_lo = lo; dmallog_hi = hi; }
+                }
             }
-            if (dmallog_state == 1 && dmallog_n < 400000) {
+            if (dmallog_state == 1 && dmallog_n < 400000 &&
+                (long)g_dbg_frame >= dmallog_lo && (long)g_dbg_frame <= dmallog_hi) {
                 dmallog_n++;
-                printf("dmalog: f=%llu arm%d a=%08X v=%02X pc=%08X\n",
+                printf("dmalog: f=%llu arm%d a=%08X v=%02X pc=%08X lr=%08X\n",
                        g_dbg_frame, is_arm7 ? 7 : 9, addr, val,
-                       io->bus != NULL ? io->bus->dbg_pc : 0u);
+                       io->bus != NULL ? io->bus->dbg_pc : 0u,
+                       io->bus != NULL ? io->bus->dbg_lr : 0u);
             }
         }
         io_card_dma_check(io, is_arm7);
@@ -270,6 +279,27 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     }
     if (cartbus_is_addr(addr)) {
         int was_ready = cartbus_ready(&io->cartbus);
+        /* 21-B9yi(续12) 诊断：NDS_CARTIO=LO-HI → 打印卡带寄存器区的每次写
+           （含命令字节 0xA8-0xAF 与 AUXSPICNT 0xA1），与参考核 refio 逐事件对照。 */
+        {
+            extern unsigned long long g_dbg_frame;
+            static int cio_state;
+            static long cio_lo = -2, cio_hi = -2;
+            if (cio_state == 0) {
+                const char *e = getenv("NDS_CARTIO");
+                cio_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+                cio_lo = 0; cio_hi = -1;
+                if (cio_state == 1 && e != NULL) {
+                    long lo = 0, hi = 0;
+                    if (sscanf(e, "%ld-%ld", &lo, &hi) == 2) { cio_lo = lo; cio_hi = hi; }
+                }
+            }
+            if (cio_state == 1 && (long)g_dbg_frame >= cio_lo &&
+                (long)g_dbg_frame <= cio_hi)
+                printf("cartio: f=%llu a=%08X v=%02X pc=%08X\n",
+                       g_dbg_frame, addr, val,
+                       io->bus != NULL ? io->bus->dbg_pc : 0u);
+        }
         cartbus_write8(&io->cartbus, addr, val);
         /* 21-B9yi 诊断：NDS_CARTLOG2=LO-HI → 打印该帧内每次 ROMCTRL 高字节写
            （含发起者 PC/LR/SP），用于判断「哪段代码发起了被放弃的传输」。 */
@@ -534,11 +564,15 @@ void io_advance_cart(io_t *io, int is_arm7, uint32_t cycles)
         io_card_dma_check(io, 0);
         io_card_dma_check(io, 1);
     }
-    /* 21-B9yi：一次卡带传输在 FIFO 取空后结束——AUXSPICNT bit14 使能时
-       挂两核的卡带完成中断（melonDS `ROMEndTransfer`）。 */
+    /* 21-B9yi：一次卡带传输在 FIFO 取空后结束——AUXSPICNT bit14 使能时挂
+       卡带完成中断（melonDS `ROMEndTransfer`）。
+       21-B9yi(续12)：**只挂给 ARM9**。melonDS 是 `SetIRQ(Num, IRQ_CartXferDone)`，
+       而 `Num` 是卡带槽所属核的编号（NDS 只有一个槽 = 0 = ARM9）。旧实现
+       「两核都挂」会让 ARM7 的 IF 永远留着 bit19（实测 1880-1912 帧 if7 恒为
+       00080000，参考核为 0），既污染 ARM7 的 Halt 唤醒条件（`IF & IE`），
+       也让后续对照看不出真正的唤醒源。 */
     if (io->cartbus.end_irq) {
         io->cartbus.end_irq = 0;
         irq_set_card(&io->irq[0]);
-        irq_set_card(&io->irq[1]);
     }
 }

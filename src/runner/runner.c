@@ -600,19 +600,22 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             }
             if ((long)fr >= s_ft_lo && (long)fr <= s_ft_hi) {
                 printf("ftrace: f=%llu ARM9=%08X cpsr9=%08X ARM7=%08X cpsr7=%08X"
-                       " if9=%08X if7=%08X ime=%u/%u fifo=%d/%d lr9=%08X sp9=%08X\n",
+                       " if9=%08X if7=%08X ie9=%08X ie7=%08X ime=%u/%u"
+                       " fifo=%d/%d lr9=%08X sp9=%08X\n",
                        (unsigned long long)fr,
                        nds->cpu->r[15], nds->cpu->cpsr,
                        nds->cpu7->r[15], nds->cpu7->cpsr,
                        nds->io->irq[0].ifl, nds->io->irq[1].ifl,
+                       nds->io->irq[0].ie, nds->io->irq[1].ie,
                        nds->io->irq[0].ime, nds->io->irq[1].ime,
                        nds->io->fifo.from7.count, nds->io->fifo.from9.count,
                        nds->cpu->r[14], nds->cpu->r[13]);
                 printf("ftrace:   cart romctrl=%08X rem=%u pos=%u wait=%u/%u"
-                       " dma3=%08X/%08X/%08X\n",
+                       " fifo=%d late=%d dma3=%08X/%08X/%08X\n",
                        nds->io->cartbus.romctrl, nds->io->cartbus.xfer_remaining,
                        nds->io->cartbus.xfer_pos, nds->io->cartbus.wait_phase,
-                       nds->io->cartbus.wait_cycles,
+                       nds->io->cartbus.wait_cycles, nds->io->cartbus.data_count,
+                       nds->io->cartbus.data_late,
                        bus_read32(nds->bus, 0x040000D4u),
                        bus_read32(nds->bus, 0x040000D8u),
                        bus_read32(nds->bus, 0x040000DCu));

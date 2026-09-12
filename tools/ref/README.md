@@ -42,6 +42,17 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_SHOT_EVERY=N` | 每 N 帧把两块 256×192 帧缓冲写成 `%TEMP%\ref_fb_<frame>.bin` |
 | `REF_STOP_IDLE=1` | 恢复旧行为：命中游戏空闲任务（0x02009570-0x02009590）就提前退出 |
 | `REF_GXHIST=1` | 进程结束前打印 GX 命令码直方图（`refgxhist:` 行），与本地 `NDS_GXHIST` 对照 |
+| `REF_POLYDBG=1` | 帧号 ≥3800 后打印前 6 个顶点的**裁剪空间坐标**与矩阵（对应本地 `NDS_POLYDBG=1`） |
+| `REF_GXDBG_FRAME=N` / `REF_MAT_FRAME=N` | 只 dump 第 N 帧窗口的**矩阵类命令序列** / 打印该帧的 `proj/pos/tex` 关键元素（对应本地 `NDS_GXDBG_FRAME` / `NDS_MAT_FRAME`） |
+
+## melonDS 侧需要的补丁
+
+`melonds-gpu3d.patch` 是对 melonDS `src/GPU3D.cpp` 的全部改动（`REF_GXHIST` /
+`REF_POLYDBG` / `REF_GXDBG_FRAME` / `REF_MAT_FRAME` 四个诊断设施），重建时：
+
+```powershell
+git -C "$env:TEMP\melonds-ref" apply <仓库路径>\tools\ref\melonds-gpu3d.patch
+```
 
 ## 把参考帧转成图片
 

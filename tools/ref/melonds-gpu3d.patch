@@ -1,0 +1,122 @@
+diff --git a/src/GPU3D.cpp b/src/GPU3D.cpp
+index 3272a34..58a8d31 100644
+--- a/src/GPU3D.cpp
++++ b/src/GPU3D.cpp
+@@ -139,6 +139,14 @@ const u8 CmdNumParams[256] =
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+ };
+ 
++/* 21-B9yi(续32)：REF_GXHIST=1 时统计 GX 命令码直方图（与本地 NDS_GXHIST 对照）。 */
++unsigned long long RefGxHist[256];
++
++/* 21-B9yi(续35)：REF_POLYDBG=1 时，帧号 >= 3800 后打印前 6 个顶点的裁剪空间
++   坐标与当前矩阵，用于和本地 `NDS_POLYDBG` 逐项对照。 */
++extern int RefDbgFrame;
++
++
+ void MatrixLoadIdentity(s32* m);
+ 
+ GPU3D::GPU3D(melonDS::GPU& gpu) noexcept :
+@@ -684,6 +692,28 @@ void GPU3D::UpdateClipMatrix() noexcept
+     if (!ClipMatrixDirty) return;
+     ClipMatrixDirty = false;
+ 
++    /* 21-B9yi(续35)：`REF_MAT_FRAME=N` → 第 N 帧里第一次更新裁剪矩阵时打印一次
++       三个矩阵的关键元素（与本地 runner 的 `NDS_MAT_FRAME=N` 对照）。 */
++    {
++        static long mf = -2;
++        static long last = -1;
++        if (mf == -2) {
++            const char* e = std::getenv("REF_MAT_FRAME");
++            mf = (e != nullptr) ? std::atol(e) : -1;
++        }
++        if (mf >= 0 && RefDbgFrame >= mf && RefDbgFrame <= mf + 20 &&
++            last != RefDbgFrame) {
++            last = RefDbgFrame;
++            std::printf("refmat: f=%d ", RefDbgFrame);
++            std::printf("refmat: proj=(%d,%d,%d,%d) pos=(%d,%d,%d,%d) tex=(%d,%d,%d,%d)\n",
++                        ProjMatrix[0], ProjMatrix[5], ProjMatrix[15], ProjMatrix[3],
++                        PosMatrix[0], PosMatrix[5], PosMatrix[15], PosMatrix[3],
++                        TexMatrix[0], TexMatrix[5], TexMatrix[15], TexMatrix[3]);
++            std::fflush(stdout);
++        }
++    }
++
++
+     memcpy(ClipMatrix, ProjMatrix, 16*4);
+     MatrixMult4x4(ClipMatrix, PosMatrix);
+ }
+@@ -1348,6 +1378,30 @@ void GPU3D::SubmitVertex() noexcept
+     vertextrans->Position[2] = (vertex[0]*ClipMatrix[2] + vertex[1]*ClipMatrix[6] + vertex[2]*ClipMatrix[10] + vertex[3]*ClipMatrix[14]) >> 12;
+     vertextrans->Position[3] = (vertex[0]*ClipMatrix[3] + vertex[1]*ClipMatrix[7] + vertex[2]*ClipMatrix[11] + vertex[3]*ClipMatrix[15]) >> 12;
+ 
++    {
++        static int dbg = -1, shown;
++        if (dbg < 0) dbg = (getenv("REF_POLYDBG") != nullptr) ? 1 : 0;
++        if (dbg && shown < 6 && RefDbgFrame >= 3800) {
++            std::printf("refpoly: f=%d v=%d clip=(%d,%d,%d,%d) raw=(%lld,%lld,%lld)\n",
++                        RefDbgFrame, shown,
++                        vertextrans->Position[0], vertextrans->Position[1],
++                        vertextrans->Position[2], vertextrans->Position[3],
++                        (long long)vertex[0], (long long)vertex[1], (long long)vertex[2]);
++            if (shown == 0) {
++                std::printf("refpoly: viewport=%d,%d,%d,%d polyattr=%08X\n",
++                            Viewport[0], Viewport[3], Viewport[4], Viewport[5], PolygonAttr);
++                std::printf("refpoly: proj=%d,%d,%d,%d / %d,%d,%d,%d\n",
++                            ProjMatrix[0], ProjMatrix[1], ProjMatrix[2], ProjMatrix[3],
++                            ProjMatrix[12], ProjMatrix[13], ProjMatrix[14], ProjMatrix[15]);
++                std::printf("refpoly: pos=%d,%d,%d,%d / %d,%d,%d,%d\n",
++                            PosMatrix[0], PosMatrix[1], PosMatrix[2], PosMatrix[3],
++                            PosMatrix[12], PosMatrix[13], PosMatrix[14], PosMatrix[15]);
++            }
++            shown++;
++            std::fflush(stdout);
++        }
++    }
++
+     // this probably shouldn't be.
+     // the way color is handled during clipping needs investigation. TODO
+     vertextrans->Color[0] = (VertexColor[0] << 12) + 0xFFF;
+@@ -1735,6 +1789,34 @@ void GPU3D::ExecuteCommand() noexcept
+ {
+     CmdFIFOEntry entry = CmdFIFORead();
+ 
++    {
++        static int on = -1;
++        if (on < 0) on = (getenv("REF_GXHIST") != nullptr) ? 1 : 0;
++        if (on) RefGxHist[entry.Command]++;
++    }
++
++    /* 21-B9yi(续35)：REF_GXDBG_FRAME=N → 只 dump 该帧的前 200 条命令
++       （与本地 `NDS_GXDBG=1 NDS_GXDBG_FRAME=N` 逐条对照值级差异）。 */
++    {
++        static long dframe = -2;
++        static int left = 0;
++        if (dframe == -2) {
++            const char* e = std::getenv("REF_GXDBG_FRAME");
++            dframe = (e != nullptr) ? std::atol(e) : -1;
++            left = 24;      /* 只打印前 24 条**矩阵命令**（其余命令不打印，避免噪声） */
++        }
++        if (dframe >= 0 && RefDbgFrame >= dframe && RefDbgFrame <= dframe + 20 &&
++            left > 0 && entry.Command >= 0x10 && entry.Command <= 0x1C) {
++            std::printf("refcmd: cmd=%02X param=%08X mode=%d"
++                        " proj=%d,%d,%d,%d pos=%d,%d,%d,%d\n",
++                        entry.Command, entry.Param, MatrixMode,
++                        ProjMatrix[0], ProjMatrix[5], ProjMatrix[15], ProjMatrix[3],
++                        PosMatrix[0], PosMatrix[5], PosMatrix[15], PosMatrix[3]);
++            left--;
++            if (left == 0) std::fflush(stdout);
++        }
++    }
++
+     //printf("FIFO: processing %02X %08X. Levels: FIFO=%d, PIPE=%d\n", entry.Command, entry.Param, CmdFIFO->Level(), CmdPIPE->Level());
+ 
+     // each FIFO entry takes 1 cycle to be processed
+@@ -2294,6 +2376,7 @@ void GPU3D::ExecuteCommand() noexcept
+                     }
+                     break;
+ 
++
+                 case 0x23: // full vertex
+                     CurVertex[0] = ExecParams[0] & 0xFFFF;
+                     CurVertex[1] = ExecParams[0] >> 16;

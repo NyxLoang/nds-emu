@@ -12,6 +12,13 @@
 
 using namespace melonDS;
 
+/* 21-B9yi(续32)：melonDS 的 GPU3D.cpp 在 namespace melonDS 内，符号也在这个命名空间。 */
+namespace melonDS { extern unsigned long long RefGxHist[256]; }
+
+/* 21-B9yi(续35)：给 GPU3D 的多边形 dump 用的当前帧号（-1 = 关闭）。
+   GPU3D.cpp 在 namespace melonDS 里，符号必须定义在同一命名空间。 */
+namespace melonDS { int RefDbgFrame = -1; }
+
 static int g_trace_frame = -1;
 static int g_fifo_trace_count = 0;
 
@@ -344,6 +351,7 @@ int main(int argc, char** argv)
     for (int frame = 0; frame < ref_frames; frame++)
     {
         g_trace_frame = frame;
+        RefDbgFrame = frame;
         if (key_period > 0 && frame >= key_frame) {
             int phase = (frame - key_frame) % key_period;
             nds->SetKeyMask((phase < 12) ? (u32)key_mask : 0u);
@@ -442,5 +450,14 @@ int main(int argc, char** argv)
 
     std::printf("done arm9=%08X arm7=%08X\n",
         nds->ARM9.R[15], nds->ARM7.R[15]);
+    /* 21-B9yi(续32)：GX 命令直方图（与本地 `NDS_GXHIST=1` 的 gxhist 行对照）。 */
+    {
+        if (std::getenv("REF_GXHIST") != nullptr) {
+            std::printf("refgxhist:");
+            for (int c = 0; c < 256; c++)
+                if (RefGxHist[c]) std::printf(" %02X=%llu", c, RefGxHist[c]);
+            std::printf("\n");
+        }
+    }
     return 0;
 }

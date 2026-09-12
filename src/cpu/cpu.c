@@ -170,15 +170,16 @@ int cpu_step(arm_cpu_t *cpu)
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
     /* 21-B9xj：写监视用 PC。取值口径与 melonDS 解释器一致（ARM=当前指令+8、
-       Thumb=+4），这样本地与参考 harness 打出来的 pc 可直接对照。 */
-    if (cpu->nds->bus->diag)
-        cpu->nds->bus->dbg_pc = cpu->r[15] + ((cpu->cpsr & CPSR_T) ? 4u : 8u);
-    if (cpu->nds->bus->diag)
-        cpu->nds->bus->dbg_lr = cpu->r[14];
-    if (cpu->nds->bus->diag)
-        cpu->nds->bus->dbg_sp = cpu->r[13];
-    if (cpu->nds->bus->diag)
-        cpu->nds->bus->dbg_cpsr = cpu->cpsr;
+       Thumb=+4），这样本地与参考 harness 打出来的 pc 可直接对照。
+       21-B9yi(续41)：四个字段合并到**一次**条件判断里（原先四次读
+       `bus->diag` 的链式指针，编译器无法合并）。 */
+    if (cpu->nds->bus->diag) {
+        bus_t *b = cpu->nds->bus;
+        b->dbg_pc = cpu->r[15] + ((cpu->cpsr & CPSR_T) ? 4u : 8u);
+        b->dbg_lr = cpu->r[14];
+        b->dbg_sp = cpu->r[13];
+        b->dbg_cpsr = cpu->cpsr;
+    }
     /* 21-B9xs：PC 命中计数（只在开启诊断且有配置时执行） */
     if (cpu->nds->bus->diag && g_pchit_n > 0) {
         uint32_t hit_pc = cpu->r[15];

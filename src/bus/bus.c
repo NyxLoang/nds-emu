@@ -64,6 +64,7 @@ void bus_set_watch(bus_t *bus, int idx, uint32_t lo, uint32_t hi)
         return;
     bus->watch_lo[idx] = lo;
     bus->watch_hi[idx] = hi;
+    bus->watch_on = 1;
 }
 
 void bus_set_watch_read(bus_t *bus, int idx, uint32_t lo, uint32_t hi)
@@ -72,6 +73,7 @@ void bus_set_watch_read(bus_t *bus, int idx, uint32_t lo, uint32_t hi)
         return;
     bus->watch_r_lo[idx] = lo;
     bus->watch_r_hi[idx] = hi;
+    bus->watch_on = 1;
 }
 
 /* 读监视：把读到的值与读取者一起打出来（用于“谁在什么时候取走了报文”）。 */
@@ -659,7 +661,7 @@ uint16_t bus_read16(const bus_t *bus, uint32_t addr)
     uint16_t v = (uint16_t)bus_read8(bus, addr)
                | ((uint16_t)bus_read8(bus, addr + 1) << 8);
     g_wide_read = 0;
-    if (bus->diag)
+    if (bus->diag && bus->watch_on)
         bus_dbg_watch_read(bus, addr, 2, v);
     return v;
 }
@@ -667,7 +669,7 @@ uint16_t bus_read16(const bus_t *bus, uint32_t addr)
 /* 小端 16 位写：反向拆字节，最低字节落到低地址。 */
 void bus_write16(bus_t *bus, uint32_t addr, uint16_t val)
 {
-    if (bus->diag)
+    if (bus->diag && bus->watch_on)
         bus_dbg_watch(bus, addr, 2, val);
     g_wide_write = 1;
     bus_write8(bus, addr, (uint8_t)(val & 0xFF));         /* 最低字节 → addr */
@@ -681,7 +683,7 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
     /* IPC FIFO RECV（0x04100000）在 IO 区间外，需整体读（拆字节会破坏队列） */
     if (addr == BUS_IPC_FIFO_RECV) {
         uint32_t v = bus->io != NULL ? io_recv32(bus->io, bus->active_is_arm7) : 0;
-        if (bus->diag)
+        if (bus->diag && bus->watch_on)
             bus_dbg_watch_read(bus, addr, 4, v);
         return v;
     }
@@ -707,7 +709,7 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
             }
         }
         uint32_t v = bus->io != NULL ? io_card_data_read32(bus->io) : 0xFFFFFFFFu;
-        if (bus->diag)
+        if (bus->diag && bus->watch_on)
             bus_dbg_watch_read(bus, addr, 4, v);
         return v;
     }
@@ -717,7 +719,7 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
                | ((uint32_t)bus_read8(bus, addr + 2) << 16)
                | ((uint32_t)bus_read8(bus, addr + 3) << 24);
     g_wide_read = 0;
-    if (bus->diag)
+    if (bus->diag && bus->watch_on)
         bus_dbg_watch_read(bus, addr, 4, v);
     return v;
 }
@@ -727,7 +729,7 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
 {
     /* IPC FIFO SEND（0x04000188）是 32 位寄存器，需整体入队（拆字节会被忽略） */
     if (addr == IO_FIFO_SEND) {
-        if (bus->diag)
+        if (bus->diag && bus->watch_on)
             bus_dbg_watch(bus, addr, 4, val);   /* 21-B9xr：FIFO 发送走特例，需单独挂钩 */
         if (bus->io != NULL)
             io_send32(bus->io, bus->active_is_arm7, val);
@@ -735,7 +737,7 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
     }
     /* 卡带数据端口 CARD_DATA 写（本阶段占位：读 ROM 用不到） */
     if (addr == BUS_CARD_DATA) {
-        if (bus->diag)
+        if (bus->diag && bus->watch_on)
             bus_dbg_watch(bus, addr, 4, val);
         if (bus->io != NULL)
             io_card_data_write32(bus->io, val);
@@ -748,7 +750,7 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
             io_gx_write32(bus->io, addr, val);
         return;
     }
-    if (bus->diag)
+    if (bus->diag && bus->watch_on)
         bus_dbg_watch(bus, addr, 4, val);
     g_wide_write = 1;
     bus_write8(bus, addr,     (uint8_t)(val & 0xFF));

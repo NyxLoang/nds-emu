@@ -134,6 +134,17 @@ static int s_arm9_div = 1;
 static uint32_t s_h9_pc[1 << 16];
 static uint64_t s_h9_cnt[1 << 16];
 static uint64_t s_h9_total;
+/* 21-B9yi(续41)：热点 PC 直方图是**诊断**设施，此前**每条 ARM9 指令**都在更新
+   （64KB 数组的随机写 + 计数，缓存局部性极差），是解释器最热的纯开销之一。
+   改成只在 `NDS_PCHOT=1` 时统计（默认关闭）。 */
+static int s_h9_on = -2;
+
+static int h9_enabled(void)
+{
+    if (s_h9_on == -2)
+        s_h9_on = (getenv("NDS_PCHOT") != NULL) ? 1 : 0;
+    return s_h9_on;
+}
 
 runner_t *runner_create(nds_t *nds)
 {
@@ -264,7 +275,7 @@ static int runner_step(runner_t *r)
         cpu_step(nds->cpu);
         r->a9_wait = (nds->cpu->step_cycles == 0);
         if (!r->a9_wait) r->cost9 += nds->cpu->step_cycles;
-        {
+        if (s_h9_on != 0) {
             uint32_t pc = nds->cpu->r[15];
             uint32_t h = (pc >> 4) & 0xFFFFu;
             s_h9_pc[h] = pc;
@@ -569,6 +580,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         printf("headless-frames: runner_create failed\n");
         return;
     }
+    h9_enabled();   /* 21-B9yi(续41)：初始化热点 PC 统计开关（默认关） */
     runner_set_keys(r, key_frame, key_mask, key_period);
     uint64_t start = runner_frame_index(r);
     for (uint64_t fi = 0; fi < frames; fi++) {
@@ -812,7 +824,9 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                        g_ipc9_trace[k][1], g_ipc9_trace[k][0]);
             }
         }
-        /* 21-B9wz：ARM9 累积热点前 16（含占比） */
+        /* 21-B9wz：ARM9 累积热点前 16（含占比）。21-B9yi(续41)：仅在
+           NDS_PCHOT=1 时统计（默认关闭，见 runner_step 里的说明）。 */
+        if (h9_enabled()) {
         for (int hi = 0; hi < 16; hi++) {
             uint32_t best = 0, bh = 0;
             for (uint32_t h = 0; h < (1u << 16); h++)
@@ -825,6 +839,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             s_h9_cnt[bh] = 0;
         }
         printf("hot9: total=%llu\n", (unsigned long long)s_h9_total);
+        }
         const uint16_t *g3 = gx_framebuffer(&nds->io->gx);
         size_t n3 = 0;
         for (size_t i = 0; i < (size_t)GX_SCREEN_W * GX_SCREEN_H; i++)

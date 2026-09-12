@@ -119,8 +119,11 @@ uint32_t vram_map_texpal[8];          /* 3D 纹理调色板 16KB 槽 → bank �
     uint32_t watch_lo[4];
     uint32_t watch_hi[4];
     /* 21-B9xk：读监视（谁在读这个寄存器）。比如看 ARM9 何时从 IPC FIFO 取报文。 */
-    uint32_t watch_r_lo[4];
-    uint32_t watch_r_hi[4];
+uint32_t watch_r_lo[4];
+uint32_t watch_r_hi[4];
+/* 21-B9yi(续41)：是否**配置过**任何监视区间。没配置时读/写路径可以直接跳过
+   `bus_dbg_watch*` 调用（此前每次访存都要调一次，函数内部才发现无事可做）。 */
+int watch_on;
 } bus_t;
 
 bus_t *bus_create(void);

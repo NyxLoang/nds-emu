@@ -101,3 +101,15 @@ add_test(NAME nds_test COMMAND test_nds)
 target_compile_options(ndscore PRIVATE -O2)
 target_compile_options(nds-emu PRIVATE -O2)
 target_compile_options(test_nds PRIVATE -O2)
+
+# 21-B9yi(续41)：**LTO**。解释器每执行一条指令都要跨 TU 调用一批小函数
+# （`timer_advance` / `bus_read*` / `gx_advance` / `cartbus_advance` …），
+# 关掉 LTO 时这些调用无法内联；打开后编译器可以跨文件内联/常量传播。
+# 只作用于本工程目标，第三方 SDL 保持各自默认。
+include(CheckIPOSupported)
+check_ipo_supported(RESULT NDS_IPO_OK OUTPUT NDS_IPO_MSG)
+if(NDS_IPO_OK)
+    set_property(TARGET ndscore nds-emu test_nds PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+else()
+    message(STATUS "IPO/LTO 不可用：${NDS_IPO_MSG}")
+endif()

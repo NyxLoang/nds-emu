@@ -151,6 +151,11 @@ void gx_advance(gx_t *g, uint32_t cycles);
 /* 21-B9yi(续22)：GX 命令 FIFO 的剩余空间（字）。模式 7 DMA 用它决定一次搬多少。 */
 uint32_t gx_fifo_free_words(const gx_t *g);
 
+/* 21-B9yi(续25) 诊断：队列/引擎状态快照（FIFO 字数、工作周期余额、队列长度、
+   待收参数数），供 runner 逐帧 trace 打印。 */
+void gx_state(const gx_t *g, uint32_t *fifo_words, uint32_t *busy,
+              int *qlen, int *pending);
+
 /* 把 3D 帧缓冲暴露给渲染层（ppu 混合 3D 图层用）。 */
 const uint16_t *gx_framebuffer(const gx_t *g);
 

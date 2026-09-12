@@ -610,6 +610,13 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                        nds->io->irq[0].ime, nds->io->irq[1].ime,
                        nds->io->fifo.from7.count, nds->io->fifo.from9.count,
                        nds->cpu->r[14], nds->cpu->r[13]);
+                {
+                    /* 21-B9yi(续25)：GX 队列/引擎状态（配合 NDS_GXDBG 定位 GX 停摆） */
+                    uint32_t gxf = 0, gxb = 0; int gxq = 0, gxp = 0;
+                    gx_state(&nds->io->gx, &gxf, &gxb, &gxq, &gxp);
+                    printf("ftrace:   gxfifo=%u busy=%u q=%d pend=%d stat=%08X\n",
+                           gxf, gxb, gxq, gxp, nds->io->gx.gxstat);
+                }
                 printf("ftrace:   cart romctrl=%08X rem=%u pos=%u wait=%u/%u"
                        " fifo=%d late=%d dma3=%08X/%08X/%08X\n",
                        nds->io->cartbus.romctrl, nds->io->cartbus.xfer_remaining,

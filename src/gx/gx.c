@@ -82,8 +82,23 @@ static void gx_run_due(gx_t *g, uint32_t cycles)
         if (g_q_len == 0)
             break;
         gx_pend_t *h = &g_q[g_q_head];
-        if (h->filled < h->nparams)
+        if (h->filled < h->nparams) {
+            /* 21-B9yi(续25) 诊断：NDS_GXDBG=1 → 队头缺参数时打印队列快照
+               （定位「哪条命令的参数计数与游戏实际写入不一致」）。 */
+            static int dbg = -1, n;
+            if (dbg < 0) dbg = (getenv("NDS_GXDBG") != NULL) ? 1 : 0;
+            if (dbg && (n++ % 200000) == 0) {
+                printf("gxstuck: cmd=%02X need=%d have=%d qlen=%d pending=%d"
+                       " fifo_words=%u |", h->cmd, h->nparams, h->filled,
+                       g_q_len, g_pending, g->fifo_words);
+                for (int qi = 0; qi < g_q_len && qi < 8; qi++) {
+                    gx_pend_t *e = &g_q[(g_q_head + qi) % GX_QUEUE_CAP];
+                    printf(" %02X(%d/%d)", e->cmd, e->filled, e->nparams);
+                }
+                printf("\n");
+            }
             break;                    /* 参数还没收齐：等软件继续写 */
+        }
         gx_pend_t c = *h;
         g_q_head = (g_q_head + 1) % GX_QUEUE_CAP;
         g_q_len--;
@@ -564,4 +579,15 @@ uint32_t gx_fifo_free_words(const gx_t *g)
     if (g->fifo_words >= GX_FIFO_CAP_WORDS)
         return 0;
     return GX_FIFO_CAP_WORDS - g->fifo_words;
+}
+
+/* 21-B9yi(续25) 诊断：把 GX 队列/引擎状态暴露给 runner 的逐帧 trace
+   （定位「ARM9 卡在 GXSTAT bit27 忙等、但队列其实没人推进」这类停摆）。 */
+void gx_state(const gx_t *g, uint32_t *fifo_words, uint32_t *busy,
+              int *qlen, int *pending)
+{
+    if (fifo_words) *fifo_words = g->fifo_words;
+    if (busy) *busy = g->busy_cycles;
+    if (qlen) *qlen = g_q_len;
+    if (pending) *pending = g_pending;
 }

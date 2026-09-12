@@ -487,6 +487,17 @@ void io_advance_scanline(io_t *io)
             *stat[s] = (uint16_t)(*stat[s] & ~4u);
         }
     }
+    /* 21-B9yi(续18)：**HBlank 中断（IF bit1）**。DISPSTAT bit4 = HBlank IRQ 使能，
+       真机/melonDS 每条扫描线在 HBlank 起点请求一次（含 VBlank 期的 192-262 行，
+       共 263 次/帧）。本地此前完全没有 HBlank 中断（grep 全项目无 bit1 触发），
+       而 FFXII 的 ARM9 用它在每行做流式工作：实测参考核在 f=2090-2102 每帧
+       268 次 ARM9 IRQ（其中 IF bit1 占 3516/3741 条），本地只有 5-6 次 ⇒
+       「边跑边加载」的吞吐差一个数量级，f=2120 起画面与社会状态分歧。
+       副引擎（0x04001004）同址另一套 DISPSTAT，也挂 ARM9。 */
+    for (int s = 0; s < 3; s++) {
+        if (*stat[s] & 0x10u)
+            own[s]->ifl |= 2u;
+    }
 }
 
 int io_irq_pending(const io_t *io)

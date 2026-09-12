@@ -554,6 +554,9 @@ void io_advance_cart(io_t *io, int is_arm7, uint32_t cycles)
         return;
     if (cycles == 0)
         cycles = 1;
+    /* 21-B9yi(续16)：3D 引擎的工作周期也挂在这个系统时钟上（melonDS 用
+       ARM9 时间戳推进 GPU3D 的 CycleCount）——游戏会用 GXSTAT bit27 等它。 */
+    gx_advance(&io->gx, cycles);
     /* 21-B9yi(续15)：**把一次调用里没用完的周期接着用完**。
        `cartbus_advance()` 每次最多取「一个字」（约 20 个卡带周期）就返回，
        剩余周期以前被直接丢掉 ⇒ 空闲期（ARM9 在 WFI、runner 按扫描线事件

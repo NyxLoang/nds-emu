@@ -84,6 +84,13 @@ typedef struct gx_vertex {
 typedef struct gx {
     uint32_t disp3dcnt;  /* DISP3DCNT */
     uint32_t gxstat;     /* GXSTAT（FIFO 空/忙状态位） */
+    /* 21-B9yi(续16)：3D 引擎「工作周期」余额。melonDS 里每条 GX 命令都会
+       `AddCycles(3..254)` 累加工作周期，`GPU3D::Run()` 按 ARM9 时间戳消耗它们，
+       期间 `GXSTAT bit27`（3D 忙）保持置位；游戏正是用
+       「`ldr r0,[0x04000600]; ands r0,#0x8000000; bne -8`」等这段忙。
+       本地此前从不置 bit27 ⇒ 这类等待被整段跳过，游戏跑得比参考核快
+       （实测 f=2120 起画面比参考核早 ~30 帧）。 */
+    uint32_t busy_cycles;
 
     int mt_mode;         /* 当前矩阵模式 0=投影 1/2=位置 3=纹理 */
     int64_t proj[16];    /* 投影矩阵 */
@@ -125,6 +132,9 @@ void gx_write32(gx_t *g, uint32_t addr, uint32_t val);
 
 /* 初始化 / 复位（矩阵置单位阵，帧缓冲清零）。 */
 void gx_reset(gx_t *g);
+
+/* 21-B9yi(续16)：按系统时钟消耗 3D 引擎工作周期（到 0 时清 GXSTAT bit27）。 */
+void gx_advance(gx_t *g, uint32_t cycles);
 
 /* 把 3D 帧缓冲暴露给渲染层（ppu 混合 3D 图层用）。 */
 const uint16_t *gx_framebuffer(const gx_t *g);

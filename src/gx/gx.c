@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include "gx.h"
 
@@ -273,6 +274,40 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
 {
     int64_t *m = gx_cur(g);
     int64_t tmp[16];
+    /* 21-B9yi(续16)：按 melonDS `GPU3D` 的 `AddCycles()` 口径给每条命令记工作
+       周期（矩阵类 16-35、顶点 15-18、交换缓冲 254、其余 3-5），期间 GXSTAT
+       bit27 置位；`gx_advance()` 按系统时钟消耗。游戏用 bit27 等待 3D 完成，
+       本地此前恒为 0 ⇒ 等待被跳过、进度超前（实测 f=2120 起提前 ~30 帧）。 */
+    uint32_t cost = 4;
+    switch (cmd) {
+    case GX_CMD_SWAP_BUFFERS:  cost = 254; break;
+    case GX_CMD_MTX_LOAD_4x4:
+    case GX_CMD_MTX_MULT_4x4:
+    case GX_CMD_MTX_MULT_4x3:  cost = 35; break;
+    case GX_CMD_MTX_MULT_3x3:
+    case GX_CMD_MTX_SCALE:
+    case GX_CMD_MTX_TRANS:     cost = 17; break;
+    case GX_CMD_MTX_LOAD_4x3:  cost = 16; break;
+    case GX_CMD_VTX_16:
+    case GX_CMD_VTX_10:
+    case GX_CMD_VTX_XY:
+    case GX_CMD_VTX_XZ:
+    case GX_CMD_VTX_YZ:
+    case GX_CMD_VTX_DIFF:      cost = 18; break;
+    case GX_CMD_BEGIN_VTXS:
+    case GX_CMD_END_VTXS:      cost = 3; break;
+    case GX_CMD_POLYGON_ATTR:  cost = 5; break;
+    default:                   cost = 4; break;
+    }
+    /* NDS_NOGXBUSY=1 → 关掉忙窗（A/B 对照用） */
+    {
+        static int nogx = -1;
+        if (nogx < 0) nogx = (getenv("NDS_NOGXBUSY") != NULL) ? 1 : 0;
+        if (!nogx) {
+            g->busy_cycles += cost;
+            g->gxstat |= GXSTAT_BUSY;
+        }
+    }
     switch (cmd) {
     case GX_CMD_MTX_MODE: g->mt_mode = p[0] & 3; break;
     case GX_CMD_MTX_IDENTITY: gx_mat_identity(m); break;
@@ -469,4 +504,20 @@ void gx_reset(gx_t *g)
 const uint16_t *gx_framebuffer(const gx_t *g)
 {
     return g->fb;
+}
+
+/* 21-B9yi(续16)：按系统时钟消耗 3D 引擎的工作周期。
+   melonDS 是 `GPU3D::Run()` 用 ARM9 时间戳推进 `CycleCount`，到 0 才清
+   `GXSTAT bit27`；本地在 ARM9 的每个时钟片（`io_advance_cart` 处）调用本函数，
+   让「等 3D 忙」的轮询循环耗时与参考核同量级。 */
+void gx_advance(gx_t *g, uint32_t cycles)
+{
+    if (g->busy_cycles == 0)
+        return;
+    if (cycles >= g->busy_cycles) {
+        g->busy_cycles = 0;
+        g->gxstat &= ~GXSTAT_BUSY;
+    } else {
+        g->busy_cycles -= cycles;
+    }
 }

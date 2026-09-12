@@ -88,3 +88,31 @@
   bit25 判断“FIFO 还有空间”就会一直等不到。现在 `gx_reset` 同时置位
   `GXSTAT_FIFO_LESS_HALF | GXSTAT_FIFO_EMPTY`（同步执行模型下 FIFO 始终不满）。
 - 单测 `[case 21-B9wy]` 4 项：两个状态位存在、写 IRQ 模式后仍保留。
+### 21-B9yi（续16）— GXSTAT bit27（3D 忙）建模
+
+**证据**：游戏在 f=2110-2120 的代码里真的在等 3D 引擎完成：
+
+```
+020046B4  ldr  r2, [pc, #0x60]      ; r2 = 0x04000600（GXSTAT）
+020046B8  ldr  r0, [r2]
+020046BC  ands r0, r0, #0x8000000   ; bit27 = 3D engine busy
+020046C0  bne  #0x20046b8           ; 忙则原地等
+```
+
+本地此前 `gxstat` 只维护 bit25/bit26（FIFO 不足半满/空），**bit27 恒为 0**，
+这类等待被整段跳过（游戏跑得比参考核快）。
+
+**实现**：
+
+- `gx_t.busy_cycles`（新增）：每条 GX 命令按 melonDS `GPU3D::AddCycles()` 的口径
+  累加工作周期——交换缓冲 254、4x4/4x3 矩阵 35/16、矩阵乘 17、顶点 18、
+  起止图元 3、属性 5、其余 4；置位 `GXSTAT bit27`。
+- `gx_advance(gx, cycles)`（新增）：按系统时钟消耗余额，归零时清 bit27；
+  在 `io_advance_cart()`（ARM9 时钟片）里调用——对应 melonDS 用
+  `ARM9Timestamp` 推进 `GPU3D::CycleCount`、到 0 才 `FinishWork` 清忙位。
+- `NDS_NOGXBUSY=1` 可关闭该模型（A/B 对照）。
+
+**实测**：931 项单测 0 失败；900 帧三标记与参考一致；帧 100 仍 81.9%；
+f=2090-2110 与参考核仍逐帧 100% 逐像素相同；f=500 开关对照 MAD 均为 135.27（无差异）；
+**f=2120 的首个分歧仍在且逐值不变** ⇒ 该分歧与 3D 忙等待无关（见
+`docs/21-rom-bringup.md` 续16 的下一步：VRAM bank 内容差异 / 双缓冲 + 交换清屏）。

@@ -27,8 +27,13 @@ void runner_set_keys(runner_t *r, uint64_t frame, uint32_t mask,
 /* 21-B9yi(续46)：触摸注入脚本（屏幕像素坐标；period=0 只点一次，否则每 period
    帧点一次、每次按住 12 帧）。 */
 void runner_set_touch(runner_t *r, uint64_t frame, int x, int y, uint64_t period);
+/* 21-B9yi(续67)：一次拖拽手势（底屏像素坐标；steps=分几帧移动完）。 */
+void runner_set_touch_drag(runner_t *r, uint64_t frame, int x1, int y1,
+                           int x2, int y2, int steps, uint64_t period);
 /* 21-B9yi(续46)：CLI 配置（headless 入口创建 runner 后自动套用）。 */
 void runner_set_touch_series(uint64_t frame, int x, int y, uint64_t period);
+void runner_set_touch_drag_series(uint64_t frame, int x1, int y1, int x2, int y2,
+                                  int steps, uint64_t period);
 uint64_t runner_frame_index(const runner_t *r);
 uint64_t runner_now(const runner_t *r);
 /* 推进到下一帧；返回 1=已跨过一帧，0=无后续硬件事件/安全上限。 */

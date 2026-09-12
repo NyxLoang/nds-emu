@@ -220,6 +220,10 @@ int main(int argc, char *argv[])
     /* 21-B9yi(续46)：触摸注入脚本（--touch-frame/-x/-y/-period） */
     uint64_t touch_frame = 0, touch_period = 0;
     int touch_x = 128, touch_y = 96;
+    /* 21-B9yi(续67)：拖拽注入（--touch-drag X1,Y1,X2,Y2 --touch-drag-steps N）。
+       参数在解析阶段只记录，等整条命令行解析完（touch_frame/period 都确定后）再下发。 */
+    int drag_on = 0, drag_x1 = 96, drag_y1 = 96, drag_x2 = 160, drag_y2 = 96;
+    int drag_steps = 12;
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
         if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
@@ -296,6 +300,16 @@ int main(int argc, char *argv[])
             touch_y = (int)wcstol(wargv[i + 1], NULL, 10);
         else if (wcscmp(wargv[i], L"--touch-period") == 0 && i + 1 < wargc)
             touch_period = _wcstoui64(wargv[i + 1], NULL, 0);
+        else if (wcscmp(wargv[i], L"--touch-drag") == 0 && i + 1 < wargc) {
+            /* 21-B9yi(续67)：--touch-drag X1,Y1,X2,Y2（配合 --touch-frame/-period） */
+            int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+            if (swscanf(wargv[i + 1], L"%d,%d,%d,%d", &x1, &y1, &x2, &y2) == 4) {
+                drag_on = 1;
+                drag_x1 = x1; drag_y1 = y1; drag_x2 = x2; drag_y2 = y2;
+            }
+        }
+        else if (wcscmp(wargv[i], L"--touch-drag-steps") == 0 && i + 1 < wargc)
+            drag_steps = (int)wcstol(wargv[i + 1], NULL, 10);
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -358,6 +372,15 @@ int main(int argc, char *argv[])
             touch_y = (int)strtol(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--touch-period") == 0 && i + 1 < argc)
             touch_period = strtoull(argv[i + 1], NULL, 0);
+        else if (strcmp(argv[i], "--touch-drag") == 0 && i + 1 < argc) {
+            int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+            if (sscanf(argv[i + 1], "%d,%d,%d,%d", &x1, &y1, &x2, &y2) == 4) {
+                drag_on = 1;
+                drag_x1 = x1; drag_y1 = y1; drag_x2 = x2; drag_y2 = y2;
+            }
+        }
+        else if (strcmp(argv[i], "--touch-drag-steps") == 0 && i + 1 < argc)
+            drag_steps = (int)strtol(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--shot-prefix") == 0 && i + 1 < argc) {
             shot_prefix = argv[i + 1];
             runner_set_shot_series(shot_every, shot_prefix);
@@ -368,7 +391,10 @@ int main(int argc, char *argv[])
     char err[256];
 
     /* 21-B9yi(续46)：把触摸注入脚本交给 runner（headless 帧驱动会套用）。 */
-    if (touch_frame != 0)
+    if (drag_on)
+        runner_set_touch_drag_series(touch_frame, drag_x1, drag_y1,
+                                     drag_x2, drag_y2, drag_steps, touch_period);
+    else if (touch_frame != 0)
         runner_set_touch_series(touch_frame, touch_x, touch_y, touch_period);
 
     /* 一台空机器：整机状态容器，bus 已挂入。

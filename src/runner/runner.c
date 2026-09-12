@@ -21,6 +21,21 @@ static uint64_t s_stats_every = 0;
 static int s_touch_on = 0;
 static uint64_t s_touch_frame = 0, s_touch_period = 0;
 static int s_touch_x = 128, s_touch_y = 96;
+/* 21-B9yi(续67)：`--touch-drag X1,Y1,X2,Y2 --touch-drag-steps N` 配置的拖拽注入 */
+static int s_drag_on = 0;
+static int s_drag_x1 = 96, s_drag_y1 = 96, s_drag_x2 = 160, s_drag_y2 = 96;
+static int s_drag_steps = 12;
+
+void runner_set_touch_drag_series(uint64_t frame, int x1, int y1, int x2, int y2,
+                                  int steps, uint64_t period)
+{
+    s_drag_on = 1;
+    s_touch_frame = frame;
+    s_touch_period = period;
+    s_drag_x1 = x1; s_drag_y1 = y1;
+    s_drag_x2 = x2; s_drag_y2 = y2;
+    s_drag_steps = (steps > 0) ? steps : 12;
+}
 
 void runner_set_touch_series(uint64_t frame, int x, int y, uint64_t period)
 {
@@ -130,6 +145,10 @@ struct runner {
     uint64_t touch_release_frame;
     int touch_down;
     int touch_enabled;
+    /* 21-B9yi(续67)：拖拽注入状态（见 runner_touch） */
+    int drag_on, drag_x1, drag_y1, drag_x2, drag_y2, drag_steps, drag_step;
+    int drag_active;              /* 拖拽进行中（按下到抬起之间） */
+    uint64_t drag_start_frame;    /* 按下时的帧号（步进按帧计） */
     uint64_t snd_done;        /* 21-B9wu：已推进的音频样本数（无头模式补推用） */
     uint64_t rtc_done;        /* 21-B9wx：已推进的 RTC 秒数 */
 };
@@ -595,6 +614,48 @@ static void runner_touch(runner_t *r)
     if (!r->touch_enabled)
         return;
     uint64_t fr = runner_frame_index(r);
+    /* 21-B9yi(续67)：**拖拽注入**（`--touch-drag X1,Y1,X2,Y2 --touch-drag-steps N`）。
+       战斗里下指令是「从单位拖到目标点」的手势，只点一下验证不了；
+       这里按帧推进：按下 → 沿直线分 N 帧移动 → 抬起。坐标同样是底屏像素。 */
+    if (r->drag_on) {
+        /* 注意：runner_touch() 是**每条指令**调用一次（不是每帧），所以这里必须用
+           `runner_frame_index()` 判断「过了几帧」，否则 12 步会在同一帧内瞬间走完，
+           游戏只看得到一次「按下又立刻抬起」（实测就是因此完全不响应）。 */
+        if (r->drag_active) {
+            uint64_t el = fr - r->drag_start_frame;   /* 已经按下几帧 */
+            if (el > (uint64_t)r->drag_steps) {
+                io_set_touch(r->nds->io, 0, 0xFFFu, 0);   /* 抬起（NDS 惯例 0/0xFFF） */
+                r->drag_active = 0;
+                r->touch_down = 0;
+                if (r->touch_period == 0)
+                    r->next_touch = UINT64_MAX;
+                else
+                    r->next_touch += r->touch_period;
+                return;
+            }
+            if (el != 0) {
+                int n = r->drag_steps;
+                int px = r->drag_x1 + (r->drag_x2 - r->drag_x1) * (int)el / n;
+                int py = r->drag_y1 + (r->drag_y2 - r->drag_y1) * (int)el / n;
+                io_set_touch(r->nds->io, runner_touch_adc(px, 33, 16),
+                             runner_touch_adc(py, 33, 16), 1);
+            }
+            return;
+        }
+        if (fr >= r->next_touch) {
+            uint16_t ax = runner_touch_adc(r->drag_x1, 33, 16);
+            uint16_t ay = runner_touch_adc(r->drag_y1, 33, 16);
+            io_set_touch(r->nds->io, ax, ay, 1);
+            r->touch_down = 1;
+            r->drag_active = 1;
+            r->drag_start_frame = fr;
+            r->drag_step = 0;
+            printf("runner: drag(%d,%d)->(%d,%d) steps=%d at frame=%llu\n",
+                   r->drag_x1, r->drag_y1, r->drag_x2, r->drag_y2,
+                   r->drag_steps, (unsigned long long)fr);
+        }
+        return;
+    }
     if (r->touch_down) {
         if (fr >= r->touch_release_frame) {
             io_set_touch(r->nds->io, 0, 0, 0);
@@ -630,6 +691,30 @@ void runner_set_touch(runner_t *r, uint64_t frame, int x, int y, uint64_t period
     r->touch_release_frame = 0;
 }
 
+/* 21-B9yi(续67)：设置一次拖拽手势（`--touch-drag`）。x1,y1→x2,y2 是底屏像素坐标，
+   steps 是移动分几帧完成（1 帧 ≈ 1/60 秒；太小可能被游戏当成瞬移）。 */
+void runner_set_touch_drag(runner_t *r, uint64_t frame,
+                           int x1, int y1, int x2, int y2,
+                           int steps, uint64_t period)
+{
+    if (r == NULL)
+        return;
+    r->touch_enabled = 1;
+    r->drag_on = 1;
+    r->drag_active = 0;
+    r->drag_start_frame = 0;
+    r->drag_x1 = x1;
+    r->drag_y1 = y1;
+    r->drag_x2 = x2;
+    r->drag_y2 = y2;
+    r->drag_steps = (steps > 0) ? steps : 1;
+    r->drag_step = 0;
+    r->touch_frame = frame;
+    r->touch_period = period;
+    r->next_touch = frame;
+    r->touch_down = 0;
+}
+
 static void runner_print_screen_stats(uint64_t fr, const uint32_t *fb_t,
                                       const uint32_t *fb_b)
 {
@@ -660,7 +745,10 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     }
     h9_enabled();   /* 21-B9yi(续41)：初始化热点 PC 统计开关（默认关） */
     runner_set_keys(r, key_frame, key_mask, key_period);
-    if (s_touch_on)  /* 21-B9yi(续46)：触摸注入脚本 */
+    if (s_drag_on)   /* 21-B9yi(续67)：拖拽注入（优先于单击注入） */
+        runner_set_touch_drag(r, s_touch_frame, s_drag_x1, s_drag_y1,
+                              s_drag_x2, s_drag_y2, s_drag_steps, s_touch_period);
+    else if (s_touch_on)  /* 21-B9yi(续46)：触摸注入脚本 */
         runner_set_touch(r, s_touch_frame, s_touch_x, s_touch_y, s_touch_period);
     uint64_t start = runner_frame_index(r);
     for (uint64_t fi = 0; fi < frames; fi++) {

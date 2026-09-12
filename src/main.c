@@ -184,6 +184,8 @@ int main(int argc, char *argv[])
     uint32_t key_mask = 0;
     uint64_t key_period = 0;
     int watch_n = 0;   /* 21-B9xj：--watch LO-HI 的组数（最多 4） */
+    extern uint32_t g_pchit_addr[4];
+    extern int g_pchit_n;
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
         if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
@@ -225,6 +227,12 @@ int main(int argc, char *argv[])
             if (swscanf(wargv[i + 1], L"%x-%x", &lo, &hi) == 2)
                 runner_set_watch_read(watch_n++, lo, hi);
         }
+        else if (wcscmp(wargv[i], L"--pchit") == 0 && i + 1 < wargc) {
+            /* 21-B9xs：--pchit ADDR（PC 命中计数，最多 4 个） */
+            uint32_t a = 0;
+            if (swscanf(wargv[i + 1], L"%x", &a) == 1 && g_pchit_n < 4)
+                g_pchit_addr[g_pchit_n++] = a;
+        }
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -261,6 +269,11 @@ int main(int argc, char *argv[])
             uint32_t lo = 0, hi = 0;
             if (sscanf(argv[i + 1], "%x-%x", &lo, &hi) == 2)
                 runner_set_watch_read(watch_n++, lo, hi);
+        }
+        else if (strcmp(argv[i], "--pchit") == 0 && i + 1 < argc) {
+            uint32_t a = 0;
+            if (sscanf(argv[i + 1], "%x", &a) == 1 && g_pchit_n < 4)
+                g_pchit_addr[g_pchit_n++] = a;
         }
     }
 #endif

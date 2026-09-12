@@ -602,7 +602,16 @@ int main(int argc, char *argv[])
     }
 
     /* 阶段 18.4：打开音频设备，回调线程开始按当前寄存器状态合成输出 */
-    audio_init(nds);
+    /* 21-B9yi(续68)：`NDS_NOAUDIO=1` 跳过声卡（诊断用，量化音频回调的开销）。
+       跳过时 snd 仍按模拟时间推进（runner 的 snd_advance 路径，与无头一致），
+       游戏侧行为等价，只是没有声音输出。 */
+    {
+        const char *e = getenv("NDS_NOAUDIO");
+        if (e != NULL && e[0] != '0')
+            printf("window: NDS_NOAUDIO=1（不打开声卡，仅用于测帧率）\n");
+        else
+            audio_init(nds);
+    }
 
     /* 阶段 4.6：默认 2× 缩放启动（菜单下拉可切回 1x/2x） */
     window_set_scale(2);
@@ -628,6 +637,21 @@ int main(int argc, char *argv[])
     uint64_t frames_done = 0;
     /* 21-B9yi(续61)：分段 fps 统计（--fps-every N）。 */
     uint64_t fps_frames = 0, fps_mark_ms = SDL_GetTicks64();
+    /* 21-B9yi(续68)：宿主渲染开销诊断 `NDS_NORENDER=1` —— 跳过清屏/菜单/双屏合成
+       与纹理上传（窗口内容不更新），用来量化「窗口模式的帧率里有多少是宿主渲染」。
+       依据：同一段 f=8000-10000 在无头下 116.9 fps，窗口下只有 52 fps，
+       说明慢段的开销在宿主侧而不是模拟本身。 */
+    int skip_render = 0;
+    {
+        const char *e = getenv("NDS_NORENDER");
+        skip_render = (e != NULL && e[0] != '0') ? 1 : 0;
+        if (skip_render)
+            printf("window: NDS_NORENDER=1（跳过宿主渲染，仅用于测帧率）\n");
+    }
+    /* 21-B9yi(续68)：分段计时用（仅在 --fps-every 打开时收集，避免干扰正常游玩）。
+       目的：找出「窗口模式为什么比无头慢」——把每帧拆成
+       「SDL 事件泵」与「runner_run_frame（模拟）」两块。 */
+    uint64_t t_evt = 0, t_run = 0, freq = SDL_GetPerformanceFrequency();
     /* 21-B9yi(续47)：鼠标 → 触摸屏（底屏）。布局（逻辑坐标）：
        菜单栏 [0,28)、顶屏 [28,220)、底屏 [220,412)。
        触摸 ADC 换算与 runner `--touch-*` 同口径（固件默认校准，每像素 16 单位）。 */
@@ -636,6 +660,7 @@ int main(int argc, char *argv[])
         int scale = window_get_scale();
 
         SDL_Event e;
+        uint64_t c0 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
         while (SDL_PollEvent(&e)) {
             if (window_handle_event(&e)) {
                 quit = 1;
@@ -709,8 +734,13 @@ int main(int argc, char *argv[])
            阶段 8.4：双核按 ARM9:ARM7 = 2:1 交错调度（i%3==2 时跑 ARM7）。
            每 60 周期打一次状态，避免死循环时刷屏。 */
         if (nds->cpu != NULL && nds->cpu7 != NULL) {
+            uint64_t c1 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
+            if (g_cli_fps_every != 0)
+                t_evt += c1 - c0;
             if (frame_runner != NULL)
                 runner_run_frame(frame_runner);
+            if (g_cli_fps_every != 0)
+                t_run += SDL_GetPerformanceCounter() - c1;
             if (nds->cpu->cycles % 60u == 0) {
                 printf("cpu: frame done, ARM9 PC=%08X cycles=%llu | ARM7 PC=%08X cycles=%llu\n",
                        nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
@@ -730,20 +760,22 @@ int main(int argc, char *argv[])
             irq_logged = 1;
         }
 
-        /* 清屏（物理坐标） */
-        SDL_SetRenderDrawColor(renderer, 45, 45, 45, 255);
-        SDL_RenderClear(renderer);
+        if (!skip_render) {
+            /* 清屏（物理坐标） */
+            SDL_SetRenderDrawColor(renderer, 45, 45, 45, 255);
+            SDL_RenderClear(renderer);
 
-        menu_render_bar(renderer, scale);
+            menu_render_bar(renderer, scale);
 
-        /* 阶段 4：每帧从 VRAM framebuffer 读图 → 转 RGB888 → 上传纹理 → 画双屏。
-           顶屏在菜单栏下，底屏紧随其后，按当前 scale 缩放。 */
-        ppu_render(ppu, scale);
+            /* 阶段 4：每帧从 VRAM framebuffer 读图 → 转 RGB888 → 上传纹理 → 画双屏。
+               顶屏在菜单栏下，底屏紧随其后，按当前 scale 缩放。 */
+            ppu_render(ppu, scale);
 
-        /* 下拉菜单（画在游戏区之上） */
-        menu_render_dropdown(renderer, scale);
+            /* 下拉菜单（画在游戏区之上） */
+            menu_render_dropdown(renderer, scale);
 
-        SDL_RenderPresent(renderer);
+            SDL_RenderPresent(renderer);
+        }
 
         /* 21-B9yi(续61)：每 N 帧打一行「这一段的实测 fps」（--fps-every N）。
            用真实时钟（SDL_GetTicks64）算，含渲染/音频宿主开销，就是玩家实际体验。 */
@@ -755,9 +787,16 @@ int main(int argc, char *argv[])
                    (unsigned long long)(frames_done + 1),
                    (unsigned long long)dt,
                    dt ? (1000.0 * (double)fps_frames / (double)dt) : 0.0);
+            if (freq != 0) {
+                printf("     phases: events=%.0f ms  emulation=%.0f ms  other=%.0f ms\n",
+                       1000.0 * (double)t_evt / (double)freq,
+                       1000.0 * (double)t_run / (double)freq,
+                       (double)dt - 1000.0 * (double)(t_evt + t_run) / (double)freq);
+            }
             fflush(stdout);
             fps_frames = 0;
             fps_mark_ms = now_ms;
+            t_evt = 0; t_run = 0;
         }
 
         if (frame_limit != 0 && ++frames_done >= frame_limit) {

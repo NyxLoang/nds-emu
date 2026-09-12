@@ -4,6 +4,9 @@
 #include "gx.h"
 #include "bus/bus.h"   /* 21-B9yi(续34)：纹理/纹理调色板从 VRAM 取数 */
 
+/* 21-B9yi(续35) 诊断：当前帧号（定义在 io.c，runner 每帧更新，只读）。 */
+extern unsigned long long g_dbg_frame;
+
 /* 阶段 19：NDS 3D 几何引擎最小实现。
    命令流经 GXFIFO（0x04000400）或命令端口（0x04000440+cmd*4）送入，
    按「命令码 + 若干参数」解码后即时执行：矩阵运算、顶点提交（变换+投影+视口），
@@ -90,6 +93,9 @@ static int gx_cmd_nparams(uint8_t cmd)
 static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p);
 static void gx_update_busy(gx_t *g);   /* 21-B9yi(续27)：前置声明 */
 static void gx_entries_process(gx_t *g);   /* 21-B9yi(续33)：条目流解码 */
+static void gx_clip_to_screen(const gx_t *g, int32_t cx, int32_t cy, int32_t cz,
+                              int32_t cw, int *sx, int *sy,
+                              int32_t *out_invw, int32_t *out_z);
 
 /* 21-B9yi(续24)：**按命令成本消费队列**（不再「入队即执行」）。
    melonDS 的 3D 引擎按 `GPU3D::AddCycles()` 记的每命令工作周期推进
@@ -208,10 +214,22 @@ static void gx_entry_push(gx_t *g, uint8_t cmd, uint32_t val)
 static void gx_entries_process(gx_t *g)
 {
     int dbg = 0;
+    static long dbg_frame = -2;      /* NDS_GXDBG_FRAME=N：只 dump 该帧的前 200 条 */
+    static int dbg_left = 0;
     {
         static int d = -1;
-        if (d < 0) d = (getenv("NDS_GXDBG") != NULL) ? 1 : 0;
+        if (d < 0) {
+            d = (getenv("NDS_GXDBG") != NULL) ? 1 : 0;
+            if (d) {
+                const char *e = getenv("NDS_GXDBG_FRAME");
+                dbg_frame = (e != NULL) ? strtol(e, NULL, 10) : -1;
+                dbg_left = 200;
+            }
+        }
         dbg = d;
+        if (dbg && dbg_frame >= 0 &&
+            ((long)g_dbg_frame != dbg_frame || dbg_left <= 0))
+            dbg = 0;
     }
     while (g_e_len > 0) {
         gx_entry_t e = g_ent[g_e_head];
@@ -234,6 +252,8 @@ static void gx_entries_process(gx_t *g)
         if (dbg)
             printf("gxdbg: cmd=%02X nparams=%d val=%08X qlen=%d\n",
                    e.cmd, n, (unsigned)e.val, g_q_len);
+        if (dbg)
+            dbg_left--;
         if (e.cmd == 0)
             continue;                /* 0x00 = NOP：不计数、不入队（无副作用） */
         if (n <= 1) {                /* 0/1 参数的命令：本条就是全部 */
@@ -401,7 +421,12 @@ static void gx_mat_mul3x3_left(int64_t *m, const int64_t *s)
 /* melonDS MatrixScale：m 的每一**行**乘以对应分量 */
 static void gx_mat_scale(int64_t *m, const int32_t *p)
 {
-    for (int row = 0; row < 4; row++)
+    /* 21-B9yi(续35)：melonDS 的 `MatrixScale` **只缩放前 3 行**（索引 0..11），
+       第 4 行（12..15，含透视用的 W 分量）保持不变。本地此前连第 4 行一起缩放，
+       而命令只给 3 个参数 ⇒ 第 4 行被乘上垃圾值（实测 p[3] 残留 0）：
+       同一帧对比，参考核 `pos[15]=4096 / proj[15]=81171`，本地 **全是 0**，
+       投影 W 整个报废 ⇒ 顶点算出视体外 ⇒ 视体裁剪后一个三角形都不剩。 */
+    for (int row = 0; row < 3; row++)
         for (int j = 0; j < 4; j++)
             m[row * 4 + j] = ((int64_t)p[row] * m[row * 4 + j]) >> GX_FP_SHIFT;
 }
@@ -439,6 +464,16 @@ void gx_transform_vertex_ex(const gx_t *g, int32_t x, int32_t y, int32_t z,
 void gx_transform_vertex_z(const gx_t *g, int32_t x, int32_t y, int32_t z,
                            int *sx, int *sy, int32_t *out_invw, int32_t *out_z)
 {
+    int32_t clip4[4];
+    gx_transform_vertex_clip(g, x, y, z, clip4);
+    gx_clip_to_screen(g, clip4[0], clip4[1], clip4[2], clip4[3],
+                      sx, sy, out_invw, out_z);
+}
+
+/* 裁剪空间坐标（pos × proj × v，1.19.12） */
+void gx_transform_vertex_clip(const gx_t *g, int32_t x, int32_t y, int32_t z,
+                              int32_t clip4[4])
+{
     int64_t clip[16];
     gx_mat_mul(clip, g->pos, g->proj); /* clip = pos × proj */
 
@@ -448,6 +483,17 @@ void gx_transform_vertex_z(const gx_t *g, int32_t x, int32_t y, int32_t z,
     int64_t cz = (int64_t)x * clip[2] + (int64_t)y * clip[6] + (int64_t)z * clip[10] + w * clip[14];
     int64_t cw = (int64_t)x * clip[3] + (int64_t)y * clip[7] + (int64_t)z * clip[11] + w * clip[15];
 
+    clip4[0] = (int32_t)cx;
+    clip4[1] = (int32_t)cy;
+    clip4[2] = (int32_t)cz;
+    clip4[3] = (int32_t)cw;
+}
+
+/* 裁剪空间 → 屏幕坐标（透视除 + 视口 + 深度），口径见下方注释 */
+static void gx_clip_to_screen(const gx_t *g, int32_t cx, int32_t cy, int32_t cz,
+                              int32_t cw, int *sx, int *sy,
+                              int32_t *out_invw, int32_t *out_z)
+{
     int64_t nx = cx >> GX_FP_SHIFT; /* NDC（1.19.12） */
     int64_t ny = cy >> GX_FP_SHIFT;
     int64_t nz = cz >> GX_FP_SHIFT;
@@ -546,7 +592,9 @@ static void gx_submit_vertex(gx_t *g, int32_t x, int32_t y, int32_t z)
     int sx, sy;
     int32_t invw = 0;
     int32_t dz = 0xFFFFFF;
-    gx_transform_vertex_z(g, x, y, z, &sx, &sy, &invw, &dz);
+    int32_t clip4[4];
+    gx_transform_vertex_clip(g, x, y, z, clip4);
+    gx_clip_to_screen(g, clip4[0], clip4[1], clip4[2], clip4[3], &sx, &sy, &invw, &dz);
     g->verts[g->vcount].sx = sx;
     g->verts[g->vcount].sy = sy;
     g->verts[g->vcount].color = (uint16_t)(g->color & 0xFFFF);
@@ -554,6 +602,10 @@ static void gx_submit_vertex(gx_t *g, int32_t x, int32_t y, int32_t z)
     g->verts[g->vcount].v = g->tc_t;
     g->verts[g->vcount].invw = invw;
     g->verts[g->vcount].z = dz;
+    g->verts[g->vcount].cx = clip4[0];
+    g->verts[g->vcount].cy = clip4[1];
+    g->verts[g->vcount].cz = clip4[2];
+    g->verts[g->vcount].cw = clip4[3];
     if (invw == 0)
         g->vtx_zero_w++;      /* 21-B9yi(续34) 诊断 */
     g->vcount++;
@@ -694,8 +746,139 @@ static uint8_t gx_poly_alpha(const gx_t *g)
     return (pa == 0) ? 31 : pa;   /* 0 = 不透明（DS 里 0 表示不混合） */
 }
 
+/* ------------------------------------------------------------------
+   21-B9yi(续35)：视体裁剪（melonDS `ClipPolygon` 的最小可用版本）
+
+   对每个平面（X、Y、Z 各两侧，共 6 个）做 Sutherland–Hodgman：
+   平面判据 `d = ±Position[comp] + Position[3] >= 0`（即 |comp| <= W），
+   跨越平面时按 `t = da / (da - db)` 线性插值**所有属性**（裁剪空间坐标与纹理坐标）。
+
+   真机的 3D 光栅化只画视体内可见的部分；不做这一步，跨相机的多边形会被
+   「透视除 + 钳位」拉成铺满屏幕的巨大楔形——实测 f≥3600 的画面就是那种色带。
+   ------------------------------------------------------------------ */
+
+typedef struct {
+    int32_t cx, cy, cz, cw;
+    int32_t u, v;
+} gx_clipv_t;
+
+static int32_t gx_clip_dist(const gx_clipv_t *v, int comp, int sign)
+{
+    int32_t p = (comp == 0) ? v->cx : (comp == 1) ? v->cy : v->cz;
+    /* sign = +1：p + w >= 0（p >= -w）；sign = -1：-p + w >= 0（p <= w） */
+    return (int32_t)(sign * (int64_t)p + v->cw);
+}
+
+static int gx_clip_plane(const gx_clipv_t *in, int n, int comp, int sign,
+                         gx_clipv_t *out)
+{
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        const gx_clipv_t *a = &in[i];
+        const gx_clipv_t *b = &in[(i + 1) % n];
+        int32_t da = gx_clip_dist(a, comp, sign);
+        int32_t db = gx_clip_dist(b, comp, sign);
+        if (da >= 0)
+            out[m++] = *a;
+        if ((da >= 0) != (db >= 0)) {
+            int64_t den = (int64_t)da - (int64_t)db;
+            if (den != 0) {
+                int64_t t = ((int64_t)da << 16) / den;   /* 0..1，1.16 定点 */
+                gx_clipv_t *o = &out[m++];
+                o->cx = a->cx + (int32_t)(((int64_t)(b->cx - a->cx) * t) >> 16);
+                o->cy = a->cy + (int32_t)(((int64_t)(b->cy - a->cy) * t) >> 16);
+                o->cz = a->cz + (int32_t)(((int64_t)(b->cz - a->cz) * t) >> 16);
+                o->cw = a->cw + (int32_t)(((int64_t)(b->cw - a->cw) * t) >> 16);
+                o->u = a->u + (int32_t)(((int64_t)(b->u - a->u) * t) >> 16);
+                o->v = a->v + (int32_t)(((int64_t)(b->v - a->v) * t) >> 16);
+            }
+        }
+    }
+    return m;
+}
+
+/* 把裁剪后的图元（扇形三角化）真正光栅化。顶点属性已保证在视体内。 */
+static void gx_raster_clipped_tri(gx_t *g, const gx_clipv_t *a,
+                                  const gx_clipv_t *b, const gx_clipv_t *c);
+static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
+                                   const gx_vertex_t *b, const gx_vertex_t *c);
+
 static void gx_raster_vert_tri(gx_t *g, const gx_vertex_t *a, const gx_vertex_t *b,
                                const gx_vertex_t *c)
+{
+    /* 21-B9yi(续35) 诊断：`NDS_POLYDBG=1` 时，帧号 >= 3800 后打印前 6 个三角形的
+       裁剪空间坐标与当前矩阵（定位「为什么全被视体裁剪掉」）。 */
+    {
+        static int dbg = -1, shown;
+        if (dbg < 0) dbg = (getenv("NDS_POLYDBG") != NULL) ? 1 : 0;
+        if (dbg && shown < 6 && g_dbg_frame >= 3800) {
+            printf("polydbg: f=%llu clip a=(%d,%d,%d,%d) b=(%d,%d,%d,%d)"
+                   " c=(%d,%d,%d,%d)\n", g_dbg_frame,
+                   a->cx, a->cy, a->cz, a->cw, b->cx, b->cy, b->cz, b->cw,
+                   c->cx, c->cy, c->cz, c->cw);
+            if (shown == 0) {
+                printf("polydbg: viewport=(%d,%d)-(%d,%d) polyattr=%08X disp3dcnt=%08X\n",
+                       g->vx1, g->vy1, g->vx2, g->vy2, g->poly_attr, g->disp3dcnt);
+                printf("polydbg: proj=%lld,%lld,%lld,%lld / %lld,%lld,%lld,%lld\n",
+                       (long long)g->proj[0], (long long)g->proj[1],
+                       (long long)g->proj[2], (long long)g->proj[3],
+                       (long long)g->proj[12], (long long)g->proj[13],
+                       (long long)g->proj[14], (long long)g->proj[15]);
+                printf("polydbg: pos=%lld,%lld,%lld,%lld / %lld,%lld,%lld,%lld\n",
+                       (long long)g->pos[0], (long long)g->pos[1],
+                       (long long)g->pos[2], (long long)g->pos[3],
+                       (long long)g->pos[12], (long long)g->pos[13],
+                       (long long)g->pos[14], (long long)g->pos[15]);
+            }
+            shown++;
+            fflush(stdout);
+        }
+    }
+    /* 组装裁剪空间的三角形并逐平面裁剪 */
+    gx_clipv_t poly[16], tmp[16];
+    poly[0].cx = a->cx; poly[0].cy = a->cy; poly[0].cz = a->cz; poly[0].cw = a->cw;
+    poly[0].u = a->u; poly[0].v = a->v;
+    poly[1].cx = b->cx; poly[1].cy = b->cy; poly[1].cz = b->cz; poly[1].cw = b->cw;
+    poly[1].u = b->u; poly[1].v = b->v;
+    poly[2].cx = c->cx; poly[2].cy = c->cy; poly[2].cz = c->cz; poly[2].cw = c->cw;
+    poly[2].u = c->u; poly[2].v = c->v;
+    int n = 3;
+    static const int comp_of[6] = { 0, 0, 1, 1, 2, 2 };
+    static const int sign_of[6] = { 1, -1, 1, -1, 1, -1 };
+    for (int pl = 0; pl < 6 && n >= 3; pl++) {
+        n = gx_clip_plane(poly, n, comp_of[pl], sign_of[pl], tmp);
+        if (n < 3)
+            g->clip_rej[pl]++;
+        for (int i = 0; i < n; i++)
+            poly[i] = tmp[i];
+    }
+    if (n < 3) {
+        g->tri_count++;
+        return;                     /* 完全在视体外：丢弃 */
+    }
+    for (int i = 1; i + 1 < n; i++)
+        gx_raster_clipped_tri(g, &poly[0], &poly[i], &poly[i + 1]);
+    g->tri_count++;
+}
+
+static void gx_raster_clipped_tri(gx_t *g, const gx_clipv_t *va,
+                                  const gx_clipv_t *vb, const gx_clipv_t *vc)
+{
+    gx_vertex_t a, b, c;
+    memset(&a, 0, sizeof a); memset(&b, 0, sizeof b); memset(&c, 0, sizeof c);
+    gx_clip_to_screen(g, va->cx, va->cy, va->cz, va->cw, &a.sx, &a.sy, &a.invw, &a.z);
+    gx_clip_to_screen(g, vb->cx, vb->cy, vb->cz, vb->cw, &b.sx, &b.sy, &b.invw, &b.z);
+    gx_clip_to_screen(g, vc->cx, vc->cy, vc->cz, vc->cw, &c.sx, &c.sy, &c.invw, &c.z);
+    a.u = va->u; a.v = va->v;
+    b.u = vb->u; b.v = vb->v;
+    c.u = vc->u; c.v = vc->v;
+    a.color = b.color = c.color = (uint16_t)(g->color & 0xFFFF);
+    gx_raster_vert_tri_raw(g, &a, &b, &c);
+}
+
+/* 原 gx_raster_vert_tri 的实现（顶点已在屏幕空间且已裁剪） */
+static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
+                                   const gx_vertex_t *b, const gx_vertex_t *c)
 {
     /* 21-B9yi(续34)：带纹理/透视校正插值的光栅化。
        纹理映射开启条件与 melonDS 一致：DISP3DCNT bit0（纹理映射使能）
@@ -840,6 +1023,7 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
 {
     int64_t *m = gx_cur(g);
     int64_t tmp[16];
+    g->exec_hist[cmd]++;
     /* 21-B9yi(续16)：按 melonDS `GPU3D` 的 `AddCycles()` 口径给每条命令记工作
        周期（矩阵类 16-35、顶点 15-18、交换缓冲 254、其余 3-5），期间 GXSTAT
        bit27 置位；`gx_advance()` 按系统时钟消耗。游戏用 bit27 等待 3D 完成，
@@ -882,17 +1066,62 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
     switch (cmd) {
     case GX_CMD_MTX_MODE: g->mt_mode = p[0] & 3; break;
     case GX_CMD_MTX_IDENTITY: gx_mat_identity(m); break;
+    /* 21-B9yi(续35)：矩阵栈语义逐句对齐 melonDS（投影/纹理单槽、位置 32 槽，
+       POP 的参数是**带符号偏移**、从栈指针里减掉）。 */
     case GX_CMD_MTX_PUSH:
-        if (g->sp < 32) { gx_mat_copy(g->stack[g->sp], m); g->sp++; }
+        if (g->mt_mode == 0) {
+            if (g->proj_sp > 0)
+                g->gxstat |= (1u << 15);        /* 栈溢出标志（melonDS 口径） */
+            gx_mat_copy(g->proj_stack, g->proj);
+            g->proj_sp = (g->proj_sp + 1) & 1;
+        } else if (g->mt_mode == 3) {
+            if (g->tex_sp > 0)
+                g->gxstat |= (1u << 15);
+            gx_mat_copy(g->tex_stack, g->tex);
+            g->tex_sp = (g->tex_sp + 1) & 1;
+        } else {
+            if (g->pos_sp > 30)
+                g->gxstat |= (1u << 15);
+            gx_mat_copy(g->pos_stack[g->pos_sp & 0x1F], g->pos);
+            g->pos_sp = (g->pos_sp + 1) & 0x3F;
+        }
         break;
     case GX_CMD_MTX_POP:
-        if (p[0] > 0 && p[0] <= g->sp) { g->sp -= p[0]; gx_mat_copy(m, g->stack[g->sp]); }
+        if (g->mt_mode == 0) {
+            if (g->proj_sp == 0)
+                g->gxstat |= (1u << 15);
+            g->proj_sp = (g->proj_sp - 1) & 1;
+            gx_mat_copy(g->proj, g->proj_stack);
+        } else if (g->mt_mode == 3) {
+            if (g->tex_sp == 0)
+                g->gxstat |= (1u << 15);
+            g->tex_sp = (g->tex_sp - 1) & 1;
+            gx_mat_copy(g->tex, g->tex_stack);
+        } else {
+            int32_t offset = (int32_t)((uint32_t)p[0] << 26) >> 26;  /* 6 位带符号 */
+            g->pos_sp = (g->pos_sp - offset) & 0x3F;
+            if (g->pos_sp > 30)
+                g->gxstat |= (1u << 15);
+            gx_mat_copy(g->pos, g->pos_stack[g->pos_sp & 0x1F]);
+        }
         break;
     case GX_CMD_MTX_STORE:
-        if (p[0] >= 0 && p[0] < 32) gx_mat_copy(g->stack[p[0]], m);
+        if (g->mt_mode == 0) {
+            gx_mat_copy(g->proj_stack, g->proj);
+        } else if (g->mt_mode == 3) {
+            gx_mat_copy(g->tex_stack, g->tex);
+        } else {
+            gx_mat_copy(g->pos_stack[p[0] & 0x1F], g->pos);
+        }
         break;
     case GX_CMD_MTX_RESTORE:
-        if (p[0] >= 0 && p[0] < 32) gx_mat_copy(m, g->stack[p[0]]);
+        if (g->mt_mode == 0) {
+            gx_mat_copy(g->proj, g->proj_stack);
+        } else if (g->mt_mode == 3) {
+            gx_mat_copy(g->tex, g->tex_stack);
+        } else {
+            gx_mat_copy(g->pos, g->pos_stack[p[0] & 0x1F]);
+        }
         break;
     case GX_CMD_MTX_LOAD_4x4: gx_mat_load4x4(m, p); break;
     case GX_CMD_MTX_LOAD_4x3: gx_mat_load4x3(m, p); break;
@@ -940,10 +1169,14 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
             (int32_t)(int16_t)(p[1] & 0xFFFF));
         break;
     case GX_CMD_VTX_10:
+        /* 21-B9yi(续35)：10 位坐标取**符号扩展后的原值**（melonDS：
+           `CurVertex[i] = (s16)((param & 0x3FF) << 6) >> 6`，即符号扩展、不缩放）。
+           本地此前 `<< 2`（放大 4 倍），VTX_DIFF（本游戏用得最多，639 万条）
+           累加出来的顶点直接飞出视体 ⇒ 裁剪后一个三角形都不剩。 */
         gx_submit_vertex(g,
-            gx_sext10(p[0] & 0x3FF) << 2,
-            gx_sext10((p[0] >> 10) & 0x3FF) << 2,
-            gx_sext10((p[0] >> 20) & 0x3FF) << 2);
+            gx_sext10(p[0] & 0x3FF),
+            gx_sext10((p[0] >> 10) & 0x3FF),
+            gx_sext10((p[0] >> 20) & 0x3FF));
         break;
     case GX_CMD_VTX_XY:
         gx_submit_vertex(g,
@@ -964,9 +1197,9 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
         break;
     case GX_CMD_VTX_DIFF:
         gx_submit_vertex(g,
-            g->px + (gx_sext10(p[0] & 0x3FF) << 2),
-            g->py + (gx_sext10((p[0] >> 10) & 0x3FF) << 2),
-            g->pz + (gx_sext10((p[0] >> 20) & 0x3FF) << 2));
+            g->px + gx_sext10(p[0] & 0x3FF),
+            g->py + gx_sext10((p[0] >> 10) & 0x3FF),
+            g->pz + gx_sext10((p[0] >> 20) & 0x3FF));
         break;
     /* 21-B9yi(续34)：POLYGON_ATTR 取 alpha（bits16-20）与纹理开关 */
     case GX_CMD_POLYGON_ATTR: g->poly_attr = (uint32_t)p[0]; break;
@@ -994,6 +1227,27 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
         g->vy2 = (p[0] >> 24) & 0xFF;
         break;
     default: break;
+    }
+    /* 21-B9yi(续35) 诊断：NDS_MDBG=1 时，目标帧里每条矩阵命令都打印
+       参数与结果矩阵的关键元素（与参考核 REF_MDBG 同口径对照）。 */
+    if (cmd >= 0x10 && cmd <= 0x1C) {
+        static int md = -1;
+        static long mframe = -2;
+        if (md < 0) {
+            md = (getenv("NDS_MDBG") != NULL) ? 1 : 0;
+            const char *e = getenv("NDS_MDBG_FRAME");
+            mframe = (e != NULL) ? strtol(e, NULL, 10) : -1;
+        }
+        if (md && mframe >= 0 && (long)g_dbg_frame >= mframe
+            && (long)g_dbg_frame <= mframe + 20)
+            printf("mdbg: f=%llu cmd=%02X p=%08X,%08X,%08X mode=%d"
+                   " proj=%lld,%lld,%lld,%lld pos=%lld,%lld,%lld,%lld\n",
+                   g_dbg_frame, cmd, (unsigned)p[0], (unsigned)p[1], (unsigned)p[2],
+                   g->mt_mode,
+                   (long long)g->proj[0], (long long)g->proj[5],
+                   (long long)g->proj[15], (long long)g->proj[3],
+                   (long long)g->pos[0], (long long)g->pos[5],
+                   (long long)g->pos[15], (long long)g->pos[3]);
     }
 }
 
@@ -1080,8 +1334,11 @@ void gx_reset(gx_t *g)
     gx_mat_identity(g->proj);
     gx_mat_identity(g->pos);
     gx_mat_identity(g->tex);
+    gx_mat_identity(g->proj_stack);
+    gx_mat_identity(g->tex_stack);
     for (int i = 0; i < 32; i++)
-        gx_mat_identity(g->stack[i]);
+        gx_mat_identity(g->pos_stack[i]);
+    g->proj_sp = g->tex_sp = g->pos_sp = 0;
     g->vx2 = GX_SCREEN_W - 1;
     g->vy2 = GX_SCREEN_H - 1;
     g->color = 0x7FFF;

@@ -94,6 +94,9 @@ typedef struct gx_vertex {
     int32_t u, v;
     int32_t invw;        /* 1/w（1.19.12 定点；w=0 时退化为 0） */
     int32_t z;           /* 24 位深度值（melonDS `FinalZ` 口径：小 = 近） */
+    /* 21-B9yi(续35)：裁剪空间坐标（1.19.12）。视体裁剪（melonDS `ClipPolygon`）
+       必须在**裁剪空间**做，否则跨相机的多边形会变成铺满屏幕的巨大楔形。 */
+    int32_t cx, cy, cz, cw;
 } gx_vertex_t;
 
 struct bus;              /* 前向声明：纹理/调色板要从 VRAM 取数 */
@@ -134,8 +137,17 @@ typedef struct gx {
     int64_t proj[16];    /* 投影矩阵 */
     int64_t pos[16];     /* 位置矩阵 */
     int64_t tex[16];     /* 纹理矩阵 */
-    int64_t stack[32][16]; /* 矩阵栈 */
-    int sp;
+    /* 21-B9yi(续35)：矩阵栈按 melonDS 口径分三种——
+       投影/纹理矩阵各是**单槽**栈（0/1），位置矩阵是 32 槽（指针 0..63，取 &31）。
+       本地此前用一个 32 槽共用栈 + 「只接受正偏移的 POP」，与真机不一致：
+       实测同一帧的 ProjMatrix 与参考核完全不同（`proj[12..15]` 差出数量级），
+       顶点因此被算出视体外 ⇒ 视体裁剪后一个三角形都不剩。 */
+    int64_t proj_stack[16];
+    int proj_sp;
+    int64_t tex_stack[16];
+    int tex_sp;
+    int64_t pos_stack[32][16];
+    int pos_sp;
 
     /* 当前顶点属性 */
     uint32_t color;      /* 0x20 COLOR */
@@ -152,6 +164,10 @@ typedef struct gx {
     uint32_t tri_drawn;    /* 至少写出 1 个像素的三角形数 */
     uint64_t px_written;   /* 3D 光栅化写出的像素总数 */
     uint32_t vtx_zero_w;   /* 1/w 退化为 0（在相机后方，本地不做裁剪）的顶点数 */
+    uint32_t clip_rej[6];  /* 视体裁剪：每个平面把三角形裁没了的次数（诊断） */
+    /* 21-B9yi(续35) 诊断：**执行**（而不是入队）的命令直方图。
+       与入队直方图对比就能看出「哪些命令一直没收齐参数、永远没执行」。 */
+    uint32_t exec_hist[256];
     uint32_t fifo_writes;
     uint32_t port_writes;
     int32_t tc_s, tc_t;  /* 0x22 TEXCOORD（1.3.12） */
@@ -221,6 +237,9 @@ void gx_transform_vertex_ex(const gx_t *g, int32_t x, int32_t y, int32_t z,
 /* 21-B9yi(续34)：完整版本，额外输出 24 位深度值（小 = 近，0xFFFFFF = 最远）。 */
 void gx_transform_vertex_z(const gx_t *g, int32_t x, int32_t y, int32_t z,
                            int *sx, int *sy, int32_t *out_invw, int32_t *out_z);
+/* 21-B9yi(续35)：只输出裁剪空间坐标（顶点进光栅化前需要它做视体裁剪）。 */
+void gx_transform_vertex_clip(const gx_t *g, int32_t x, int32_t y, int32_t z,
+                              int32_t clip4[4]);
 
 /* 软件光栅化一个平色三角形到帧缓冲（供单元测试直接调用）。 */
 void gx_raster_tri(gx_t *g, int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color);

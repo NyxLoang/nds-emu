@@ -577,6 +577,27 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         uint64_t fr = runner_frame_index(r);
         g_dbg_frame = fr;
         /* 21-B9yi(续32)：画面统计（每 N 帧一行，与参考核 harness 同口径） */
+        /* 21-B9yi(续35)：NDS_MAT_FRAME=N → 第 N 帧结束时打印 3D 矩阵快照
+           （与参考核 `REF_MAT_FRAME=N` 的 refmat 行同口径对照）。 */
+        {
+            static long mat_frame = -2;
+            if (mat_frame == -2) {
+                const char *e = getenv("NDS_MAT_FRAME");
+                mat_frame = (e != NULL) ? strtol(e, NULL, 10) : -1;
+            }
+            if (mat_frame >= 0 && fr >= (uint64_t)mat_frame
+                && fr <= (uint64_t)mat_frame + 20u)
+                printf("mat: f=%llu proj=(%lld,%lld,%lld,%lld) pos=(%lld,%lld,%lld,%lld)"
+                       " tex=(%lld,%lld,%lld,%lld)\n",
+                       (unsigned long long)fr,
+                       (long long)nds->io->gx.proj[0], (long long)nds->io->gx.proj[5],
+                       (long long)nds->io->gx.proj[15], (long long)nds->io->gx.proj[3],
+                       (long long)nds->io->gx.pos[0], (long long)nds->io->gx.pos[5],
+                       (long long)nds->io->gx.pos[15], (long long)nds->io->gx.pos[3],
+                       (long long)nds->io->gx.tex[0], (long long)nds->io->gx.tex[5],
+                       (long long)nds->io->gx.tex[15], (long long)nds->io->gx.tex[3]);
+            fflush(stdout);
+        }
         if (s_stats_every != 0 && (fr % s_stats_every) == 0) {
             uint32_t *fb_t = (uint32_t *)malloc(sizeof(uint32_t)
                                                 * RENDER_SCREEN_W * RENDER_SCREEN_H);
@@ -796,6 +817,17 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                nds->io->gx.tri_tex, nds->io->gx.tri_flat, nds->io->gx.tri_drawn,
                (unsigned long long)nds->io->gx.px_written, nds->io->gx.vtx_zero_w,
                nds->io->gx.tex_param, nds->io->gx.pltt_base, nds->io->gx.poly_attr);
+        printf("gxclip: X-=%u X+=%u Y-=%u Y+=%u Z-=%u Z+=%u\n",
+               nds->io->gx.clip_rej[0], nds->io->gx.clip_rej[1],
+               nds->io->gx.clip_rej[2], nds->io->gx.clip_rej[3],
+               nds->io->gx.clip_rej[4], nds->io->gx.clip_rej[5]);
+        {
+            printf("gxexec:");
+            for (int c = 0; c < 256; c++)
+                if (nds->io->gx.exec_hist[c] != 0)
+                    printf(" %02X=%u", c, nds->io->gx.exec_hist[c]);
+            printf("\n");
+        }
         /* 21-B9yi(续32)：NDS_GXHIST=1 → 打印 GX 命令直方图 */
         if (getenv("NDS_GXHIST") != NULL)
             gx_cmd_hist_dump();

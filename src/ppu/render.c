@@ -272,7 +272,7 @@ static uint8_t tile_pixel(const bus_t *bus, uint32_t tile_addr, int px, int py, 
    最小实现：screen size=0（32×32 tile），暂不支持滚动（map 坐标 = 屏幕坐标）。 */
 static void draw_bg(const bus_t *bus, comp_t *c, uint32_t char_base,
                     uint32_t map_base, uint32_t pal_base, int is_256,
-                    int ext, int bg, int is_sub)
+                    int ext, int ext_slot, int bg, int is_sub)
 {
     for (int y = 0; y < RENDER_SCREEN_H; y++) {
         for (int x = 0; x < RENDER_SCREEN_W; x++) {
@@ -290,7 +290,10 @@ static void draw_bg(const bus_t *bus, comp_t *c, uint32_t char_base,
                 continue; /* 透明像素 */
             uint16_t color;
             if (is_256 && ext)
-                color = bus_vram_extpal16(bus, is_sub, bg,
+                /* 21-B9yi(续37)：扩展调色板槽号按 melonDS 口径——
+                   `extpalslot = ((bgnum<2) && (bgcnt & 0x2000)) ? 2+bgnum : bgnum`
+                   （BG0/BG1 可用 bit13 切到 2/3 号槽；本地此前一律用 bgnum）。 */
+                color = bus_vram_extpal16(bus, is_sub, ext_slot,
                                           (entry >> 12) & 0xFu, idx);
             else if (is_256)
                 color = bus_read16(bus, pal_base + (uint32_t)idx * 2u);
@@ -435,11 +438,13 @@ static void render_tiled(const bus_t *bus, comp_t *c, int is_sub, uint32_t dispc
                 }
             }
             int ext = (dispcnt & (1u << 30)) != 0;
+            /* 21-B9yi(续37)：扩展调色板槽号（melonDS：BG0/BG1 的 bit13 会把槽切到 2/3） */
+            int ext_slot = (bg < 2 && (bgcnt & 0x2000u)) ? (2 + bg) : bg;
             if (bg_is_affine(bmode, bg))
                 draw_affine_bg(bus, c, bgcnt, char_base, map_base, pal_base, bg, is_sub);
             else
                 draw_bg(bus, c, char_base, map_base, pal_base,
-                        (bgcnt & BGCNT_COLORS_256) != 0, ext, bg, is_sub);
+                        (bgcnt & BGCNT_COLORS_256) != 0, ext, ext_slot, bg, is_sub);
         }
     }
 }

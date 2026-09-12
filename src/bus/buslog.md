@@ -248,3 +248,46 @@
 - **遗留**：ARM7 仍在约 cycle 231,000 后按原轨迹跑飞（`BX r12 -> 0x038043C9` 未切
   Thumb，B4）；ARM9 停在 0x0200B9xx 附近循环，疑似等待 ARM7 握手结果，待 B4 重跑观察。
 - **结果**：✅ 用户验收通过（2026-09-05）。
+
+### 21-B9yi（续37）— VRAM 引擎窗口跟随 VRAMCNT 映射（底屏从全黑到有画面）
+
+**现象**：f≥3600 起本地**底屏整屏黑**（参考核有画面），但两边的 2D 显示寄存器
+（DISPCNT/BGxCNT/BLDCNT/MASTER_BRIGHT）**逐值相同**。
+
+**定位**：新增同帧 IO 对照（本地 `NDS_IODUMP_FRAME` / 参考核 `REF_IODUMP_FRAME`），
+两侧 DISPCNT/BGxCNT/混合寄存器全同、VRAMCNT 也全同（A=0x83 纹理、C=0x84 副BG、
+E=0x82 主OBJ、**I=0x82 副OBJ**、F=0x83 纹理调色板、H=禁用）。
+⇒ 差异只能在「按映射取 VRAM 数据」这一步。
+
+**根因**：CPU 侧 VRAM 的 4 个**引擎逻辑窗口**必须按 VRAMCNT 解析
+（melonDS `NDS::ARM9Read8` 的 0x06000000 分支）：
+
+```
+0x06000000 → 引擎 A BG （ABG，16KB 槽 0..31）
+0x06200000 → 引擎 B BG （BBG，槽 0..7）
+0x06400000 → 引擎 A OBJ（AOBJ，槽 0..15）
+0x06600000 → 引擎 B OBJ（BOBJ，槽 0..7）
+```
+
+本地此前把后三个窗口写死到固定物理 bank（C/B/D，即 libnds `vramDefault` 布局）。
+FFXII 把 **E 映射成主 OBJ、I 映射成副 OBJ**，于是本地副屏读到的全是空区。
+
+**改动**（`src/bus/bus.c` + `src/ppu/render.c`）：
+
+1. 4 个引擎窗口按上表 + 16KB 槽位掩码解析（槽内偏移按 bank 自身大小取掩码，
+   与纹理/纹理调色板读取同一套口径）；未映射的槽落到 `vram_dummy`（读 0 / 写丢弃）。
+2. 补齐 VRAMCNT 的 bank **F/G/I** 映射与 **bank H mode 2 = Engine B BG 扩展调色板**
+   （melonDS `MapVRAM_FG/H/I` 口径；此前 H 的 mode 2 被当成「B OBJ + 扩展调色板」）。
+3. 扩展调色板**槽号规则**：`extpalslot = ((bgnum<2) && (bgcnt & 0x2000)) ? 2+bgnum : bgnum`
+   （此前一律用 bgnum）。
+
+**怎么验证**：`tests/test_nds.c` 931 项 0 失败（其中 `vramcnt H->B OBJ` 用例按
+melonDS 口径改为 `I->B OBJ` 并记录）；f=4200 带按键运行：
+
+```
+f=1000/2000/3000 顶屏/底屏统计与改动前逐值相同（无回归）
+f=4000 底屏 0/49152（全黑） → 49152/49152，均值 (74,117,156)
+build\vw2__04000.bmp：顶屏=迷宫走廊、底屏=3D 战术地图，均为游戏真实画面
+```
+
+**结果**：✅ 底屏恢复正常显示，两个屏幕都能出游戏画面。

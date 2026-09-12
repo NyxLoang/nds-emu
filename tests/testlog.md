@@ -993,3 +993,12 @@
   三角形与 FIFO 用例）。
 - **结果**：✅ **931 项检查 0 项失败**；带按键跑到 f=4200，落屏三角形 0→191,483、
   3D 帧缓冲满屏、f≤3000 画面统计与改动前一致。
+
+## 2026-09-12 · 21-B9yi（续37）：VRAM 窗口映射用例更正
+
+- **做了什么**：CPU 侧 VRAM 引擎窗口（0x06000000/0x06200000/0x06400000/0x06600000）
+  改为按 VRAMCNT 映射解析；bank H 的 mode 2 改为 **Engine B BG 扩展调色板**（melonDS
+  `MapVRAM_H` 口径，此前误当「B OBJ + 扩展调色板」），并补上 bank F/G/I 的映射。
+- **怎么验证**：`build\test_nds.exe`。
+- **结果**：✅ **931 项检查 0 项失败**。用例更正：`vramcnt H->B OBJ read` → 
+  `vramcnt I->B OBJ read`（H 的 mode 2 不是 B OBJ；要映射 B OBJ 用 bank I）。

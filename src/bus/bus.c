@@ -229,28 +229,77 @@ void bus_set_vramcnt(bus_t *bus, int bank, uint8_t cnt)
             for (int i = 0; i < 4; i++)
                 bus->vram_map_texpal[i] |= bankmask;
             break;
-        default: break; /* LCDC/扩展调色板：暂不建模 */
+        /* 21-B9yi(续37)：mode 4 = Engine A BG 扩展调色板（melonDS MAP_RANGE(0,4)） */
+        case 4:
+            for (int i = 0; i < 4; i++)
+                bus->vram_map_abg_ext[i] |= bankmask;
+            break;
+        default: break; /* LCDC：暂不建模 */
         }
     } else if (bank == 5 || bank == 6) { /* F/G：mask 0x9F */
         unsigned ofs = (cnt >> 3) & 7u;
+        unsigned fbase = (ofs & 1u) + ((ofs & 2u) << 1);
         switch (cnt & 7u) {
+        case 1:   /* Engine A BG（槽 base 与 base+2） */
+            bus->vram_map_abg[fbase] |= bankmask;
+            bus->vram_map_abg[fbase + 2] |= bankmask;
+            break;
+        case 2:   /* Engine A OBJ */
+            bus->vram_map_aobj[fbase] |= bankmask;
+            bus->vram_map_aobj[fbase + 2] |= bankmask;
+            break;
         /* 21-B9yi(续34)：mode 3 = 纹理调色板，槽号用 melonDS 的
            `(ofs & 1) + ((ofs & 2) << 1)`（即 {0,1,4,5}）。FFXII 实测写
            VRAMCNT_F = 0x83（mode 3 / ofs 0）⇒ 槽 0。 */
         case 3:
-            bus->vram_map_texpal[(ofs & 1u) + ((ofs & 2u) << 1)] |= bankmask;
+            bus->vram_map_texpal[fbase] |= bankmask;
             break;
-        default: break; /* LCDC/ABG/AOBJ/扩展调色板：暂不建模 */
+        case 4:   /* Engine A BG 扩展调色板 */
+            bus->vram_map_abg_ext[(ofs & 1u) << 1] |= bankmask;
+            bus->vram_map_abg_ext[((ofs & 1u) << 1) + 1] |= bankmask;
+            break;
+        case 5:   /* Engine A OBJ 扩展调色板 */
+            bus->vram_map_aobj_ext |= bankmask;
+            break;
+        default: break; /* LCDC：暂不建模 */
         }
-    } else if (bank == 7) { /* H：mask 0x87，当前 FFXII 配置为 B OBJ */
-        if ((cnt & 7u) == 2) {
-            vram_set_bobj(bus, 8, bankmask);
-            /* melonDS MapVRAM_H：mode 2 同时把 H 接到 Engine B BG 扩展调色板 */
+    } else if (bank == 7) { /* H：mask 0x83 */
+        /* 21-B9yi(续37)：按 melonDS `MapVRAM_H`——
+           mode 1 = Engine B BG（槽 0/1/4/5），mode 2 = **Engine B BG 扩展调色板**（槽 0-3）。
+           本地此前把 mode 2 当成「B OBJ + 扩展调色板」（多了 B OBJ，且槽集不对）。 */
+        unsigned ofs = (cnt >> 3) & 0x3u;
+        switch (cnt & 0x3u) {
+        case 1:
+            bus->vram_map_bbg[0] |= bankmask;
+            bus->vram_map_bbg[1] |= bankmask;
+            bus->vram_map_bbg[4] |= bankmask;
+            bus->vram_map_bbg[5] |= bankmask;
+            break;
+        case 2:
             for (int i = 0; i < 4; i++)
                 bus->vram_map_bbg_ext[i] |= bankmask;
+            break;
+        default:
+            break;
+        }
+        (void)ofs;
+    } else if (bank == 8) { /* I：mask 0x83，FFXII 用它做副屏 OBJ */
+        switch (cnt & 0x3u) {
+        case 1:   /* Engine B BG（槽 2/3/6/7） */
+            bus->vram_map_bbg[2] |= bankmask;
+            bus->vram_map_bbg[3] |= bankmask;
+            bus->vram_map_bbg[6] |= bankmask;
+            bus->vram_map_bbg[7] |= bankmask;
+            break;
+        case 2:   /* Engine B OBJ（8 个 16KB 槽） */
+            vram_set_bobj(bus, 8, bankmask);
+            break;
+        case 3:   /* Engine B OBJ 扩展调色板 */
+            bus->vram_map_bobj_ext |= bankmask;
+            break;
+        default: break; /* LCDC */
         }
     }
-    /* F/G/I：FFXII 当前配置不用于 2D 引擎，后续需要时按 melonDS 补齐 */
 }
 
 uint16_t bus_vram_extpal16(const bus_t *bus, int is_sub, int slot,
@@ -498,29 +547,44 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - BUS_OAM_BASE);
         return 1;
     }
-    /* VRAM 固定窗口（阶段 9 最小实现）：副 BG / 主 OBJ / 副 OBJ 各映射到一段
-       固定物理 VRAM（对应 libnds vramDefault 的 bank C/B/D 分配）。 */
-    if (addr >= BUS_VRAM_SUB_BG_BASE &&
-        addr - BUS_VRAM_SUB_BG_BASE < BUS_VRAM_WINDOW_SIZE) {
-        *region = bus->vram + BUS_VRAM_SUB_BG_PHYS;
-        *off = (size_t)(addr - BUS_VRAM_SUB_BG_BASE);
-        return 1;
+    /* 21-B9yi(续37)：VRAM 的 4 个**引擎逻辑窗口**按 VRAMCNT 映射解析
+       （melonDS `NDS::ARM9Read8` 的 0x06000000 分支：
+        0x06000000 → 引擎 A BG（ABG，16KB 槽 0..31）
+        0x06200000 → 引擎 B BG（BBG，槽 0..7）
+        0x06400000 → 引擎 A OBJ（AOBJ，槽 0..15）
+        0x06600000 → 引擎 B OBJ（BOBJ，槽 0..7））。
+       本地此前把这三个窗口写死到固定 bank（C/B/D，即 libnds vramDefault 布局），
+       一旦游戏改写 VRAMCNT 就读错 bank——FFXII 把 E 映射成主 OBJ、I 映射成副 OBJ，
+       于是本地副屏的 BG/OBJ 全读到空区 ⇒ **底屏整屏黑**。 */
+    if (addr >= 0x06000000u && addr < 0x06800000u) {
+        uint32_t win = addr & 0x00E00000u;
+        const uint32_t *map;
+        uint32_t slot;
+        switch (win) {
+        case 0x00000000u: map = bus->vram_map_abg;  slot = (addr >> 14) & 0x1Fu; break;
+        case 0x00200000u: map = bus->vram_map_bbg;  slot = (addr >> 14) & 0x7u;  break;
+        case 0x00400000u: map = bus->vram_map_aobj; slot = (addr >> 14) & 0xFu;  break;
+        case 0x00600000u: map = bus->vram_map_bobj; slot = (addr >> 14) & 0x7u;  break;
+        default:          map = NULL;               slot = 0;                     break;
+        }
+        if (map != NULL) {
+            uint32_t mask = map[slot];
+            int bank = 0;
+            while (bank < 9 && (mask & (1u << bank)) == 0u)
+                bank++;
+            if (bank >= 9) {                 /* 该槽未映射：读 0、写丢弃 */
+                *region = bus->vram_dummy;
+                *off = (size_t)(addr & 0xFu);
+            } else {
+                *region = bus->vram + vram_bank_phys[bank];
+                *off = (size_t)(addr & vram_bank_mask[bank]);
+            }
+            return 1;
+        }
     }
-    if (addr >= BUS_VRAM_MAIN_OBJ_BASE &&
-        addr - BUS_VRAM_MAIN_OBJ_BASE < BUS_VRAM_WINDOW_SIZE) {
-        *region = bus->vram + BUS_VRAM_MAIN_OBJ_PHYS;
-        *off = (size_t)(addr - BUS_VRAM_MAIN_OBJ_BASE);
-        return 1;
-    }
-    if (addr >= BUS_VRAM_SUB_OBJ_BASE &&
-        addr - BUS_VRAM_SUB_OBJ_BASE < BUS_VRAM_WINDOW_SIZE) {
-        *region = bus->vram + BUS_VRAM_SUB_OBJ_PHYS;
-        *off = (size_t)(addr - BUS_VRAM_SUB_OBJ_BASE);
-        return 1;
-    }
-    /* LCDC 分配 VRAM（阶段 20.2 显示捕获目标）→ vram[0] */
-    if (addr >= BUS_LCDC_VRAM_BASE &&
-        addr - BUS_LCDC_VRAM_BASE < BUS_LCDC_VRAM_SIZE) {
+    /* LCDC 分配 VRAM（阶段 20.2 显示捕获目标）→ vram[0]
+       （上面 0x06000000-0x067FFFFF 已由引擎窗口接管，这里只剩 vram 显示模式用） */
+    if (addr >= BUS_LCDC_VRAM_BASE && addr < BUS_LCDC_VRAM_BASE + BUS_VRAM_SIZE) {
         *region = bus->vram;
         *off = (size_t)(addr - BUS_LCDC_VRAM_BASE);
         return 1;

@@ -86,7 +86,8 @@ typedef struct bus {
     uint8_t  main_ram[BUS_MAIN_RAM_SIZE]; /* Main RAM：4MB */
     uint8_t  arm9_dtcm[BUS_ARM9_DTCM_SIZE]; /* ARM9 DTCM：16KB（CP15 可配置基址） */
     uint8_t  arm9_itcm[BUS_ARM9_ITCM_SIZE]; /* ARM9 ITCM：32KB（0x01FF8000 起） */
-    uint8_t  vram[BUS_VRAM_SIZE];         /* VRAM：656KB */
+uint8_t  vram[BUS_VRAM_SIZE];         /* VRAM：656KB */
+uint8_t  vram_dummy[16];              /* 未映射 VRAM 窗口的落点（读 0 / 写丢弃） */
     uint8_t  arm7_wram[BUS_ARM7_WRAM_SIZE]; /* ARM7 WRAM：64KB */
     uint8_t  shared_wram[BUS_SHARED_WRAM_SIZE]; /* Shared WRAM：32KB（WRAMCNT 切分，见 bus.c） */
     uint8_t  palette[BUS_PALETTE_SIZE];   /* 调色板 RAM：2KB */

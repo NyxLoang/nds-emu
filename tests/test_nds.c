@@ -2163,7 +2163,10 @@ static void test_vramcnt_mapping(nds_t *nds)
     bus_set_vramcnt(bus, 3, 0x81u);          /* D → Engine A BG */
     bus_set_vramcnt(bus, 2, 0x84u);          /* C → Engine B BG */
     bus_set_vramcnt(bus, 4, 0x82u);          /* E → Engine A OBJ */
-    bus_set_vramcnt(bus, 7, 0x82u);          /* H → Engine B OBJ */
+    /* 21-B9yi(续37)：bank H 的 mode 2 是 **Engine B BG 扩展调色板**（melonDS
+       `MapVRAM_H` 口径），不是 B OBJ——本地此前映射错了。
+       要映射 B OBJ 用 bank I（mode 2）。 */
+    bus_set_vramcnt(bus, 8, 0x82u);          /* I → Engine B OBJ */
 
     bus_write16(bus, 0x06000000u, 0xABCDu);
     CHECK_EQ("vramcnt D->A BG read", bus_read16(bus, 0x06000000u), 0xABCDu);
@@ -2173,7 +2176,7 @@ static void test_vramcnt_mapping(nds_t *nds)
     bus_write16(bus, 0x06400000u, 0x1111u);
     CHECK_EQ("vramcnt E->A OBJ read", bus_read16(bus, 0x06400000u), 0x1111u);
     bus_write16(bus, 0x06600000u + 0x200u, 0x2222u);
-    CHECK_EQ("vramcnt H->B OBJ read", bus_read16(bus, 0x06600000u + 0x200u), 0x2222u);
+    CHECK_EQ("vramcnt I->B OBJ read", bus_read16(bus, 0x06600000u + 0x200u), 0x2222u);
 
     bus_write8(bus, 0x04000243u, 0x81u);     /* 经 IO 写 VRAMCNT D */
     CHECK_EQ("vramcnt io read", bus_read8(bus, 0x04000243u), 0x81u);

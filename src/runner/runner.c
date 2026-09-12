@@ -581,9 +581,32 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
            （与参考核 `REF_MAT_FRAME=N` 的 refmat 行同口径对照）。 */
         {
             static long mat_frame = -2;
+            static long io_frame = -2;
             if (mat_frame == -2) {
                 const char *e = getenv("NDS_MAT_FRAME");
                 mat_frame = (e != NULL) ? strtol(e, NULL, 10) : -1;
+                const char *e2 = getenv("NDS_IODUMP_FRAME");
+                io_frame = (e2 != NULL) ? strtol(e2, NULL, 10) : -1;
+            }
+            /* 21-B9yi(续36)：NDS_IODUMP_FRAME=N → 打印该帧的 2D 显示寄存器
+               （与参考核 `REF_IODUMP_FRAME=N` 的 refio 行同口径对照）。 */
+            if (io_frame >= 0 && fr == (uint64_t)io_frame) {
+                static const uint32_t regs[] = {
+                    0x04000000u, 0x04000008u, 0x0400000Au, 0x0400000Cu, 0x0400000Eu,
+                    0x04000010u, 0x04000012u, 0x04000014u, 0x04000016u,
+                    0x04001000u, 0x04001008u, 0x0400100Au, 0x0400100Cu, 0x0400100Eu,
+                    0x04001010u, 0x04001012u, 0x04001014u, 0x04001016u,
+                    0x04000060u, 0x04000064u
+                    , 0x04000050u, 0x04000052u, 0x04000054u, 0x0400006Cu,
+                    0x04001050u, 0x04001052u, 0x04001054u, 0x0400106Cu,
+                    0x04000240u, 0x04000241u, 0x04000242u, 0x04000243u,
+                    0x04000244u, 0x04000245u, 0x04000246u, 0x04000247u,
+                    0x04000248u
+                };
+                for (size_t i = 0; i < sizeof regs / sizeof regs[0]; i++)
+                    printf("ourio: %08X=%04X\n", regs[i],
+                           (unsigned)(bus_read16(nds->bus, regs[i]) & 0xFFFFu));
+                fflush(stdout);
             }
             if (mat_frame >= 0 && fr >= (uint64_t)mat_frame
                 && fr <= (uint64_t)mat_frame + 20u)

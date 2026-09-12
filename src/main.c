@@ -186,6 +186,8 @@ int main(int argc, char *argv[])
     int watch_n = 0;   /* 21-B9xj：--watch LO-HI 的组数（最多 4） */
     extern uint32_t g_pchit_addr[16];
     extern int g_pchit_n;
+    uint64_t shot_every = 0;
+    const char *shot_prefix = NULL;
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
         if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
@@ -207,6 +209,13 @@ int main(int argc, char *argv[])
         }
         else if (wcscmp(wargv[i], L"--headless-frames") == 0 && i + 1 < wargc)
             headless_frames = wcstol(wargv[i + 1], NULL, 10);
+        else if (wcscmp(wargv[i], L"--shot-prefix") == 0 && i + 1 < wargc) {
+            static char prefix_buf[400];
+            WideCharToMultiByte(CP_UTF8, 0, wargv[i + 1], -1, prefix_buf,
+                                (int)sizeof prefix_buf, NULL, NULL);
+            shot_prefix = prefix_buf;
+            runner_set_shot_series(shot_every, shot_prefix);
+        }
         else if (wcscmp(wargv[i], L"--key-frame") == 0 && i + 1 < wargc)
             key_frame = _wcstoui64(wargv[i + 1], NULL, 0);
         else if (wcscmp(wargv[i], L"--key-mask") == 0 && i + 1 < wargc)
@@ -232,6 +241,11 @@ int main(int argc, char *argv[])
             uint32_t a = 0;
             if (swscanf(wargv[i + 1], L"%x", &a) == 1 && g_pchit_n < 16)
                 g_pchit_addr[g_pchit_n++] = a;
+        }
+        else if (wcscmp(wargv[i], L"--shot-every") == 0 && i + 1 < wargc) {
+            /* 21-B9xu：--shot-every N（配合 --shot-prefix 存画面时间线） */
+            shot_every = _wcstoui64(wargv[i + 1], NULL, 10);
+            runner_set_shot_series(shot_every, shot_prefix);
         }
     }
 #else
@@ -274,6 +288,14 @@ int main(int argc, char *argv[])
             uint32_t a = 0;
             if (sscanf(argv[i + 1], "%x", &a) == 1 && g_pchit_n < 16)
                 g_pchit_addr[g_pchit_n++] = a;
+        }
+        else if (strcmp(argv[i], "--shot-every") == 0 && i + 1 < argc) {
+            shot_every = strtoull(argv[i + 1], NULL, 10);
+            runner_set_shot_series(shot_every, shot_prefix);
+        }
+        else if (strcmp(argv[i], "--shot-prefix") == 0 && i + 1 < argc) {
+            shot_prefix = argv[i + 1];
+            runner_set_shot_series(shot_every, shot_prefix);
         }
     }
 #endif

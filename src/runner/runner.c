@@ -10,6 +10,15 @@ extern unsigned long long g_dbg_frame;
 /* 21-B9xj：CLI `--watch LO-HI` 配置的写监视区间（最多 4 组）。 */
 static uint32_t s_watch_lo[4];
 static uint32_t s_watch_hi[4];
+/* 21-B9xu：`--shot-every N --shot-prefix P` 每 N 帧存一张截图（画面时间线对照） */
+static uint64_t s_shot_every = 0;
+static const char *s_shot_prefix = NULL;
+
+void runner_set_shot_series(uint64_t every, const char *prefix)
+{
+    s_shot_every = every;
+    s_shot_prefix = prefix;
+}
 static uint32_t s_watch_r_lo[4];
 static uint32_t s_watch_r_hi[4];
 
@@ -497,6 +506,22 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             break;
         uint64_t fr = runner_frame_index(r);
         g_dbg_frame = fr;
+        /* 21-B9xu：画面时间线（每 N 帧一张） */
+        if (s_shot_every != 0 && s_shot_prefix != NULL && (fr % s_shot_every) == 0) {
+            uint32_t *fb_t = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
+                                                * RENDER_SCREEN_H);
+            uint32_t *fb_b = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
+                                                * RENDER_SCREEN_H);
+            if (fb_t != NULL && fb_b != NULL) {
+                char path[512];
+                snprintf(path, sizeof path, "%s_%05llu.bmp", s_shot_prefix,
+                         (unsigned long long)fr);
+                render_frame(nds->bus, fb_t, fb_b);
+                save_bmp(path, fb_t, fb_b);
+            }
+            free(fb_t);
+            free(fb_b);
+        }
         /* 21-B9xi 诊断：DISPCNT 每次变化都记一行（谁在什么状态下改了显示模式） */
         {
             static uint32_t last_disp = 0xFFFFFFFFu, last_dispb = 0xFFFFFFFFu;

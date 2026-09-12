@@ -41,5 +41,7 @@ void runner_headless_frames(struct nds *nds, uint64_t frames,
 void runner_set_watch(int idx, uint32_t lo, uint32_t hi);
 /* 21-B9xk：总线读监视（把读取者与读到的值打出来）。 */
 void runner_set_watch_read(int idx, uint32_t lo, uint32_t hi);
+/* 21-B9xu：每 every 帧把画面存成 `<prefix>_NNNNN.bmp`（画面时间线对照用）。 */
+void runner_set_shot_series(uint64_t every, const char *prefix);
 
 #endif /* NDS_EMU_RUNNER_H */

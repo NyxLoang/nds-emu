@@ -133,9 +133,22 @@ int cpu_step(arm_cpu_t *cpu)
     /* 21-B9xs：PC 命中计数（只在开启诊断且有配置时执行） */
     if (cpu->nds->bus->diag && g_pchit_n > 0) {
         uint32_t hit_pc = cpu->r[15];
-        for (int i = 0; i < g_pchit_n; i++)
-            if (g_pchit_addr[i] == hit_pc)
+        static unsigned g_pchit_log[16];
+        for (int i = 0; i < g_pchit_n; i++) {
+            if (g_pchit_addr[i] == hit_pc) {
                 g_pchit_cnt[i]++;
+                if (g_pchit_log[i] < 3) {
+                    g_pchit_log[i]++;
+                    const bus_t *b = cpu->nds->bus;
+                    uint32_t sp = cpu->r[13];
+                    printf("pchit-hit: %08X arm%d lr=%08X sp=%08X"
+                           " st=%08X/%08X/%08X/%08X\n",
+                           hit_pc, cpu->is_arm7 ? 7 : 9, cpu->r[14], sp,
+                           bus_read32(b, sp), bus_read32(b, sp + 4u),
+                           bus_read32(b, sp + 8u), bus_read32(b, sp + 12u));
+                }
+            }
+        }
     }
     irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
     /* 21-B9wt：ARM7 的 HALTCNT 暂停（BIOS SWI 6 Halt / SWI 7 Stop / 游戏

@@ -851,6 +851,9 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                     printf(" %02X=%u", c, nds->io->gx.exec_hist[c]);
             printf("\n");
         }
+        printf("gxwork: bbox-px=%llu tested-px=%llu\n",
+               (unsigned long long)nds->io->gx.bbox_px,
+               (unsigned long long)nds->io->gx.px_tested);
         /* 21-B9yi(续32)：NDS_GXHIST=1 → 打印 GX 命令直方图 */
         if (getenv("NDS_GXHIST") != NULL)
             gx_cmd_hist_dump();

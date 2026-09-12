@@ -811,6 +811,17 @@ static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
 static void gx_raster_vert_tri(gx_t *g, const gx_vertex_t *a, const gx_vertex_t *b,
                                const gx_vertex_t *c)
 {
+    /* 21-B9yi(续38) 诊断：`NDS_NORAST=1` 只走裁剪/三角化、不做像素级光栅化，
+       用来测「光栅化占了多少时间」（性能优化用）。 */
+    {
+        static int norast = -1;
+        if (norast < 0) norast = (getenv("NDS_NORAST") != NULL) ? 1 : 0;
+        if (norast) {
+            g->tri_count++;
+            g->tri_tex++;
+            return;
+        }
+    }
     /* 21-B9yi(续35) 诊断：`NDS_POLYDBG=1` 时，帧号 >= 3800 后打印前 6 个三角形的
        裁剪空间坐标与当前矩阵（定位「为什么全被视体裁剪掉」）。 */
     {
@@ -935,8 +946,42 @@ static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
 
     uint8_t palpha = gx_poly_alpha(g);
     uint32_t drew = 0;
+    g->bbox_px += (uint64_t)(maxx - minx + 1) * (uint64_t)(maxy - miny + 1);
+    /* 21-B9yi(续38)：**扫描线跨度**——三角形是凸的，本行的有效 x 只可能落在
+       三条边与 y 的交点之间。先求这个（可能窄得多的）跨度再做逐像素判定，
+       保留原边函数保证填充规则/输出完全不变，但省掉包围盒里绝大部分无效测试
+       （细长三角形、大面积背景多边形尤其明显）。跨度两侧各放宽 1 像素，
+       抵消整数除法截断可能带来的边界误差。 */
     for (int yy = miny; yy <= maxy; yy++) {
-        for (int xx = minx; xx <= maxx; xx++) {
+        int xs = GX_SCREEN_W, xe = -1;
+        int ex[3] = { x0, x1, x2 };
+        int ey[3] = { y0, y1, y2 };
+        for (int e = 0; e < 3; e++) {
+            int ax = ex[e], ay = ey[e];
+            int bx = ex[(e + 1) % 3], by = ey[(e + 1) % 3];
+            if (ay == by) {
+                if (ay == yy) {
+                    if (ax < xs) xs = ax;
+                    if (ax > xe) xe = ax;
+                    if (bx < xs) xs = bx;
+                    if (bx > xe) xe = bx;
+                }
+                continue;
+            }
+            int ylo = ay < by ? ay : by, yhi = ay < by ? by : ay;
+            if (yy < ylo || yy > yhi)
+                continue;
+            int x = ax + (int)(((int64_t)(bx - ax) * (yy - ay)) / (by - ay));
+            if (x < xs) xs = x;
+            if (x > xe) xe = x;
+        }
+        if (xe < xs)
+            continue;
+        xs -= 1; xe += 1;
+        if (xs < minx) xs = minx;
+        if (xe > maxx) xe = maxx;
+        for (int xx = xs; xx <= xe; xx++) {
+            g->px_tested++;
             if (!gx_point_in_tri(xx, yy, x0, y0, x1, y1, x2, y2))
                 continue;
             /* 重心坐标（面积比） */

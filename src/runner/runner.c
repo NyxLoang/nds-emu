@@ -854,6 +854,9 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         printf("gxwork: bbox-px=%llu tested-px=%llu\n",
                (unsigned long long)nds->io->gx.bbox_px,
                (unsigned long long)nds->io->gx.px_tested);
+        printf("gxfog: fog-px=%llu disp3dcnt=%08X fogcolor=%08X off=%04X\n",
+               (unsigned long long)nds->io->gx.fog_px, nds->io->gx.disp3dcnt,
+               nds->io->gx.fog_color, nds->io->gx.fog_offset);
         /* 21-B9yi(续32)：NDS_GXHIST=1 → 打印 GX 命令直方图 */
         if (getenv("NDS_GXHIST") != NULL)
             gx_cmd_hist_dump();

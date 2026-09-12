@@ -497,3 +497,34 @@ CPU 解释器与每指令的 IO 推进**（`cpu_step` 每步都要走 `bios_irq_
 
 **已知偏离**：`POLYGON_ATTR` alpha=0 在 melonDS 里是 **wireframe**（只画边），
 本地按「不透明」处理；fog、toon/highlight、高光与光泽表未实现。
+
+### 21-B9yi（续40）— 雾效（melonDS `CalculateFogDensity` + 扫描线雾化口径）
+
+**为什么做**：续39 之后颜色已按真机口径调制，但 3D 远景仍缺雾。诊断显示
+**游戏确实开雾**：`gx: fog ON disp3dcnt=00000091 f=2014`（此后各场景按需开关）。
+
+**新增寄存器**（此前落在「未知 IO」被丢弃）：
+
+| 地址 | 含义 |
+|------|------|
+| `0x04000358` | FOG_COLOR（R0-4 / G5-9 / B10-14 / A16-20） |
+| `0x0400035C` | FOG_OFFSET（0-14 位；渲染侧 ×0x200） |
+| `0x04000360-7F` | FOG_TABLE（32 项，每项 7 位） |
+| `DISP3DCNT` bit7 | 雾总开关；bit6 = 雾色模式；bits8-11 = 雾移位 |
+
+**逐像素雾化**（口径 = melonDS）：
+
+```
+z' = (depth - FOG_OFFSET*0x200);  z' = (z' >> 2) << shift
+密度 = 查表（34 项渲染表 = [0]=tbl0、[1..32]=tbl0..31、[33]=tbl31，线性插值）>>17  → 0..127
+color = (FOG_COLOR*density + src*(128-density)) >> 7      （DISP3DCNT bit6=0 时）
+alpha = (FOG_ALPHA*density + src_alpha*(128-density)) >> 7（alpha 恒参与）
+```
+生效条件：`DISP3DCNT bit7` **且** `POLYGON_ATTR bit15`（逐多边形雾标志）。
+
+**怎么验证**：`build\test_nds.exe` 931 项 0 失败；2600 帧带按键运行得到
+`gxfog: fog-px=341958 disp3dcnt=0000059D fogcolor=001F72D6 off=0FA0`
+⇒ 雾确实作用了 34 万个像素；f≤4000 的画面统计与续39 逐值相同（雾关闭时不改画面）。
+
+**已知偏离**：`POLYGON_ATTR` alpha=0 在 melonDS 里是 wireframe（只画边），本地仍按
+不透明处理；toon/highlight、高光与光泽表未实现。

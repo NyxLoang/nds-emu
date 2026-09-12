@@ -343,3 +343,4 @@
 | 2026-09-13 | 21-B9yi（续38，性能/诊断） | 3D | 扫描线跨度光栅化（逐像素测试 4.04 亿→1.11 亿，**-72.6%**，输出逐值不变）+ 新增 `NDS_NORAST`/`gxwork` 诊断 ⇒ 定位出真正瓶颈在 CPU 解释器与每指令 IO 推进（光栅化仅 ~1.5%） | [gx](src/gx/gxlog.md) |
 | 2026-09-13 | 21-B9yi（续38b，负结果） | CPU/性能 | 每指令 IO 推进的「快速返回」守卫（`gx_idle`/`io_arm9_clock_active`）**实测慢 50%**（150s→224s，两次一致）⇒ 已回退；确认「热点路径必须 A/B 实测」 | [cpu](src/cpu/cpulog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-13 | 21-B9yi（续39，代码/取证） | 3D | **纹理/顶点色合成**（melonDS 调制/贴花口径）：本地此前忽略顶点色 ⇒ 颜色偏亮；参考核取证 `vtxcol=(7,8,10)` 证明真机即用暗顶点色调制。并补上光照设施（VecMatrix/DIF_AMB/SPE_EMI/LIGHT_VECTOR/LIGHT_COLOR/NORMAL→CalculateLighting） | [gx](src/gx/gxlog.md) |
+| 2026-09-13 | 21-B9yi（续40，代码/验证） | 3D | **雾效**（FOG_COLOR/FOG_OFFSET/FOG_TABLE 寄存器 + melonDS 逐像素雾化口径）：诊断确认游戏在 f≈2014 开雾，实测作用 341,958 个像素；雾关闭时画面逐值不变 | [gx](src/gx/gxlog.md) |

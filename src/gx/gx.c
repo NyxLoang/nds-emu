@@ -751,6 +751,60 @@ static uint8_t gx_poly_alpha(const gx_t *g)
     return (pa == 0) ? 31 : pa;   /* 0 = 不透明（DS 里 0 表示不混合） */
 }
 
+/* 21-B9yi(续40)：雾密度（melonDS `CalculateFogDensity` 口径）。
+   渲染侧表是 34 项：`[0]=tbl[0]`、`[1..32]=tbl[0..31]`、`[33]=tbl[31]`；
+   返回 0..127（128 = 全雾）。 */
+static uint32_t gx_fog_density(const gx_t *g, int32_t z)
+{
+    uint32_t off = (g->fog_offset & 0x7FFFu) * 0x200u;
+    if ((uint32_t)z < off)
+        return 0;
+    uint32_t zz = (uint32_t)z - off;
+    zz = (zz >> 2) << ((g->disp3dcnt >> 8) & 0xFu);
+    uint32_t id = zz >> 17;
+    uint32_t frac = zz & 0x1FFFFu;
+    if (id >= 32) {
+        id = 32;
+        frac = 0;
+    }
+    uint32_t d0 = (id == 0) ? g->fog_table[0] : g->fog_table[(id - 1) & 31u];
+    uint32_t d1 = (id >= 32) ? g->fog_table[31] : g->fog_table[id & 31u];
+    return ((d0 * (0x20000u - frac)) + (d1 * frac)) >> 17;
+}
+
+/* 21-B9yi(续40)：把雾应用到已着色像素（melonDS 扫描线雾化口径：
+   颜色按 FOG_COLOR 混合、alpha 一律参与混合；6 位通道域计算后回 5 位）。 */
+static uint16_t gx_fog_apply(const gx_t *g, uint16_t color555, uint8_t *alpha,
+                             int32_t z)
+{
+    uint32_t density = gx_fog_density(g, z);
+    if (density == 0)
+        return color555;
+    int r = (color555 & 0x1Fu) << 1; if (r) r++;
+    int gg = ((color555 >> 5) & 0x1Fu) << 1; if (gg) gg++;
+    int b = ((color555 >> 10) & 0x1Fu) << 1; if (b) b++;
+    int a = *alpha;
+    if ((g->disp3dcnt & (1u << 6)) == 0) {          /* bit6 清 → 与雾色混合 */
+        uint32_t fc = g->fog_color;
+        int fr = (int)(fc & 0x1Fu) << 1; if (fr) fr++;
+        int fg = (int)((fc >> 5) & 0x1Fu) << 1; if (fg) fg++;
+        int fb = (int)((fc >> 10) & 0x1Fu) << 1; if (fb) fb++;
+        r = (int)(((uint32_t)fr * density + (uint32_t)r * (128u - density)) >> 7);
+        gg = (int)(((uint32_t)fg * density + (uint32_t)gg * (128u - density)) >> 7);
+        b = (int)(((uint32_t)fb * density + (uint32_t)b * (128u - density)) >> 7);
+    }
+    int fa = (int)((g->fog_color >> 16) & 0x1Fu);
+    a = (int)(((uint32_t)fa * density + (uint32_t)a * (128u - density)) >> 7);
+    if (a < 0) a = 0;
+    else if (a > 31) a = 31;
+    *alpha = (uint8_t)a;
+    if (r > 63) r = 63;
+    if (gg > 63) gg = 63;
+    if (b > 63) b = 63;
+    return (uint16_t)(((r >> 1) & 0x1Fu) | (((gg >> 1) & 0x1Fu) << 5)
+                      | (((b >> 1) & 0x1Fu) << 10));
+}
+
 /* 21-B9yi(续39)：纹理色与顶点色的合成（melonDS `SoftRenderer3D` 口径）。
    纹理色先按「15 位 → 18 位」转成 6 位通道（`v*2 + (v!=0)`），顶点色同样处理，
    再按 `POLYGON_ATTR` bits4-5 的混合模式合成：
@@ -1077,6 +1131,11 @@ static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
                                             (g->poly_attr >> 4) & 0x3u, &aa);
             if (aa == 0)
                 continue;                    /* 全透明：不写，露出下面图层 */
+            /* 21-B9yi(续40)：雾（DISP3DCNT bit7 总开关 + POLYGON_ATTR bit15 逐多边形） */
+            if ((g->disp3dcnt & (1u << 7)) && (g->poly_attr & (1u << 15)))
+                col = gx_fog_apply(g, col, &aa, pz);
+            if ((g->disp3dcnt & (1u << 7)) && (g->poly_attr & (1u << 15)))
+                g->fog_px++;
             g->fb[pi] = col;
             g->fba[pi] = aa;
             g->zbuf[pi] = (uint32_t)pz;
@@ -1512,6 +1571,9 @@ int gx_is_addr(uint32_t addr)
         return 1;
     if (addr >= GX_GXSTAT && addr < GX_REGION_END)
         return 1;
+    /* 21-B9yi(续40)：雾效寄存器区（FOG_COLOR / FOG_OFFSET / FOG_TABLE） */
+    if (addr >= 0x04000358u && addr < 0x04000380u)
+        return 1;
     return 0;
 }
 
@@ -1519,6 +1581,13 @@ uint8_t gx_read8(const gx_t *g, uint32_t addr)
 {
     if (addr >= IO_DISP3DCNT && addr < IO_DISP3DCNT + 4)
         return (uint8_t)(g->disp3dcnt >> ((addr - IO_DISP3DCNT) * 8));
+    /* 21-B9yi(续40)：雾效寄存器读回 */
+    if (addr >= 0x04000358u && addr < 0x0400035Cu)
+        return (uint8_t)(g->fog_color >> ((addr - 0x04000358u) * 8));
+    if (addr >= 0x0400035Cu && addr < 0x04000360u)
+        return (uint8_t)(g->fog_offset >> ((addr - 0x0400035Cu) * 8));
+    if (addr >= 0x04000360u && addr < 0x04000380u)
+        return g->fog_table[addr - 0x04000360u];
     if (addr >= GX_GXSTAT && addr < GX_GXSTAT + 4)
         return (uint8_t)(g->gxstat >> ((addr - GX_GXSTAT) * 8));
     /* RAM_COUNT：简化返回 0（未统计顶点/多边形缓冲占用） */
@@ -1543,6 +1612,17 @@ void gx_write8(gx_t *g, uint32_t addr, uint8_t val)
             if (val & 0x20u) word &= ~(1u << 13);
         }
         g->disp3dcnt = word;
+        /* 21-B9yi(续40) 诊断：雾总开关（bit7）变化时打印一次，用来确认游戏
+           到底有没有开雾（本游戏 f=4000 的 DISP3DCNT=0x59D，bit7=0）。 */
+        {
+            static int last_fog = -1;
+            int now = (int)((word >> 7) & 1u);
+            if (last_fog != now) {
+                last_fog = now;
+                printf("gx: fog %s disp3dcnt=%08X f=%llu\n",
+                       now ? "ON" : "OFF", word, g_dbg_frame);
+            }
+        }
     }
     /* GXSTAT 0x04000603：bit30-31 为 FIFO IRQ 模式（melonDS Write8 口径），
        0x04000601 bit7 清矩阵栈复位标志；RAM_COUNT 保持只读。 */
@@ -1553,6 +1633,23 @@ void gx_write8(gx_t *g, uint32_t addr, uint8_t val)
     if (addr == GX_GXSTAT + 3) {
         uint32_t mode = (uint32_t)(val & 0xC0u) << 24;
         g->gxstat = (g->gxstat & ~GXSTAT_IRQ_MODE) | mode;
+        return;
+    }
+    /* 21-B9yi(续40)：雾效寄存器（字节级；16/32 位写由总线拆成字节到这里）。 */
+    if (addr >= 0x04000358u && addr < 0x0400035Cu) {
+        int shift = (int)((addr - 0x04000358u) * 8u);
+        g->fog_color = (g->fog_color & ~(0xFFu << shift))
+                     | ((uint32_t)val << shift);
+        return;
+    }
+    if (addr >= 0x0400035Cu && addr < 0x04000360u) {
+        int shift = (int)((addr - 0x0400035Cu) * 8u);
+        g->fog_offset = ((g->fog_offset & ~(0xFFu << shift))
+                         | ((uint32_t)val << shift)) & 0x7FFFu;
+        return;
+    }
+    if (addr >= 0x04000360u && addr < 0x04000380u) {
+        g->fog_table[addr - 0x04000360u] = (uint8_t)(val & 0x7Fu);
         return;
     }
 }

@@ -148,6 +148,13 @@ typedef struct gx {
     int32_t mat_spec[3];       /* 0x31 高光材质 */
     int32_t mat_emi[3];        /* 0x31 自发光材质 */
     int32_t normal[3];         /* 0x21 NORMAL（10 位有符号） */
+    /* 21-B9yi(续40)：雾效寄存器（melonDS 口径）
+       0x04000358 FOG_COLOR（R0-4 / G5-9 / B10-14 / A16-20）
+       0x0400035C FOG_OFFSET（0-14 位；渲染侧 ×0x200）
+       0x04000360-7F FOG_TABLE（32 项，每项 7 位） */
+    uint32_t fog_color;
+    uint32_t fog_offset;
+    uint8_t  fog_table[32];
     /* 21-B9yi(续35)：矩阵栈按 melonDS 口径分三种——
        投影/纹理矩阵各是**单槽**栈（0/1），位置矩阵是 32 槽（指针 0..63，取 &31）。
        本地此前用一个 32 槽共用栈 + 「只接受正偏移的 POP」，与真机不一致：
@@ -180,6 +187,7 @@ typedef struct gx {
        用来量化「扫描线跨度」优化省了多少（与机器负载无关的确定性指标）。 */
     uint64_t px_tested;
     uint64_t bbox_px;
+    uint64_t fog_px;       /* 21-B9yi(续40)：被雾影响到的像素数（诊断） */
     /* 21-B9yi(续35) 诊断：**执行**（而不是入队）的命令直方图。
        与入队直方图对比就能看出「哪些命令一直没收齐参数、永远没执行」。 */
     uint32_t exec_hist[256];

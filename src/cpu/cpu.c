@@ -141,9 +141,10 @@ int cpu_step(arm_cpu_t *cpu)
                     g_pchit_log[i]++;
                     const bus_t *b = cpu->nds->bus;
                     uint32_t sp = cpu->r[13];
-                    printf("pchit-hit: %08X arm%d lr=%08X sp=%08X"
+                    printf("pchit-hit: %08X arm%d r0=%08X r7=%08X lr=%08X sp=%08X"
                            " st=%08X/%08X/%08X/%08X\n",
-                           hit_pc, cpu->is_arm7 ? 7 : 9, cpu->r[14], sp,
+                           hit_pc, cpu->is_arm7 ? 7 : 9, cpu->r[0], cpu->r[7],
+                           cpu->r[14], sp,
                            bus_read32(b, sp), bus_read32(b, sp + 4u),
                            bus_read32(b, sp + 8u), bus_read32(b, sp + 12u));
                 }

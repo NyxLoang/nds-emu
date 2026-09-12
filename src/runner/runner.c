@@ -3,6 +3,9 @@
 #include <string.h>
 #include "nds/nds.h"      /* nds_t / bus_t */
 #include "bus/bus.h"      /* bus_set_diag */
+
+/* 21-B9xi：诊断用的“当前帧号”（定义在 io.c，供 IPC 报文记录带帧号）。 */
+extern unsigned long long g_dbg_frame;
 #include "cpu/cpu.h"      /* cpu_step / arm_cpu_t（r / cycles） */
 #include "cpu/exec.h"     /* exec_set_trace */
 #include "cpu/thumb.h"    /* thumb_set_trace */
@@ -462,6 +465,43 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         if (!runner_run_frame(r))
             break;
         uint64_t fr = runner_frame_index(r);
+        g_dbg_frame = fr;
+        /* 21-B9xi 诊断：DISPCNT 每次变化都记一行（谁在什么状态下改了显示模式） */
+        {
+            static uint32_t last_disp = 0xFFFFFFFFu, last_dispb = 0xFFFFFFFFu;
+            static uint32_t last_tm1 = 0xFFFFFFFFu;
+            static uint32_t last_ie = 0xFFFFFFFFu;
+            uint32_t d9 = bus_read32(nds->bus, 0x04000000u);
+            uint32_t db = bus_read32(nds->bus, 0x04001000u);
+            int prev7 = nds->bus->active_is_arm7;
+            nds->bus->active_is_arm7 = 0;
+            uint32_t tm1 = bus_read32(nds->bus, 0x04000104u); /* TM1D|TM1CNT */
+            uint32_t ie = bus_read32(nds->bus, 0x04000210u);
+            nds->bus->active_is_arm7 = prev7;
+            /* 只在“控制字/使能”变化时打印（TM1D 计数器每帧都在变，不记录） */
+            if ((tm1 & 0xFFFF0000u) != (last_tm1 & 0xFFFF0000u) ||
+                ie != last_ie) {
+                printf("headless-frames: timer-change f=%llu tm1=%08X (was %08X)"
+                       " ie9=%08X (was %08X) ARM9=%08X lr9=%08X\n",
+                       (unsigned long long)fr, tm1, last_tm1, ie, last_ie,
+                       nds->cpu->r[15], nds->cpu->r[14]);
+                fflush(stdout);
+                last_tm1 = tm1;
+                last_ie = ie;
+            }
+            if (d9 != last_disp || db != last_dispb) {
+                printf("headless-frames: disp-change f=%llu disp9=%08X (was %08X)"
+                       " dispb=%08X (was %08X) ARM9=%08X lr9=%08X ARM7=%08X"
+                       " fifo=%d/%d gx=%u tri=%u\n",
+                       (unsigned long long)fr, d9, last_disp, db, last_dispb,
+                       nds->cpu->r[15], nds->cpu->r[14], nds->cpu7->r[15],
+                       nds->io->fifo.from7.count, nds->io->fifo.from9.count,
+                       nds->io->gx.cmd_count, nds->io->gx.tri_count);
+                fflush(stdout);
+                last_disp = d9;
+                last_dispb = db;
+            }
+        }
         if ((fr % 100) == 0) {
             printf("headless-frames: f=%llu ARM9=%08X ARM7=%08X disp=%08X"
                    " if9=%08X if7=%08X cnt=%04X/%04X fifo=%d/%d gx=%u tri=%u"
@@ -492,8 +532,34 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     {
         extern unsigned long long g_rtc_reads;
         extern unsigned long long g_snd_cnt_writes;
-        printf("io: rtc-reads=%llu snd-cnt-writes=%llu\n", g_rtc_reads,
-               g_snd_cnt_writes);
+        extern unsigned long long g_snd_bias_writes;
+        extern unsigned int g_snd_bias_last;
+        printf("io: rtc-reads=%llu snd-cnt-writes=%llu snd-bias-writes=%llu last=%03X\n",
+               g_rtc_reads, g_snd_cnt_writes, g_snd_bias_writes, g_snd_bias_last);
+        {
+            extern unsigned long long g_ipc_sends[2];
+            extern unsigned long long g_ipc_c187;
+            extern uint32_t g_ipc_trace[32][3];
+            extern unsigned g_ipc_trace_n;
+            printf("ipc: sends9=%llu sends7=%llu c187=%llu\n", g_ipc_sends[0],
+                   g_ipc_sends[1], g_ipc_c187);
+            unsigned total = g_ipc_trace_n < 32u ? g_ipc_trace_n : 32u;
+            unsigned start = g_ipc_trace_n - total;
+            for (unsigned i = 0; i < total; i++) {
+                unsigned k = (start + i) % 32u;
+                printf("ipc: #%u arm%u f=%u val=%08X\n", start + i,
+                       g_ipc_trace[k][0], g_ipc_trace[k][2], g_ipc_trace[k][1]);
+            }
+            extern uint32_t g_ipc9_trace[16][2];
+            extern unsigned g_ipc9_n;
+            unsigned t9 = g_ipc9_n < 16u ? g_ipc9_n : 16u;
+            unsigned s9 = g_ipc9_n - t9;
+            for (unsigned i = 0; i < t9; i++) {
+                unsigned k = (s9 + i) % 16u;
+                printf("ipc9: #%u f=%u val=%08X\n", s9 + i,
+                       g_ipc9_trace[k][1], g_ipc9_trace[k][0]);
+            }
+        }
         /* 21-B9wz：ARM9 累积热点前 16（含占比） */
         for (int hi = 0; hi < 16; hi++) {
             uint32_t best = 0, bh = 0;

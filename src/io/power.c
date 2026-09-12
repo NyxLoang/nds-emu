@@ -9,11 +9,13 @@ void power_reset(power_t *p)
     p->pow[1] = 0x0001u;   /* 喇叭开，Wi-Fi 关 */
     p->wifiwait = 0x0030u; /* 固件写好的 Wi-Fi 时序 */
     p->halt_req = 0;
+    p->biosprot = IO_POWER_BIOSPROT_DIRECTBOOT; /* 直启：0x1204（melonDS 同值） */
 }
 
 int power_is_addr(uint32_t addr)
 {
     return (addr >= IO_POWER_POSTFLG && addr < IO_POWER_END)
+        || (addr >= IO_POWER_BIOSPROT && addr < IO_POWER_BIOSPROT + 2u)
         || (addr >= IO_POWER_WIFIWAIT && addr < IO_POWER_WIFIWAIT + 2);
 }
 
@@ -30,6 +32,10 @@ uint8_t power_read8(const power_t *p, uint32_t addr, int is_arm7)
         return (uint8_t)(p->wifiwait & 0xFFu);
     if (is_arm7 && addr == IO_POWER_WIFIWAIT + 1)
         return (uint8_t)(p->wifiwait >> 8);
+    if (is_arm7 && addr == IO_POWER_BIOSPROT)
+        return (uint8_t)(p->biosprot & 0xFFu);
+    if (is_arm7 && addr == IO_POWER_BIOSPROT + 1)
+        return (uint8_t)(p->biosprot >> 8);
     return 0;
 }
 
@@ -69,6 +75,16 @@ void power_write8(power_t *p, uint32_t addr, uint8_t val, int is_arm7)
     }
     if (is_arm7 && addr == IO_POWER_WIFIWAIT + 1) {
         /* WIFIWAITCNT 只有 bit0-5；高字节写入忽略 */
+        return;
+    }
+    if (is_arm7 && (addr == IO_POWER_BIOSPROT || addr == IO_POWER_BIOSPROT + 1u)) {
+        /* melonDS：只有当前值为 0（真 BIOS 启动）时才允许 ARM7 设定；直启已是 0x1204。 */
+        if (p->biosprot == 0) {
+            if (addr == IO_POWER_BIOSPROT)
+                p->biosprot = (uint16_t)(val & 0xFEu);
+            else
+                p->biosprot = (uint16_t)((uint16_t)val << 8);
+        }
         return;
     }
 }

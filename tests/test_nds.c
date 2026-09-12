@@ -3278,6 +3278,34 @@ static void test_rtc(nds_t *nds)
     CHECK_EQ("rcnt high byte", io_read8(nds->io, 0x04000135u, 1), 0xA5u);
 }
 
+/* ---- 21-B9xi 用例：ARM7 BIOS 保护值 + SOUNDBIAS（对照参考核帧 1500+）----
+   参考核：ARM7IORead16(0x04000308) = ARM7BIOSProt（直启 0x1204），
+   地址只对 ARM7 存在（NDS9 侧未映射）；SOUNDBIAS(0x04000504) 是 10 位寄存器，
+   真机上电 0x200，melonDS 写半字时整体覆盖（Bias = val & 0x3FF）。 */
+static void test_arm7_biosprot_soundbias(nds_t *nds)
+{
+    /* BIOS 保护值：本地直启 = 0x1204（低字节 0x04 在 0x308、高字节 0x12 在 0x309） */
+    CHECK_EQ("biosprot7 low", io_read8(nds->io, 0x04000308u, 1), 0x04u);
+    CHECK_EQ("biosprot7 high", io_read8(nds->io, 0x04000309u, 1), 0x12u);
+    CHECK_EQ("biosprot9 unmapped", io_read8(nds->io, 0x04000308u, 0), 0x00u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("biosprot7 bus16", bus_read16(nds->bus, 0x04000308u), 0x1204u);
+    /* 已非 0：ARM7 再写不生效（melonDS：if (ARM7BIOSProt == 0) 才接受） */
+    bus_write16(nds->bus, 0x04000308u, 0x0000u);
+    CHECK_EQ("biosprot7 write keep", bus_read16(nds->bus, 0x04000308u), 0x1204u);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("biosprot9 bus16", bus_read16(nds->bus, 0x04000308u), 0x0000u);
+
+    /* SOUNDBIAS：上电 0x200 → 半字写整体覆盖 → 只有 bit0-9 有效 */
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("sndbias reset", bus_read16(nds->bus, 0x04000504u), 0x200u);
+    bus_write16(nds->bus, 0x04000504u, 0x00A5u);
+    CHECK_EQ("sndbias write16", bus_read16(nds->bus, 0x04000504u), 0x00A5u);
+    bus_write16(nds->bus, 0x04000504u, 0xFFFFu);
+    CHECK_EQ("sndbias 10bit mask", bus_read16(nds->bus, 0x04000504u), 0x03FFu);
+    nds->bus->active_is_arm7 = 0;
+}
+
 /* ---- 21-B9wy 用例：GXSTAT 的 FIFO 状态位（bit25/26）----
    参考核 GPU3D::Read32(0x04000600) 在 FIFO 空时同时置 bit25（不足半满）与
    bit26（空）；游戏常靠 bit25 判断“还能不能往 FIFO 塞命令”。本地旧实现只有
@@ -5576,6 +5604,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_rtc(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9xi] ARM7 BIOS 保护值 + SOUNDBIAS 语义\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_arm7_biosprot_soundbias(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9wy] GXSTAT FIFO 状态位（bit25/26）\n");

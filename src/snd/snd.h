@@ -72,6 +72,7 @@ typedef struct snd {
 } snd_t;
 
 int snd_is_addr(uint32_t addr);
+void snd_reset(snd_t *s);   /* 21-B9xi：清零通道 + SOUNDBIAS=0x200（真机上电值） */
 uint8_t snd_read8(const snd_t *s, uint32_t addr);
 void snd_write8(snd_t *s, uint32_t addr, uint8_t val);
 

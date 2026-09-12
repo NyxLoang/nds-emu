@@ -12,6 +12,10 @@
 #define IO_POWER_POSTFLG   0x04000300u
 #define IO_POWER_HALTCNT   0x04000301u  /* 21-B9wt：ARM7 写 0x80=Halt / 0xC0=Sleep */
 #define IO_POWER_POWCNT    0x04000304u
+/* 21-B9xi：ARM7 BIOS 保护值（melonDS ARM7BIOSProt）。地址只对 ARM7 可见，
+   NDS9 侧 0x04000308 未映射。直启（无真 BIOS）时为 0x1204。 */
+#define IO_POWER_BIOSPROT  0x04000308u
+#define IO_POWER_BIOSPROT_DIRECTBOOT 0x1204u
 #define IO_POWER_END       0x04000308u
 
 #define IO_POWER_WIFIWAIT  0x04000206u
@@ -30,6 +34,8 @@ typedef struct power {
        写入后由 ARM7 cpu_step 消费：仍满足 (IF&IE) 时保持暂停（step_cycles=0），
        有中断待处理时清除请求继续执行——与 melonDS HaltInterrupted(1) 同口径。 */
     uint8_t  halt_req;
+    /* 21-B9xi：BIOS 保护值（只 ARM7 可读；真 BIOS 启动时由 BIOS 写 0x04000308）。 */
+    uint16_t biosprot;
 } power_t;
 
 void power_reset(power_t *p);

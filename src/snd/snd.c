@@ -1,5 +1,6 @@
 #include "snd.h"
 #include "bus/bus.h"
+#include <string.h>
 
 /* ---- 寄存器地址换算 ---- */
 
@@ -15,12 +16,21 @@ int snd_is_addr(uint32_t addr)
     return addr >= SND_BASE && addr < SND_END;
 }
 
+/* 21-B9xi：复位到真机缺省值。SOUNDBIAS=0x200 是静音中值
+   （混音公式 (bias<<6)-0x8000 正好抵消为 0），也是真实硬件上电值。 */
+void snd_reset(snd_t *s)
+{
+    memset(s, 0, sizeof(*s));
+    s->soundbias = 0x200u;
+}
+
 uint8_t snd_read8(const snd_t *s, uint32_t addr)
 {
     if (addr == SND_SOUNDCNT)     return (uint8_t)(s->soundcnt & 0xFF);
     if (addr == SND_SOUNDCNT + 1) return (uint8_t)(s->soundcnt >> 8);
-    if (addr == SND_SOUNDBIAS)    return (uint8_t)(s->soundbias & 0xFF);
-    if (addr == SND_SOUNDBIAS + 1) return (uint8_t)(s->soundbias >> 8);
+    /* SOUNDBIAS 只有 bit0-9（melonDS：Bias = val & 0x3FF） */
+    if (addr == SND_SOUNDBIAS)    return (uint8_t)(s->soundbias & 0xFFu);
+    if (addr == SND_SOUNDBIAS + 1) return (uint8_t)((s->soundbias >> 8) & 0x03u);
 
     int ch = snd_channel_of(addr);
     if (ch < 0)
@@ -64,11 +74,11 @@ void snd_write8(snd_t *s, uint32_t addr, uint8_t val)
         return;
     }
     if (addr == SND_SOUNDBIAS) {
-        s->soundbias = (uint16_t)((s->soundbias & 0xFF00u) | (val & 0x03u));
+        s->soundbias = (uint16_t)(((s->soundbias & 0x0300u) | val) & 0x03FFu);
         return;
     }
     if (addr == SND_SOUNDBIAS + 1) {
-        s->soundbias = (uint16_t)((s->soundbias & 0x0003u) | ((uint16_t)(val & 0x03u) << 8));
+        s->soundbias = (uint16_t)((s->soundbias & 0x00FFu) | ((uint16_t)(val & 0x03u) << 8));
         return;
     }
 

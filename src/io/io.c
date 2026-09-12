@@ -8,6 +8,19 @@ static void io_gx_fifo_irq_sync(io_t *io);
 unsigned long long g_rtc_reads = 0;
 /* 21-B9xa：ARM7 写声音通道 CNT 的次数（诊断：声音驱动是否在跑） */
 unsigned long long g_snd_cnt_writes = 0;
+/* 21-B9xi 诊断：ARM7 写 SOUNDBIAS(0x04000504/05) 的次数与最后拼出的值
+   （参考核帧 1500 起 SOUNDBIAS=0x200；本地若为 0 说明该处代码没跑到） */
+unsigned long long g_snd_bias_writes = 0;
+unsigned int g_snd_bias_last = 0;
+/* 21-B9xi 诊断：IPC 发送计数与前 32 条报文（与参考核 fifo7/fifo9 对照；
+   参考核每帧 = C0240046/C02400C6/C0240006/C0240086 + 0000C187） */
+unsigned long long g_ipc_sends[2] = {0, 0};
+unsigned long long g_ipc_c187 = 0;          /* 参考核每帧 1 条的 0000C187 计数 */
+uint32_t g_ipc_trace[32][3];                /* {core, val, frame} 环形，最近 32 条 */
+unsigned g_ipc_trace_n = 0;                 /* 累计发送数 */
+unsigned long long g_dbg_frame = 0;         /* 由 runner 每帧更新（诊断用） */
+uint32_t g_ipc9_trace[16][2];               /* {val, frame} 最近 16 条 ARM9 发送 */
+unsigned g_ipc9_n = 0;
 
 io_t *io_create(void)
 {
@@ -19,6 +32,7 @@ io_t *io_create(void)
         gx_reset(&io->gx); /* 矩阵置单位阵 + 视口默认 + GXSTAT 置 FIFO 空 */
         key_reset(&io->keypad); /* 21-B9wu：默认所有键松开（0 会被读成全按下） */
         rtc_reset(&io->rtc);   /* 21-B9wx：RTC 初始为 2026-09-12 12:00:00（24 小时制） */
+        snd_reset(&io->snd);    /* 21-B9xi：SOUNDBIAS=0x200（真机上电值） */
     }
     return io;
 }
@@ -97,7 +111,9 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
     }
     if (memctl_is_addr(addr))
         return memctl_read8(&io->memctl, addr, is_arm7);
-    if (power_is_addr(addr) && (is_arm7 || addr >= IO_POWER_POSTFLG))
+    /* 21-B9xi：0x04000308/09（BIOS 保护值）只对 ARM7 暴露；NDS9 侧保持未映射（读 0）。 */
+    if (power_is_addr(addr) &&
+        (is_arm7 || (addr >= IO_POWER_POSTFLG && addr < IO_POWER_END)))
         return power_read8(&io->power, addr, is_arm7);
     if (math_is_addr(addr) && !is_arm7)
         return math_read8(&io->math, addr);
@@ -175,7 +191,8 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         memctl_write8(&io->memctl, addr, val, is_arm7);
         return;
     }
-    if (power_is_addr(addr) && (is_arm7 || addr >= IO_POWER_POSTFLG)) {
+    if (power_is_addr(addr) &&
+        (is_arm7 || (addr >= IO_POWER_POSTFLG && addr < IO_POWER_END))) {
         power_write8(&io->power, addr, val, is_arm7);
         return;
     }
@@ -255,6 +272,14 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         return;
     }
     if (snd_is_addr(addr) && is_arm7) {
+        if (addr == SND_SOUNDBIAS || addr == SND_SOUNDBIAS + 1u) {
+            g_snd_bias_writes++;
+            if (addr == SND_SOUNDBIAS)
+                g_snd_bias_last = (g_snd_bias_last & 0x0300u) | val;
+            else
+                g_snd_bias_last = (g_snd_bias_last & 0x00FFu)
+                                | ((unsigned)(val & 0x03u) << 8);
+        }
         snd_write8(&io->snd, addr, val);
         return;
     }
@@ -273,6 +298,18 @@ uint32_t io_recv32(io_t *io, int is_arm7)
 
 void io_send32(io_t *io, int is_arm7, uint32_t val)
 {
+    g_ipc_sends[is_arm7 ? 1 : 0]++;
+    if (val == 0x0000C187u)
+        g_ipc_c187++;
+    g_ipc_trace[g_ipc_trace_n % 32u][0] = is_arm7 ? 7u : 9u;
+    g_ipc_trace[g_ipc_trace_n % 32u][1] = val;
+    g_ipc_trace[g_ipc_trace_n % 32u][2] = (uint32_t)g_dbg_frame;
+    g_ipc_trace_n++;
+    if (!is_arm7) {
+        g_ipc9_trace[g_ipc9_n % 16u][0] = val;
+        g_ipc9_trace[g_ipc9_n % 16u][1] = (uint32_t)g_dbg_frame;
+        g_ipc9_n++;
+    }
     fifo_send(&io->fifo, is_arm7, val);
     io_fifo_update_irq_all(io);
 }

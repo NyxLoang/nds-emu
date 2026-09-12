@@ -484,3 +484,22 @@
 - **效果**：IF 模式与参考一致（VBlank 帧内被消费），而且**标题画面仍然
   在 frame1900 与已验收截图逐像素 0 差异**（本轮重新截图比对）。
 - 单测 `[case 21-B9xc]` 6 项（IRQ 两核、DISPSTAT 主副、帧边界归零与清标志）。
+
+## 2026-09-12 · 21-B9xi — ARM7 BIOS 保护值（0x04000308）与 bring-up 诊断
+
+- **证据**：参考核 `ARM7IORead16(0x04000308)` 返回 `ARM7BIOSProt`，直启为
+  `0x1204`；本地此前的临时补丁写在 `io_read8` 里，且 `0x04000308` 落在
+  `IO_POWER_END` 之外（不归 power 模块管），NDS9 侧不该看到它。
+- **修复**：`power.h` 新增 `IO_POWER_BIOSPROT=0x04000308` /
+  `IO_POWER_BIOSPROT_DIRECTBOOT=0x1204` 与 `power_t.biosprot`；
+  `power_read8/write8` 只对 ARM7 生效（真 BIOS 启动时值为 0 才允许写入，
+  melonDS 同口径），`io_read8/write8` 的 power 分支只放 ARM7 过 `0x308/309`。
+- **新增诊断**（都用于本次 bring-up 对照）：
+  `io: rtc-reads / snd-cnt-writes / snd-bias-writes`、
+  `ipc: sends9/sends7/c187` + 最近 32 条发送的环形明细与 `ipc9:`（ARM9 最近 16 条）、
+  runner 里的 `disp-change`（DISPCNT/子屏 DISPCNT 每次变化）与
+  `timer-change`（TM1CNT/IE9 控制字变化）。
+- **这一轮诊断得到的结论**（详见 `docs/21-rom-bringup.md` 的 21-B9xi 节）：
+  直启表 `0x027FFC30` 的值来自 ARM9 把运行时签名表 `0x0207995E` 拷进去
+  （参考 `0xFFFF`、本地 `0x0000`）；IPCW 报文里参考核每帧 5 条
+  （4 条 `C02400x6` 心跳 + 1 条 `0000C187`），本地只有 4 条、`c187=0`。

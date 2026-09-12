@@ -825,3 +825,11 @@
 - `[case 21-B9xc]`：`io_set_vblank()` 应同时置两核 IF bit0 与主/副 DISPSTAT
   bit0；`io_frame_boundary()` 应把 VCOUNT 归零并清 DISPSTAT bit0。
 - 全量从 **879 项**增至 **885 项检查，0 项失败**。
+
+## 2026-09-12 · 21-B9xi — ARM7 BIOS 保护值 + SOUNDBIAS（新增 9 项）
+
+- `[case 21-B9xi]`：ARM7 读 `0x04000308/09` = `0x1204`（直启值，melonDS
+  `ARM7BIOSProt`），**ARM9 侧同地址未映射读 0**；已非 0 时 ARM7 再写不生效。
+- 同用例覆盖 SOUNDBIAS：上电 `0x200`、半字写整体覆盖、只有 bit0-9 有效
+  （`0xFFFF` 写入读回 `0x3FF`）。
+- 全量从 **885 项**增至 **894 项检查，0 项失败**。

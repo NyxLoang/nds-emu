@@ -110,6 +110,10 @@ static void bus_dbg_watch(const bus_t *bus, uint32_t addr, int width,
 
 /* 宽写（16/32 位）拆分过程中抑制 8 位监视，避免同一次写打印多行。 */
 static int g_wide_write = 0;
+/* 宽读（16/32 位）组合过程中抑制 8 位监视，避免同一次读打印多行。 */
+static int g_wide_read = 0;
+
+static uint8_t bus_read8_core(const bus_t *bus, uint32_t addr);
 
 void bus_set_arm9_dtcm(bus_t *bus, int enabled, uint32_t base, uint32_t size)
 {
@@ -462,7 +466,16 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
     return 0;
 }
 
+/* 21-B9xp：读监视包装。宽读（16/32 位）期间抑制字节级打印，只按访问宽度打印一次。 */
 uint8_t bus_read8(const bus_t *bus, uint32_t addr)
+{
+    uint8_t v = bus_read8_core(bus, addr);
+    if (bus->diag && !g_wide_read)
+        bus_dbg_watch_read(bus, addr, 1, v);
+    return v;
+}
+
+static uint8_t bus_read8_core(const bus_t *bus, uint32_t addr)
 {
     /* IO 区间转发给 io 模块（真实寄存器语义），未挂 io 时读 0 兜底。
        active_is_arm7 让中断/FIFO CNT 等按访问者身份分流。 */
@@ -505,8 +518,13 @@ void bus_write8(bus_t *bus, uint32_t addr, uint8_t val)
    低地址字节是最低 8 位，高地址字节移到 <<8 位置（复习 docs/00b）。 */
 uint16_t bus_read16(const bus_t *bus, uint32_t addr)
 {
-    return (uint16_t)bus_read8(bus, addr)
-         | ((uint16_t)bus_read8(bus, addr + 1) << 8);
+    g_wide_read = 1;
+    uint16_t v = (uint16_t)bus_read8(bus, addr)
+               | ((uint16_t)bus_read8(bus, addr + 1) << 8);
+    g_wide_read = 0;
+    if (bus->diag)
+        bus_dbg_watch_read(bus, addr, 2, v);
+    return v;
 }
 
 /* 小端 16 位写：反向拆字节，最低字节落到低地址。 */
@@ -532,11 +550,21 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
     }
     /* 卡带数据端口 CARD_DATA（0x04100010）在 IO 区间外，需整体读（读自动推进地址） */
     if (addr == BUS_CARD_DATA)
-        return bus->io != NULL ? io_card_data_read32(bus->io) : 0xFFFFFFFFu;
-    return (uint32_t)bus_read8(bus, addr)
-         | ((uint32_t)bus_read8(bus, addr + 1) << 8)
-         | ((uint32_t)bus_read8(bus, addr + 2) << 16)
-         | ((uint32_t)bus_read8(bus, addr + 3) << 24);
+    {
+        uint32_t v = bus->io != NULL ? io_card_data_read32(bus->io) : 0xFFFFFFFFu;
+        if (bus->diag)
+            bus_dbg_watch_read(bus, addr, 4, v);
+        return v;
+    }
+    g_wide_read = 1;
+    uint32_t v = (uint32_t)bus_read8(bus, addr)
+               | ((uint32_t)bus_read8(bus, addr + 1) << 8)
+               | ((uint32_t)bus_read8(bus, addr + 2) << 16)
+               | ((uint32_t)bus_read8(bus, addr + 3) << 24);
+    g_wide_read = 0;
+    if (bus->diag)
+        bus_dbg_watch_read(bus, addr, 4, v);
+    return v;
 }
 
 /* 小端 32 位写：最低字节 → addr，最高字节 → addr+3。 */

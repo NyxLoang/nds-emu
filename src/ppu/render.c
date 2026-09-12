@@ -476,7 +476,12 @@ static void render_engine(const bus_t *bus, uint32_t *fb, int is_sub)
         return;
     }
     /* DISPCNT bit16-17 = 2：VRAM 显示模式（仅主引擎）。帧直接来自所选
-       VRAM bank（bit18-19），不做 2D 图层合成；FFXII 标题顶屏用此模式。 */
+       VRAM bank（bit18-19），不做 2D 图层合成；FFXII 标题顶屏用此模式。
+
+       21-B9xx 实验记录：曾按"melonDS 只用 mode3 特例"把这条分支去掉，
+       结果**帧 1900 输出没有任何变化**（本地 bank A 空 → 普通渲染也是黑），
+       但 `vramdisp bank*` 三项单测会挂 → 说明这条分支对应的是项目里
+       另一处已验收行为，暂时保留；条纹差异另寻来源。 */
     if (!is_sub && dmode == 2) {
         unsigned vbank = (dispcnt >> 18) & 3u;
         for (int py = 0; py < RENDER_SCREEN_H; py++) {

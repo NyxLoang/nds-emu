@@ -32,6 +32,20 @@ typedef struct arm_cpu arm_cpu_t; /* 前向声明：只操作 CPU 寄存器/总�
 /* ARM7 取指前调用：PC 命中低地址路径返回 1（已等价执行一格），否则返回 0。 */
 int bios7_low_step(arm_cpu_t *cpu);
 
+/* 21-B9yd：低地址路径统计（单测断言与长跑诊断共用）。 */
+typedef struct {
+    uint32_t swi_count[32]; /* SWI n 的调用次数 */
+    uint32_t real_body;     /* 交给真地址真实执行的函数体次数 */
+    uint32_t hle_body;      /* 镜像缺失时兜底走 C 版 HLE 的次数（应为 0） */
+    uint32_t unmodeled;     /* 低地址取指但未逐条建模、交给真实执行的次数 */
+} bios7_low_stats_t;
+
+void bios7_low_reset_stats(void);
+void bios7_low_get_stats(bios7_low_stats_t *out);
+
+/* 21-B9ye：低地址取指直方图（`NDS_BIOS7_HIST=1` 开启；与参考核 g_hist7 对照）。 */
+void bios7_low_dump_hist(const char *tag);
+
 /* 低地址路径里用到的地址（也供单测/日志引用）。 */
 #define BIOS7_ADDR_SWI_VEC       0x00000008u
 #define BIOS7_ADDR_IRQ_VEC       0x00000018u

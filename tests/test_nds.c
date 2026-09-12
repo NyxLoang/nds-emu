@@ -1478,12 +1478,26 @@ static void test_bios_crc16(nds_t *nds)
     CHECK_EQ("crc16 thumb pc", cpu->r[15], base + 0x202u);
     thumb_stop(nds);
 
-    /* ARM7 核（真机首次调用点就在 ARM7）也应能执行同一 SWI */
+    /* ARM7 核（真机首次调用点就在 ARM7）：21-B9yd 起，SWI 0x0E 在真地址
+       0x134C 上真实执行 FreeBIOS 字节码（此前是 C 版 HLE 直接算结果）。
+       FreeBIOS 的 ARM7 实现按**半字**推进（`lsrs r2,r2,#1` →
+       ⌊n/2⌋ 轮、每轮吃 2 字节），且先把初值 bic 成 0x0000FFFF。
+       8 字节 "12345678"（init=0xFFFF）→ **0x37DD**，正好等于独立的
+       CRC-16/ARC（反射 0xA001）结果——说明本地是把真实字节码算对了，
+       而不是"碰巧"；步数预算从 8 提到 256（真实执行需要 ~70 步）。 */
+    nds->cpu7->r[0] = 0xFFFFu;
+    nds->cpu7->r[1] = data;
+    nds->cpu7->r[2] = 8u;
+    run_cpu7(nds, base + 0x400, prog_arm, 2, base + 0x400, base + 0x404, 256);
+    CHECK_EQ("crc16 cpu7 result(8B)", nds->cpu7->r[0], 0x37DDu);
+
+    /* 奇数长度：FreeBIOS 只处理 ⌊n/2⌋ 个半字，第 9 个字节被忽略
+       （真机 BIOS 支持任意长度，这是 FreeBIOS 与真 BIOS 的已知差异）。 */
     nds->cpu7->r[0] = 0xFFFFu;
     nds->cpu7->r[1] = data;
     nds->cpu7->r[2] = 9u;
-    run_cpu7(nds, base + 0x400, prog_arm, 2, base + 0x400, base + 0x404, 8);
-    CHECK_EQ("crc16 cpu7 result", nds->cpu7->r[0], 0x4B37u);
+    run_cpu7(nds, base + 0x400, prog_arm, 2, base + 0x400, base + 0x404, 256);
+    CHECK_EQ("crc16 cpu7 odd-len tail ignored", nds->cpu7->r[0], 0x37DDu);
 }
 
 /* ---- 21-B9l：BIOS SWI 0x08 SoundBias（仅 ARM7；FFXII 启动在此卡住前） ---- */
@@ -1511,14 +1525,26 @@ static void test_bios_soundbias(nds_t *nds)
     CHECK_EQ("soundbias to 0x200",
              bus_read16(nds->bus, SND_SOUNDBIAS), 0x0200u);
 
-    /* r0=0 → 电平调到 0x000 */
+    /* 21-B9yd：SWI 0x08 现在在真地址 0x11C8 上真实执行 FreeBIOS 字节码：
+       该实现**不看 r0**，只做「当前值非 0 → 写回 0x200」。所以把当前值清零后
+       再调一次，电平保持 0x000（真实字节码的第二个分支）。 */
+    bus_write16(nds->bus, SND_SOUNDBIAS, 0x0000u);
     cpu->r[0] = 0u;
     cpu->cpsr |= CPSR_T;
     cpu_reset(cpu, base);
     a7_run_to_pc(cpu, base + 2u);
     CHECK_EQ("soundbias arm7 pc2", cpu->r[15], base + 2u);
-    CHECK_EQ("soundbias to 0x000",
+    CHECK_EQ("soundbias keeps 0x000",
              bus_read16(nds->bus, SND_SOUNDBIAS), 0x0000u);
+
+    /* FreeBIOS 口径：非 0 的电平会被**改写回 0x200**（与 r0 无关） */
+    bus_write16(nds->bus, SND_SOUNDBIAS, 0x0100u);
+    cpu->r[0] = 0u;
+    cpu->cpsr |= CPSR_T;
+    cpu_reset(cpu, base);
+    a7_run_to_pc(cpu, base + 2u);
+    CHECK_EQ("soundbias forces 0x200",
+             bus_read16(nds->bus, SND_SOUNDBIAS), 0x0200u);
 
     cpu->cpsr &= ~CPSR_T;
     nds->bus->active_is_arm7 = 0;
@@ -3055,6 +3081,9 @@ static void test_bios7_low_wait(nds_t *nds)
     power_halt_wake(&nds->io->power);
     cpu7->cpsr = ARM_MODE_SYS | CPSR_T | CPSR_I;
     cpu7->r[0] = 3;
+    cpu7->r[4] = 0xDEADBEEFu;                   /* 分发器要把调用方的 r4 压栈 */
+    cpu7->r[12] = 0x9ABCu;                      /* 同上：调用方的 r12 */
+    cpu7->r[14] = base + 2u;                    /* System lr（调用方返回地址） */
     cpu7->r13_sys = sp_sys; cpu7->r[13] = sp_sys;
     cpu7->r13_bank[2] = sp_svc;                 /* SVC 栈（分发器压帧用） */
     cpu_reset(cpu7, base);
@@ -3069,20 +3098,44 @@ static void test_bios7_low_wait(nds_t *nds)
     cpu_step(cpu7);                             /* 向量 → 0x1080 */
     CHECK_EQ("a7 vec to handler", cpu7->r[15], 0x00001080u);
 
-    cpu_step(cpu7);                             /* 分发器 */
-    CHECK_EQ("a7 disp body pc", cpu7->r[15], 0x0000115Cu);
-    CHECK_EQ("a7 disp mode sys", cpu7->cpsr & CPSR_MODE_MASK, ARM_MODE_SYS);
-    CHECK_EQ("a7 disp t cleared", cpu7->cpsr & CPSR_T, 0u);
-    CHECK_EQ("a7 disp i from spsr", cpu7->cpsr & CPSR_I, CPSR_I);
-    CHECK_EQ("a7 disp swi num", cpu7->r[12], 3u);
-    CHECK_EQ("a7 disp sp_svc -0x10", cpu7->r13_bank[2], sp_svc - 16u);
-    CHECK_EQ("a7 disp sp_sys -4", cpu7->r[13], sp_sys - 4u);
-    CHECK_EQ("a7 disp stk r4", a7_read32(nds, sp_svc - 12u), 0u);
-    CHECK_EQ("a7 disp stk svc lr", a7_read32(nds, sp_svc - 4u), base + 2);
-    CHECK_EQ("a7 disp stk spsr", a7_read32(nds, sp_svc - 16u),
+    /* 21-B9ye：分发器逐条执行（0x1080-0x10A8，共 11 条）。此前把整段合成
+       一步执行、PC 直接跳到函数体；参考核直方图显示它逐条走这 11 个地址，
+       且 IRQ 能插在 0x109C-0x10A8 之间。下面逐条断言副作用。 */
+    cpu_step(cpu7);                             /* 0x1080 push {r4,r12,lr} */
+    CHECK_EQ("a7 disp1 pc", cpu7->r[15], 0x00001084u);
+    CHECK_EQ("a7 disp1 sp_svc -12", cpu7->r[13], sp_svc - 12u); /* 仍在 SVC 模式 */
+    CHECK_EQ("a7 disp1 stk r4", a7_read32(nds, sp_svc - 12u), 0xDEADBEEFu);
+    CHECK_EQ("a7 disp1 stk r12", a7_read32(nds, sp_svc - 8u), 0x9ABCu);
+    CHECK_EQ("a7 disp1 stk svc lr", a7_read32(nds, sp_svc - 4u), base + 2);
+    CHECK_EQ("a7 disp1 cost", cpu7->step_cycles, 3u);
+    cpu_step(cpu7);                             /* 0x1084 mrs r4, spsr */
+    CHECK_EQ("a7 disp2 pc", cpu7->r[15], 0x00001088u);
+    CHECK_EQ("a7 disp2 r4=spsr", cpu7->r[4], ARM_MODE_SYS | CPSR_T | CPSR_I);
+    cpu_step(cpu7);                             /* 0x1088 push {r4} */
+    CHECK_EQ("a7 disp3 sp_svc -16", cpu7->r[13], sp_svc - 16u);
+    CHECK_EQ("a7 disp3 stk spsr", a7_read32(nds, sp_svc - 16u),
              ARM_MODE_SYS | CPSR_T | CPSR_I);
-    CHECK_EQ("a7 disp stk sys lr", a7_read32(nds, sp_sys - 4u),
-             cpu7->r[14]);                     /* 压的是调用时的 System lr */
+    cpu_step(cpu7);                             /* 0x108C and r4,#0x80 */
+    CHECK_EQ("a7 disp4 r4 and", cpu7->r[4], CPSR_I);
+    cpu_step(cpu7);                             /* 0x1090 orr r4,#0x1f */
+    CHECK_EQ("a7 disp5 r4 orr", cpu7->r[4], CPSR_I | ARM_MODE_SYS);
+    cpu_step(cpu7);                             /* 0x1094 ldrb r12,[lr,#-2] */
+    CHECK_EQ("a7 disp6 pc", cpu7->r[15], 0x00001098u);
+    CHECK_EQ("a7 disp6 swi num", cpu7->r[12], 3u);
+    cpu_step(cpu7);                             /* 0x1098 msr cpsr_fc,r4 */
+    CHECK_EQ("a7 disp7 mode sys", cpu7->cpsr & CPSR_MODE_MASK, ARM_MODE_SYS);
+    CHECK_EQ("a7 disp7 svc bank kept", cpu7->r13_bank[2], sp_svc - 16u);
+    CHECK_EQ("a7 disp7 t cleared", cpu7->cpsr & CPSR_T, 0u);
+    CHECK_EQ("a7 disp7 i from spsr", cpu7->cpsr & CPSR_I, CPSR_I);
+    cpu_step(cpu7);                             /* 0x109C push {lr}（System 栈） */
+    CHECK_EQ("a7 disp8 sp_sys -4", cpu7->r[13], sp_sys - 4u);
+    CHECK_EQ("a7 disp8 stk sys lr", a7_read32(nds, sp_sys - 4u), 0x02000002u);
+    cpu_step(cpu7);                             /* 0x10A0 cmp r12,#0x20 */
+    CHECK_EQ("a7 disp9 n set", (cpu7->cpsr >> 31) & 1u, 1u);
+    cpu_step(cpu7);                             /* 0x10A4 movge（N!=V → 不执行） */
+    CHECK_EQ("a7 disp10 num kept", cpu7->r[12], 3u);
+    cpu_step(cpu7);                             /* 0x10A8 ldr pc,[pc,r12,lsl#2] */
+    CHECK_EQ("a7 disp body pc", cpu7->r[15], 0x0000115Cu);
 
     cpu_step(cpu7);                             /* subs r0,#1 */
     CHECK_EQ("a7 loop r0-1", cpu7->r[0], 2u);
@@ -3135,7 +3188,7 @@ static void test_bios7_low_halt_irq(nds_t *nds)
     cpu_reset(cpu7, base);
 
     exec_set_trace(0);
-    for (int i = 0; i < 12 && cpu7->r[15] != 0x00001158u; i++)
+    for (int i = 0; i < 32 && cpu7->r[15] != 0x00001158u; i++)
         cpu_step(cpu7);
     CHECK_EQ("a7 halt pc", cpu7->r[15], 0x00001158u);
     CHECK_EQ("a7 halt pending", power_halt_pending(&nds->io->power), 1);

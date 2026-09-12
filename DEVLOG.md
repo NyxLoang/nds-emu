@@ -25,6 +25,8 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-12 | 21-B9ye（代码/测试/对照） | BIOS/CPU | **ARM7 低地址「参考级」实证**：SWI 分发器 0x1080-0x10A8 逐条拆分（IRQ 可像参考核一样插在 0x109C-0x10A8 之间）+ 两边低地址取指直方图对照 —— 900 帧**两边各命中 93 个低地址、集合完全相同**；发现余下差异是「本地 SWI 调用次数偏多（音频查表 +33%）」，留给下一步；921 项 0 失败 | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
+| 2026-09-12 | 21-B9yd（代码/测试） | BIOS/总线 | ARM7 低地址换装**完整 FreeBIOS 镜像**（0x4000，BSD-2 同源）+ 未逐条建模的 SWI 函数体**在真地址执行真实字节**（此前 C 版 HLE 直接跳 swi_complete）；CRC16 真执行结果 0x37DD = 独立 CRC-16/ARC，证明字节码算对；顺带纠正 SoundBias/CRC16 两条测试口径（FreeBIOS 语义）；909 项 0 失败 | [bios](src/bios/bioslog.md) · [bus](src/bus/buslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9yc（代码/测试） | 显示 | RGB555→888 换算对齐参考核（`(c5<<3)|(c5>>3)`，白 0xF8→0xFB）+ 28 条颜色期望逐条更新：帧 100 逐像素相同率 0%→**81.9%**（MAD 59.1→51.5），907 项 0 失败 | [ppu](src/ppu/ppulog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9xc（代码/测试） | IO/主循环 | VBlank 时序对齐真机（第 192 行触发、帧边界结束）：IF 模式与参考一致，标题 frame1900 仍逐像素一致，885 项 0 失败 | [io](src/io/iolog.md) 路 [main](src/mainlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9xa（代码/测试） | IO | IME 只保留 bit0（dump 与参考一致）+ 声音驱动诊断 `io: snd-cnt-writes`：879 项 0 失败 | [io](src/io/iolog.md) 路 [21](docs/21-rom-bringup.md) |

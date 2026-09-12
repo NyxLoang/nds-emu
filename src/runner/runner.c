@@ -52,6 +52,7 @@ static void runner_apply_watch(nds_t *nds)
 #include "ppu/render.h"   /* render_frame：双屏纯软件出图 */
 #include "snd/snd.h"      /* snd_advance / snd_host_render_active（21-B9wu） */
 #include "io/rtc.h"       /* rtc_advance_seconds（21-B9wx） */
+#include "bios/bios7_low.h" /* bios7_low_dump_hist（21-B9ye） */
 #include "runner.h"
 #include "timing/timing.h"
 
@@ -688,6 +689,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         free(fb_top);
         free(fb_bot);
     }
+    bios7_low_dump_hist("end"); /* 21-B9ye：低地址取指直方图（与参考核 hist7 对照） */
     runner_destroy(r);
     fflush(stdout);
 }

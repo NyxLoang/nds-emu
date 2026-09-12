@@ -493,10 +493,13 @@ static uint8_t bus_read8_core(const bus_t *bus, uint32_t addr)
        active_is_arm7 让中断/FIFO CNT 等按访问者身份分流。 */
     if (addr >= BUS_IO_BASE && addr - BUS_IO_BASE < BUS_IO_SIZE)
         return bus->io != NULL ? io_read8(bus->io, addr, bus->active_is_arm7) : 0;
-    /* 21-B9wt：ARM7 低地址 0x0000-0x3FFF 是 BIOS ROM。本模拟器用 HLE 提供行为，
-       但向量表/SWI 函数表这些“会被读的字节”要与参考镜像一致：游戏恢复
-       BIOS 内部现场后，SWI 分发器会从那里取编号字节（0x08 处的 `b swi_handler`
-       在 [lr-2] 读到 0x04）。 */
+    /* ARM7 低地址 0x0000-0x3FFF 是 BIOS ROM：整段返回 FreeBIOS 镜像字节
+       （21-B9wt 起提供「会被读的字节」，21-B9yd 起换成完整 0x4000 镜像）。
+       这样两类路径与参考核一致：
+       <1> 游戏恢复 BIOS 内部现场后，SWI 分发器从 [lr-2] 取编号字节
+           （0x08 处的 `b swi_handler` 在 [lr-2] 读到 0x04）；
+       <2> 未被 bios7_low.c 逐条建模的 SWI 函数体（Div/CpuSet/CRC16/音频查表…）
+           以及异常向量，直接在真地址上取指并执行真实字节。 */
     if (bus->active_is_arm7 && addr < 0x4000u) {
         uint8_t v;
         if (bios7_image_read8(addr, &v))

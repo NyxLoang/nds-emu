@@ -859,3 +859,28 @@
   `0xFF00F8F8→0xFF00FBFB`（4 个字面量在文件中的出现次数与失败条数同为 28，
   替换范围可证）。B9yb 那次“批量按 `v|v>>6` 重写”误伤 13 条的问题不再重现。
 - 全量保持 **907 项检查，0 项失败**。
+
+## 2026-09-12 · 21-B9yd — ARM7 真实字节码执行带来的两条口径改写（909 项）
+
+- 背景：ARM7 低地址换成完整 FreeBIOS 镜像后，未逐条建模的 SWI
+  （Div/CpuSet/GetCRC16/SoundBias…）在**真地址上执行真实字节**，
+  测试里两条期望值编码的是旧 C 版 HLE 语义，需要按参考核口径改写。
+- `crc16 cpu7 result(8B)`：8 字节 "12345678"(init=0xFFFF) → **0x37DD**
+  （= 独立 CRC-16/ARC；证明本地把真实字节码算对）。步数预算 8→256。
+- `crc16 cpu7 odd-len tail ignored`：FreeBIOS 的 ARM7 实现按半字推进
+  （`lsrs r2,r2,#1` → ⌊n/2⌋ 轮），9 字节只处理前 8 字节 → 同样 0x37DD。
+- `soundbias keeps 0x000` / `soundbias forces 0x200`：真实字节码不看 r0，
+  「当前值非 0 → 写回 0x200」；把电平清零后再调用则保持 0x000。
+- 全量从 **907 项**增至 **909 项检查，0 项失败**。
+
+## 2026-09-12 · 21-B9ye — SWI 分发器逐条化（921 项）
+
+- `[case 21-B9wt]` 的分发器断言从「一步跳到函数体」扩展为 **11 步逐条断言**：
+  0x1080 push{r4,r12,lr}（SVC 栈三字 + sp-12）→ 0x1084 `mrs r4,spsr` →
+  0x1088 push{r4}（sp-16、栈上 SPSR）→ 0x108C `and #0x80` → 0x1090 `orr #0x1f`
+  → 0x1094 `ldrb r12,[lr,#-2]`（SWI 编号）→ 0x1098 `msr cpsr_fc`（切 System、
+  T 清 0、I 取自 SPSR、SVC bank sp 保留）→ 0x109C push{lr}（System 栈）→
+  0x10A0 `cmp r12,#0x20`（N=1）→ 0x10A4 `movge` 不执行 → 0x10A8 `ldr pc,[pc,r12,lsl#2]`
+  落到 0x115C。
+- Halt/IRQ 用例的预跑步数上限 12→32（分发器变长），其余断言不变。
+- 全量从 **909 项**增至 **921 项检查，0 项失败**。

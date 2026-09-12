@@ -178,3 +178,68 @@ BIOS 口径接到 CustomHaltPost(0x1FA4)；② 低地址只影射向量表/SWI �
 Halt 暂停 + IRQ 优先打断顺序 + 0x1FB0/0x1FC0 帧），全量 **860 项检查 0 失败**；
 真 ROM 900 帧 ARM7 稳定停在 BIOS Halt `0x1158 cpsr=8000001F`，标题段
 （f=300 `disp=00161F10`）与 2600 帧终点（ARM9=0200957C）不回归。
+
+## 2026-09-12 · 21-B9yd — 完整 FreeBIOS 镜像 + 未建模函数体真地址执行
+
+**动机**：B9wt 的「已知偏差 ②」只影子化向量表与 SWI 表，其余低地址读 0；
+未被逐条建模的 SWI 函数体则是在分发器里调 C 版 HLE 算完直接跳 `swi_complete`
+——结果对，但 BIOS 内部的 PC/lr/栈帧/周期轨迹与参考核不同，IRQ 落在函数体
+内部时保存的现场也就不一样。
+
+**改动**：
+
+- 新增 `src/bios/bios7_rom.h`（由 `build/gen_bios7_rom.py` 生成，源是 melonDS
+  同一份 BSD-2 许可的 `bios_ntr_arm7`）：完整 0x4000 字节镜像，有效 0x2030，
+  其余补 0；`bios7_image.c` 改为整段提供，不再只影子向量表/SWI 表。
+- `bios7_low.c` 分发器：未建模的函数体**在真地址上执行真实字节**
+  （`0x11E4` Div、`0x1240` CpuSet、`0x134C` GetCRC16、`0x1CA0` GetPitchTable、
+  `0x1FC8` GetVolumeTable、`0x1488` LZ77…），C 版 HLE 只在镜像缺失时兜底。
+- 新增统计 `bios7_low_stats_t`（每个 SWI 号的调用次数、真地址执行次数、
+  HLE 兜底次数、未建模取指次数）与 `bios7_low_reset_stats/get_stats`。
+
+**实证（本步顺带纠正了两条测试期望的口径）**：真实执行后
+`[case 21-B9a]` 的 ARM7 分支给出 **0x37DD**（8 字节 "12345678"），
+正好等于独立实现的 CRC-16/ARC——说明本地是把真实字节码算对了；
+而 FreeBIOS 的 ARM7 实现按**半字**推进（`lsrs r2,r2,#1` → ⌊n/2⌋ 轮），
+奇数字节长度的尾巴会被忽略（真机 BIOS 支持任意长度，属 FreeBIOS 差异）。
+`SWI 0x08 SoundBias` 的真字节码也**不看 r0**：当前值非 0 就写回 0x200，
+与旧 C 版 HLE（按 r0 写电平）语义不同 ⇒ 测试改为断言 FreeBIOS/参考核口径。
+
+## 2026-09-12 · 21-B9ye — 分发器逐条化 + 与参考核逐地址对照（93/93）
+
+**动机**：B9yd 之后低地址行为已经「真地址执行」，但覆盖范围没有证据。
+给两边都加**低地址取指直方图**（本地 `bios7_low_dump_hist`，`NDS_BIOS7_HIST=1`
+开启、`NDS_BIOS7_HIST_OUT=<path>` 另存 4096×u32；参考核在同帧数下 dump
+`hist7: pc=… count=…`），跑同样帧数后逐地址比对。
+
+**首次对照（6000 帧）发现两处差异**：
+
+1. 本地缺 **0x1084-0x10A8**（分发器中间 10 条）——旧实现把 0x1080 整段
+   合成一步执行，PC 直接从 0x1080 跳到函数体。差别只在「IRQ 落在分发器
+   中间」时可见：0x1098 的 `msr` 之后 I 位取自调用方 SPSR，若调用方允许
+   IRQ，参考核能在 0x109C-0x10A8 之间插入中断，保存的现场 PC 就是这些地址。
+2. 其余 83 个地址两边完全一致（含 GetCRC16 的 112 次循环、CpuSet 单次调用、
+   Halt 体 7.3 万次、IRQ 出入口 0x1FB0-0x1FC4、音频查表 0x1CA0/0x1FC8）。
+
+**改动**：把分发器拆成 11 条独立指令等价（0x1080 push{r4,r12,lr} → 0x1084
+`mrs r4,spsr` → 0x1088 push{r4} → 0x108C `and #0x80` → 0x1090 `orr #0x1f` →
+0x1094 `ldrb r12,[lr,#-2]` → 0x1098 `msr cpsr_fc`（切 System、I 取自 SPSR）→
+0x109C push{lr} → 0x10A0 `cmp r12,#0x20` → 0x10A4 `movge r12,#1` →
+0x10A8 `ldr pc,[pc,r12,lsl#2]`），每条给 1-4 周期。
+
+**对照结果（900 帧，本地 vs melonDS+FreeBIOS）**：
+
+```
+distinct ref=93 loc=93   (集合完全相同：only-ref/only-loc 均为空)
+0x18 IRQ 向量   ref=11237  loc=11267  (+0.3%)
+0x1FB0-0x1FC4   ref=11237  loc=11267  (+0.3%)
+0x11xx Halt 体  ref=10592  loc=10889  (+2.8%)
+0x1368 CRC 循环 ref=112    loc=112    (完全一致)
+0x08  SWI 向量  ref=39823  loc=42890  (+7.7%)  ← 余下差异见下
+```
+
+**余下的已知差异（不是低地址路径问题）**：本地 ARM7 的 SWI 调用次数略多，
+且随时间累积（900 帧 +8%、6000 帧 +33%），来源几乎全是
+`0x1CA0 GetPitchTable` / `0x1FC8 GetVolumeTable` 这一对音频查表
+（6000 帧：本地 235,937 次 vs 参考 168,298 次）。这是游戏侧「声音/音乐
+节拍」跑得比参考快，属于定时器/声音推进口径的分歧，下一步据此排查。

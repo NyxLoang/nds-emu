@@ -1,7 +1,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include "bios7_low.h"
+#include "bios7_image.h"
 #include "bios.h"
 #include "cpu/cpu.h"
 #include "cpu/exec.h"
@@ -120,9 +122,94 @@ static const uint32_t s_swi_table[31] = {
 #define A7_IRQ_POP          0x00001FC0u
 #define A7_IRQ_SUBS_PC      0x00001FC4u
 
+/* 21-B9ye：SWI 分发器逐条地址（此前整段合成一步执行） */
+#define A7_SWI_PUSH         0x00001080u
+#define A7_SWI_MRS          0x00001084u
+#define A7_SWI_PUSH_SPSR    0x00001088u
+#define A7_SWI_AND          0x0000108Cu
+#define A7_SWI_ORR          0x00001090u
+#define A7_SWI_LDRB         0x00001094u
+#define A7_SWI_MSR          0x00001098u
+#define A7_SWI_PUSH_LR      0x0000109Cu
+#define A7_SWI_CMP          0x000010A0u
+#define A7_SWI_MOVGE        0x000010A4u
+#define A7_SWI_LDRPC        0x000010A8u
+
 /* 诊断：低地址入口/异常/返回桩的日志只打有限次，避免长跑刷屏。 */
 static int g_diag_count;
 static int g_swi_log;
+
+/* 21-B9yd：低地址路径统计（单测与长跑诊断共用）。
+   swi_count[n]  —— SWI n 被调用的次数（在分发器处统计）；
+   real_body     —— 交给真地址真实执行的函数体次数；
+   hle_body      —— 镜像缺失时仍走 C 版 HLE 的次数（正常应为 0）；
+   unmodeled     —— 低地址取指但未被本模块逐条建模的次数（真实执行）。 */
+static uint32_t s_swi_count[32];
+static uint32_t s_real_body;
+static uint32_t s_hle_body;
+static uint32_t s_unmodeled;
+
+void bios7_low_reset_stats(void)
+{
+    for (unsigned i = 0; i < 32u; i++)
+        s_swi_count[i] = 0;
+    s_real_body = s_hle_body = s_unmodeled = 0;
+}
+
+/* 21-B9ye：低地址取指直方图（按字地址），与参考核 ARM.cpp 里的 g_hist7 一一对应。
+   `NDS_BIOS7_HIST=0` 关闭；`NDS_BIOS7_HIST_OUT=<path>` 另存 4096 个 u32（小端）。
+   用途：跑同样的帧数后与参考核的 hist7 对比，检查两边「进过哪些低地址」是否一致。 */
+static uint32_t s_pc_hist[0x4000 / 4];
+static int s_hist_state; /* 0=未判定，1=开，-1=关 */
+
+static int hist_enabled(void)
+{
+    if (s_hist_state == 0) {
+        const char *e = getenv("NDS_BIOS7_HIST");
+        s_hist_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+    }
+    return s_hist_state == 1;
+}
+
+void bios7_low_dump_hist(const char *tag)
+{
+    if (!hist_enabled())
+        return;
+    unsigned words = 0;
+    unsigned long long total = 0;
+    for (unsigned i = 0; i < 0x4000u / 4u; i++) {
+        if (s_pc_hist[i]) {
+            words++;
+            total += s_pc_hist[i];
+        }
+    }
+    printf("bios7-hist(%s): words=%u total=%llu\n", tag != NULL ? tag : "-",
+           words, total);
+    for (unsigned i = 0; i < 0x4000u / 4u; i++) {
+        if (s_pc_hist[i])
+            printf("bios7-hist: pc=%08X count=%u\n", i * 4u, s_pc_hist[i]);
+    }
+    const char *path = getenv("NDS_BIOS7_HIST_OUT");
+    if (path != NULL) {
+        FILE *f = fopen(path, "wb");
+        if (f != NULL) {
+            fwrite(s_pc_hist, sizeof(uint32_t), 0x4000u / 4u, f);
+            fclose(f);
+            printf("bios7-hist: wrote %s\n", path);
+        }
+    }
+}
+
+void bios7_low_get_stats(bios7_low_stats_t *out)
+{
+    if (out == NULL)
+        return;
+    for (unsigned i = 0; i < 32u; i++)
+        out->swi_count[i] = s_swi_count[i];
+    out->real_body = s_real_body;
+    out->hle_body = s_hle_body;
+    out->unmodeled = s_unmodeled;
+}
 
 /* 诊断环：记录最近 16 次低地址步入的 (PC, CPSR)，异常/死循环时回放，
    便于定位「是哪条 return/IRQ 出入口把 PC 带进了向量表」。 */
@@ -214,6 +301,9 @@ int bios7_low_step(arm_cpu_t *cpu)
     s_ring_sp[s_ring_n & 15u] = cpu->r[13];
     s_ring_n++;
 
+    if (hist_enabled())
+        s_pc_hist[(pc >> 2) & 0x3FFFu]++;
+
     switch (pc) {
     /* ---------- 异常向量（低地址 0x0000-0x001C）---------- */
     case BIOS7_ADDR_SWI_VEC:                 /* b swi_handler */
@@ -257,47 +347,81 @@ int bios7_low_step(arm_cpu_t *cpu)
         cpu->step_cycles = 2;
         return 1;
 
-    /* ---------- SWI 分发器（0x1080）----------
+    /* ---------- SWI 分发器（0x1080-0x10A8，逐条等价）----------
        真机指令序列：
          push {r4,r12,lr} / mrs r4,SPSR / push {r4}
          r4=(SPSR&0x80)|0x1F / r12=byte[lr-2] / msr CPSR_fc,r4
-         push {lr}(System) / if(r12>=0x20) r12=1 / ldr pc,[pc,r12,lsl#2] */
-    case BIOS7_ADDR_SWI_HANDLER: {
-        uint32_t spsr = cpu->spsr[2];        /* SPSR_svc = 调用方 CPSR */
-        uint32_t lr_in = cpu->r[14];         /* SVC lr = SWI 之后返回地址 */
-        uint32_t sp = cpu->r[13];            /* SVC 栈 */
-        /* stmdb sp!, {r4, r12, lr}：低编号寄存器放低地址 */
+         push {lr}(System) / if(r12>=0x20) r12=1 / ldr pc,[pc,r12,lsl#2]
+
+       21-B9ye：此前把 0x1080 整段合成一步执行（PC 直接从 0x1080 跳到函数体）。
+       参考核的低地址取指直方图显示它逐条走这 11 个地址，差别只在「IRQ 落在
+       分发器中间」时才可见：0x1098 的 msr 之后 I 位取自调用方 SPSR，若调用方
+       允许 IRQ，参考核能在 0x109C-0x10A8 之间插入中断，保存的现场 PC 就是这些
+       地址之一。逐条拆开后本地在同样的边界上也能被插入中断（实测直方图对齐）。 */
+    case A7_SWI_PUSH: {                      /* push {r4,r12,lr} */
+        uint32_t sp = cpu->r[13];
         bus_write32(bus, sp - 12u, cpu->r[4]);
         bus_write32(bus, sp - 8u,  cpu->r[12]);
-        bus_write32(bus, sp - 4u,  lr_in);
-        bus_write32(bus, sp - 16u, spsr);
-        cpu->r[13] = sp - 16u;
-
-        /* SWI 编号 = 指令字节（ARM: imm24>>16 / Thumb: imm8），真机用
-           ldrb r12,[lr,#-2] 取；lr-2 正好落在两种编码的编号字节上。 */
-        uint32_t comment = bus_read8(bus, lr_in - 2u);
+        bus_write32(bus, sp - 4u,  cpu->r[14]);
+        cpu->r[13] = sp - 12u;
+        cpu->r[15] = A7_SWI_MRS;
+        cpu->step_cycles = 3;
+        return 1;
+    }
+    case A7_SWI_MRS:                         /* mrs r4, spsr（SPSR_svc = 调用方 CPSR） */
+        cpu->r[4] = cpu->spsr[2];
+        cpu->r[15] = A7_SWI_PUSH_SPSR;
+        return 1;
+    case A7_SWI_PUSH_SPSR:                   /* push {r4} */
+        push32(cpu, cpu->r[4]);
+        cpu->r[15] = A7_SWI_AND;
+        cpu->step_cycles = 2;
+        return 1;
+    case A7_SWI_AND:                         /* and r4, r4, #0x80 */
+        cpu->r[4] &= 0x80u;
+        cpu->r[15] = A7_SWI_ORR;
+        return 1;
+    case A7_SWI_ORR:                         /* orr r4, r4, #0x1f */
+        cpu->r[4] |= 0x1Fu;
+        cpu->r[15] = A7_SWI_LDRB;
+        return 1;
+    case A7_SWI_LDRB: {                      /* ldrb r12, [lr, #-2]：取 SWI 编号 */
+        uint32_t comment = bus_read8(bus, cpu->r[14] - 2u);
+        uint32_t spsr = cpu->spsr[2];
+        cpu->r[12] = comment;
+        s_swi_count[comment & 31u]++;
         if (bus->diag && g_swi_log < 24) {
             g_swi_log++;
             diag("bios7: swi 0x%02X caller=%08X lr=%08X cpsr=%08X\n",
-                 comment, lr_in - ((spsr & CPSR_T) ? 2u : 4u), lr_in, spsr);
+                 comment, cpu->r[14] - ((spsr & CPSR_T) ? 2u : 4u),
+                 cpu->r[14], spsr);
         }
-
-        /* msr CPSR_fc, (SPSR&0x80)|0x1F：只写控制位+标志位
-           → 模式 System、T/F=0、I 取自 SPSR、N/Z/C/V 清 0 */
-        cpu->r[4] = (spsr & CPSR_I) | ARM_MODE_SYS;
+        cpu->r[15] = A7_SWI_MSR;
+        cpu->step_cycles = 2;
+        return 1;
+    }
+    case A7_SWI_MSR:                         /* msr cpsr_fc, r4：切 System、I 取自 SPSR */
         exec_apply_cpsr(cpu, cpu->r[4]);
-
-        push32(cpu, cpu->r[14]);             /* System 模式的 lr */
-
-        /* 真机 `cmp r12,#0x20`：标志要按 (n - 0x20) 更新（参考核在函数体入口
-           看到 N=1，因为 SWI 编号 < 0x20 使差为负）；随后的 movge 用它选 1。 */
-        flags_sub(cpu, comment, 0x20u, comment - 0x20u);
-        if (comment >= 0x20u)                /* 真机 movge r12,#1 */
-            comment = 1u;
-        cpu->r[12] = comment;
-
+        cpu->r[15] = A7_SWI_PUSH_LR;
+        return 1;
+    case A7_SWI_PUSH_LR:                     /* push {lr}（System 模式的 lr） */
+        push32(cpu, cpu->r[14]);
+        cpu->r[15] = A7_SWI_CMP;
+        cpu->step_cycles = 2;
+        return 1;
+    case A7_SWI_CMP:                         /* cmp r12, #0x20（N=1：编号 <0x20） */
+        flags_sub(cpu, cpu->r[12], 0x20u, cpu->r[12] - 0x20u);
+        cpu->r[15] = A7_SWI_MOVGE;
+        return 1;
+    case A7_SWI_MOVGE:                       /* movge r12, #1 */
+        if (((cpu->cpsr >> 31) & 1u) == ((cpu->cpsr >> 28) & 1u))
+            cpu->r[12] = 1u;
+        cpu->r[15] = A7_SWI_LDRPC;
+        return 1;
+    case A7_SWI_LDRPC: {                     /* ldr pc, [pc, r12, lsl #2] */
+        uint32_t comment = cpu->r[12];
         uint32_t body = swi_body_addr(comment);
-        cpu->step_cycles = 6;
+        cpu->step_cycles = 4;
         if (body == BIOS7_ADDR_SWI_COMPLETE) {
             /* 无效号：真机表项直接指向 swi_complete，等于空操作 */
             cpu->r[15] = body;
@@ -307,11 +431,24 @@ int bios7_low_step(arm_cpu_t *cpu)
             cpu->r[15] = body;
             return 1;
         }
-        /* 其它函数：交给 C 版 HLE 算出 r0-r3 结果，再走 swi_complete 收尾，
-           这样入栈/切模式/恢复 SPSR 的副作用与真机一致。 */
-        (void)bios_dispatch(comment, cpu);
-        cpu->r[15] = BIOS7_ADDR_SWI_COMPLETE;
-        return 1;
+        /* 21-B9yd：其它函数体**在真地址上真实执行**（镜像已完整落地）。
+           参考核执行的正是 0x11E4（Div）/0x1240（CpuSet）/0x1488（LZ77）等
+           真实字节；本地也走同一条路径，于是函数体内部的 PC/lr/栈帧/周期
+           数与参考核一致（此前是「在分发器里调用 C 版 HLE 算完，直接跳
+           swi_complete」，PC 轨迹与参考核不同——IRQ 落在函数体内部时保存的
+           现场也就不一样）。C 版 HLE 只在镜像缺失时兜底。 */
+        {
+            uint8_t probe;
+            if (bios7_image_read8(body, &probe)) {
+                s_real_body++;
+                cpu->r[15] = body;
+                return 1;
+            }
+            s_hle_body++;
+            (void)bios_dispatch(comment, cpu);
+            cpu->r[15] = BIOS7_ADDR_SWI_COMPLETE;
+            return 1;
+        }
     }
 
     /* ---------- SWI 6 Halt：mov r0,#0x04000000 / mov r2,#0x80 / strb ---------- */
@@ -662,6 +799,9 @@ int bios7_low_step(arm_cpu_t *cpu)
     }
 
     default:
+        /* 21-B9yd：低地址里未被逐条建模的地址（例如 SWI 函数体内部、
+           函数的循环体）交给 CPU 用真实镜像字节执行；这里只计数。 */
+        s_unmodeled++;
         return 0;                            /* 不在本模块覆盖范围内 */
     }
 }

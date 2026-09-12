@@ -2897,3 +2897,26 @@ case 0x04000060:
 `DISPCNT=0x00121F10` 正是该模式）：本地 `render_engine` 的 VRAM 显示分支
 （`render.c` 里 `dmode==2` 直接读所选 bank）可能选错了 bank/格式，
 下一步对照两边同一帧的 `VRAMCNT` 与帧缓冲来源。
+
+**同轮追加验证：VRAM 两边完全一致（9 个 bank、0 差异半字）**
+
+给参考 harness 加了帧 1900/2000 的 VRAM dump（此前只有 1000-1500）后：
+
+```
+ref_vram_f1900.bin vs build\loc1900d_vram.bin
+  bank A/B/C/D/E/F/G/H/I  → 差异半字数全部 = 0
+```
+
+也就是说：**同样的 VRAM、几乎同样的寄存器，参考核渲染出"黑+青色 50% 竖条纹"，
+本地渲染成纯黑**。两边 `DISPCNT` 都是 `0x00121F10`（bit16-17 = 2 = VRAM 显示模式、
+bank 选择位 = 0），而两边 bank A 都是全 0。
+
+**结论**：差异出在**显示模式 2（VRAM/主存显示）的渲染路径本身**——
+melonDS 在这种模式下并不是"直接读 DISPCNT bit18-19 选的 bank 前 98304 字节"
+（否则两边都会是黑的），需要查 melonDS 的 LCD 源 bank（`VRAMMap_LCDC`）
+与 `GPU2D::UpdateRegisters` 里 mode 2/3 的实际取样方式；本地 `render.c`
+的 `dmode==2` 分支要按同一口径重写。
+
+**下一步**：读 melonDS `GPU2D::UpdateRegisters`/`GPU2D_Soft` 中 dispcnt mode 2/3
+的取样（含 LCD 源 bank 与像素格式），把本地 VRAM 显示分支改成同口径，再跑
+1900 帧逐像素回归。

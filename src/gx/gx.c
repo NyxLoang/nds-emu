@@ -517,9 +517,30 @@ void gx_advance(gx_t *g, uint32_t cycles)
     /* 21-B9yi(续22)：3D 引擎按节拍消费 FIFO 里的字（约 4 个系统周期 1 字，
        与 melonDS 的 3D 命令周期同一量级）。模式 7 DMA 靠这个腾出空位推进。 */
     if (g->fifo_words != 0) {
-        uint32_t drain = cycles / 4u;
-        if (drain > g->fifo_words) drain = g->fifo_words;
-        g->fifo_words -= drain;
+        /* NDS_GXDRAIN=N：校准用（默认 4 周期/字）。改这个值相当于调 3D 引擎
+           消费 FIFO 的速度，直接影响模式 7 DMA 的完成时机与游戏节拍。 */
+        static uint32_t div = 0xFFFFFFFFu;
+        if (div == 0xFFFFFFFFu) {
+            const char *e = getenv("NDS_GXDRAIN");
+            /* 默认 128：实测标定的最优点（见 docs/21 续23）。
+               4/16 太快 ⇒ 本地跑在参考核前面（f=2120 起内容分歧）；
+               128 与 256 都能把「逐帧 100% 一致」保持到 f=2140，256 之后会整体拖慢。 */
+            div = (e != NULL && e[0] != '\0') ? (uint32_t)atoi(e) : 128u;
+            if (div == 0) div = 128u;
+        }
+        uint32_t drain = cycles / div;
+        /* 余数必须累加（ARM9 每步只给 1-2 个周期，`cycles/div` 会恒为 0）。 */
+        g->fifo_drain_acc += cycles;
+        uint32_t drain2 = g->fifo_drain_acc / div;
+        if (drain2 != 0) {
+            g->fifo_drain_acc -= drain2 * div;
+            if (drain2 > g->fifo_words) {
+                drain2 = g->fifo_words;
+                g->fifo_drain_acc = 0;   /* FIFO 已空：余数清零，避免“攒出”一次突发 */
+            }
+            g->fifo_words -= drain2;
+        }
+        (void)drain;
     }
     if (g->busy_cycles == 0)
         return;

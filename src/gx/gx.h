@@ -98,6 +98,11 @@ typedef struct gx {
        电平位恒为「空」，与参考核不同。 */
     uint32_t fifo_words;
 #define GX_FIFO_CAP_WORDS 224u
+    /* 21-B9yi(续23)：FIFO 消费的**周期余数累加器**。ARM9 每步只推进 1-2 个周期，
+       若直接 `cycles/div` 取整会永远得 0 ⇒ FIFO 永不消费 ⇒ 模式 7 DMA 永远卡住
+       （实测 f=2141 起 ARM9 在 0x0202350C 三指令小循环里死等 10+ 帧）。
+       与「卡带时钟用满周期预算」是同一类修正。 */
+    uint32_t fifo_drain_acc;
 
     int mt_mode;         /* 当前矩阵模式 0=投影 1/2=位置 3=纹理 */
     int64_t proj[16];    /* 投影矩阵 */

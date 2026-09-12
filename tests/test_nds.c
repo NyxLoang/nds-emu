@@ -4299,16 +4299,17 @@ static void test_card_dma(nds_t *nds)
     const uint32_t dma0 = IO_DMA0_BASE;
     const uint32_t dst  = 0x02002000u;
 
-    /* DMA0：源=CARD_DATA（固定地址，每次读自动 +4），目的=RAM，32 位，卡带触发，8 字 */
+    /* DMA0：源=CARD_DATA（固定），目的=RAM，32 位，卡带触发，先武装 1 字 */
     bus_write32(nds->bus, dma0 + 0, BUS_CARD_DATA);
     bus_write32(nds->bus, dma0 + 4, dst);
-    bus_write16(nds->bus, dma0 + 8, 8u);
+    bus_write16(nds->bus, dma0 + 8, 1u);
     bus_write16(nds->bus, dma0 + 10,
                 DMA_CNT_32BIT | DMA_CNT_SRC_FIX
                 | (DMA_START_CARD << DMA_CNT_MODE_SHIFT) | DMA_CNT_ENABLE);
 
     /* 卡带命令尚未激活：不该搬 */
     CHECK_EQ("card dma not yet", bus_read32(nds->bus, dst), 0x00000000u);
+    bus_write16(nds->bus, dma0 + 10, 0u); /* 撤下武装：后面逐字重新武装 */
 
     /* 命令 B7 读 0x8100 + 激活 ROMCTRL */
     static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
@@ -4320,13 +4321,23 @@ static void test_card_dma(nds_t *nds)
     for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
         io_advance_cart(nds->io, 0, 1u);
 
-    /* 8 字应从 CARD_DATA 按序搬进 dest */
+    /* 21-B9yi：卡带 DMA 按真机节奏逐字推进（每字由 DRQ 触发、由卡带取数事件推动）。
+       逐字武装 count=1 并推进卡带时钟，把 8 个字依次搬到 dest —— 这也正是游戏
+       代码的用法（`AF000001`：模式 5、count=1、重复位）。 */
     for (int i = 0; i < 8; i++) {
         uint32_t want = (uint32_t)rom[0x8100 + 4 * i]
                       | ((uint32_t)rom[0x8100 + 4 * i + 1] << 8)
                       | ((uint32_t)rom[0x8100 + 4 * i + 2] << 16)
                       | ((uint32_t)rom[0x8100 + 4 * i + 3] << 24);
         char nm[32];
+        bus_write32(nds->bus, dma0 + 4, dst + 4u * i);
+        bus_write16(nds->bus, dma0 + 8, 1u);
+        bus_write16(nds->bus, dma0 + 10,
+                    DMA_CNT_32BIT | DMA_CNT_SRC_FIX
+                    | (DMA_START_CARD << DMA_CNT_MODE_SHIFT) | DMA_CNT_ENABLE);
+        for (int spin = 0; spin < 200000 &&
+             bus_read32(nds->bus, dst + 4u * i) != want; spin++)
+            io_advance_cart(nds->io, 0, 1u);
         snprintf(nm, sizeof nm, "card dma word[%d]", i);
         CHECK_EQ(nm, bus_read32(nds->bus, dst + 4u * i), want);
     }
@@ -4445,8 +4456,12 @@ static void test_card_program(nds_t *nds)
     run_program(nds, base, prog, sizeof prog / sizeof prog[0],
                 base, base + 0x44, 64);
     CHECK_EQ("card prog PC halt", nds->cpu->r[15], base + 0x44);
-    /* 21-B9zb: CPU 程序已停在自旋点，硬件侧继续等卡带首字就绪并触发 DMA */
+    /* 21-B9yi：CPU 程序已停在自旋点，硬件侧继续推进卡带时钟——卡带每取一字
+       触发一次 DMA（模式 5 + 重复位），逐字把 4 个字搬进 dest。 */
     for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
+        io_advance_cart(nds->io, 0, 1u);
+    for (int spin = 0; spin < 200000 &&
+         bus_read32(nds->bus, dst + 12u) == 0u; spin++)
         io_advance_cart(nds->io, 0, 1u);
 
     /* dest 收到 rom[0x8100..0x810F]（4 字） */

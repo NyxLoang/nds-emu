@@ -545,3 +545,14 @@
   （`cpsr=0000001F`、`if9=0x00200000`、IPC `fifo=0/0`）。
 - 单测改写：`card no irq on DRQ`（DRQ 不挂中断）+ `card irq on transfer end`
   （传输结束挂中断）；全量 **930 项检查 0 失败**。
+
+**21-B9yi（续）— 卡带 DMA 两个真 bug**（读来源统计 `src=cpu|dma` 后锁定）：
+
+1. **重复模式地址不前进**：`dma_transfer` 只用局部 `src/dst` 不写回通道；
+   卡带 DMA 用 `AF000001`（模式 5 + 重复位 + 源固定/目的递增）逐字搬 512 字节时
+   每个字都写到同一个 dword。修复：搬完写回 `dma->sad/dad`。
+2. **DRQ 未置位也触发卡带 DMA**：melonDS 的 `CheckDMA()` 第一行即
+   `if (!(ROMCnt & (1<<23))) return;`；本地无条件触发 ⇒ 把 FIFO 残留值
+   （`0xFFFFFFFF`）搬进游戏缓冲。修复：`dma_fire_card()` 先查 DRQ。
+
+验证：**930 项 0 失败**；900 帧里程碑标记与参考核一致；2000 帧无回归。

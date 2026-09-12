@@ -89,7 +89,8 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm
     int prev_dma = g_dma_active;
     g_dma_active = 1;
     for (uint32_t i = 0; i < n; i++) {
-        /* 21-B9zb: DMA 从 CARD_DATA 取数时按卡带就绪时钟等待 */
+        /* 21-B9zb: DMA 从 CARD_DATA 取数时按卡带就绪时钟等待（保留：让 DMA
+           读到的都是真实 ROM 数据，而不是 FIFO 残留值）。 */
         if (src == BUS_CARD_DATA && bus != NULL && bus->io != NULL)
             cartbus_advance(&bus->io->cartbus, 100000u);
         if (is32)
@@ -102,6 +103,12 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm
 
     bus->active_is_arm7 = prev_arm7;
     g_dma_active = prev_dma;
+    /* 21-B9yi：把推进后的地址写回通道——重复模式（CNT bit25）下卡带 DMA 会
+       反复触发，**地址必须跨轮次保持前进**，否则每个字都写到同一个地址
+       （实测：游戏用 `AF000001`（模式 5 + 重复 + 源固定/目的递增）逐字搬 512B，
+       本地因地址不前进把整块写到了同一个 dword，游戏数据对不上后走进死循环）。 */
+    dma->sad = src;
+    dma->dad = dst;
     if ((dma->cnt_h & DMA_CNT_REPEAT) == 0)
         dma->cnt_h &= (uint16_t)~DMA_CNT_ENABLE;
     dma_irq_done(dma, bus, ch, is_arm7);
@@ -151,6 +158,14 @@ void dma_fire(dma_t *dma, struct bus *bus, int start_mode, int is_arm7)
    ARM7 的 DS cart 模式是 CNT 高半字 bits13-12 | 0x10（melonDS: 0x12）。 */
 void dma_fire_card(dma_t *dma, struct bus *bus, int is_arm7)
 {
+    /* 21-B9yi：melonDS 的 `NDSCartSlot::Interface::CheckDMA()` 第一行就是
+       `if (!(ROMCnt & (1<<23))) return;` ——DRQ 未置位时不触发卡带 DMA。
+       本地旧实现无条件触发，于是「武装了卡带 DMA 但数据还没就绪」时会读到
+       FIFO 里的残留值（实测游戏缓冲被写进 0xFFFFFFFF，随后逻辑走飞）。 */
+    if (bus == NULL || bus->io == NULL)
+        return;
+    if ((bus->io->cartbus.romctrl & CART_ROMCTRL_DRQ) == 0)
+        return;
     for (int c = 0; c < IO_DMA_COUNT; c++) {
         dma_channel_t *d = &dma->ch[c];
         if ((d->cnt_h & DMA_CNT_ENABLE) == 0)

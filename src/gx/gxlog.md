@@ -528,3 +528,21 @@ alpha = (FOG_ALPHA*density + src_alpha*(128-density)) >> 7（alpha 恒参与）
 
 **已知偏离**：`POLYGON_ATTR` alpha=0 在 melonDS 里是 wireframe（只画边），本地仍按
 不透明处理；toon/highlight、高光与光泽表未实现。
+
+### 21-B9yi（续43）— 多边形模式实测：本游戏只用「调制」，wireframe/toon/高光不必做
+
+给 GX 加了混合模式直方图（`gxblend`：`POLYGON_ATTR` bits4-5 的四种模式像素数 +
+alpha=0 的 wireframe 计数）。5000 帧带按键运行实测：
+
+```
+gxblend: mode0=85,561,543  mode1=0  mode2=0  mode3=0  wire=0
+```
+
+⇒ 这个游戏**全部使用 mode0（调制）**：decal（贴花）、toon/highlight、
+shadow、以及 melonDS 里「alpha=0 即 wireframe」的写法**一次都没用到**。
+因此续39/40 里列为「已知偏离」的三项对本游戏**没有影响**，可以不做
+（留给其它 ROM 时再补，melonDS 源码口径已记在 gxlog 里）。
+
+**结论**：3D 侧对本游戏已经功能完整——命令流 ✓、矩阵 ✓、视口 ✓、纹理（7 种格式）✓、
+顶点色调制 ✓、雾 ✓、深度 ✓、alpha ✓；光照（DIF_AMB/LIGHT_*/NORMAL）设施已在，
+但本游戏不发射 `NORMAL`。**剩余差距只在性能侧**（解释器每指令成本 + 每指令 IO 推进）。

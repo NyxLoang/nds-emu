@@ -188,6 +188,10 @@ typedef struct gx {
     uint64_t px_tested;
     uint64_t bbox_px;
     uint64_t fog_px;       /* 21-B9yi(续40)：被雾影响到的像素数（诊断） */
+    /* 21-B9yi(续43) 诊断：多边形混合模式分布（POLYGON_ATTR bits4-5）与
+       alpha=0（melonDS 里是 wireframe）的图元数——决定还要不要做 toon/高光/线框。 */
+    uint32_t blend_hist[4];
+    uint32_t wire_polys;
     /* 21-B9yi(续35) 诊断：**执行**（而不是入队）的命令直方图。
        与入队直方图对比就能看出「哪些命令一直没收齐参数、永远没执行」。 */
     uint32_t exec_hist[256];

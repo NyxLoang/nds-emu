@@ -872,6 +872,10 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         printf("gxfog: fog-px=%llu disp3dcnt=%08X fogcolor=%08X off=%04X\n",
                (unsigned long long)nds->io->gx.fog_px, nds->io->gx.disp3dcnt,
                nds->io->gx.fog_color, nds->io->gx.fog_offset);
+        printf("gxblend: mode0=%u mode1=%u mode2=%u mode3=%u wire=%u\n",
+               nds->io->gx.blend_hist[0], nds->io->gx.blend_hist[1],
+               nds->io->gx.blend_hist[2], nds->io->gx.blend_hist[3],
+               nds->io->gx.wire_polys);
         /* 21-B9yi(续32)：NDS_GXHIST=1 → 打印 GX 命令直方图 */
         if (getenv("NDS_GXHIST") != NULL)
             gx_cmd_hist_dump();

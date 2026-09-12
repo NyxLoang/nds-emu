@@ -1131,6 +1131,9 @@ static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
                                             (g->poly_attr >> 4) & 0x3u, &aa);
             if (aa == 0)
                 continue;                    /* 全透明：不写，露出下面图层 */
+            /* 21-B9yi(续43) 诊断：混合模式分布（按图元首像素统计一次即可，
+               这里按像素统计用于量级判断） */
+            g->blend_hist[(g->poly_attr >> 4) & 0x3u]++;
             /* 21-B9yi(续40)：雾（DISP3DCNT bit7 总开关 + POLYGON_ATTR bit15 逐多边形） */
             if ((g->disp3dcnt & (1u << 7)) && (g->poly_attr & (1u << 15)))
                 col = gx_fog_apply(g, col, &aa, pz);

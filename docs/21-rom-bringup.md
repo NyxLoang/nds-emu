@@ -4269,3 +4269,35 @@ dmairq: arm9 ch=3 cnt_h=7C40 cnt_l=308 sad=02370D0C dad=04000400 pc=01FF8300
   （现在恒为「空 + 不足半满」）；
 - 模式 7 DMA 只在有空位时推进，搬不完就保持 `InProgress`，由 FIFO 腾出空间后
   继续（对齐 melonDS `GPU3D::CheckFIFODMA()`），这样 DMA 完成中断的时机与参考核一致。
+
+---
+
+### 21-B9yi（续21，2026-09-12 对照）：**整片 IO 寄存器窗口对照**（画面仍 100% 相同的 f=2100）
+
+两侧都能 dump 0x04000000-0x04000FFF 的整片 IO 窗口（本地 `--dump` → `_io9.bin/_io7.bin`；
+参考核帧 2100 自带 `ref_f2100_io9.bin/io7.bin`），在**画面仍逐像素相同**的 f=2100 对比：
+
+```
+IO9（ARM9 视角）33 个寄存器不同；IO7（ARM7 视角）83 个不同
+其中最值得注意的：
+  0x04000004 DISPSTAT   loc=0000000C  ref=0106001A
+     参考核：bit1(HBlank 标志)+bit3(VBlank 使能)+bit4(**HBlank 中断使能**) 且
+             位 8-15 的 VCount 比较值=0x106(262)
+     本地  ：只有 bit2(VCount 匹配标志)+bit3，没有 HBlank 也没有 VCount 设定
+     ⇒ 与「本地在 f=2084 关掉 HBlank、参考核一直开着」完全一致
+  0x040000D4/D8/DC DMA3  loc=02088D90/07000800/04000100
+                        ref=0238BB84/04000400/7C400185（模式 7 GX FIFO + IRQ on end）
+  0x04000050 BLDCNT     loc=00000000  ref=060C3142（参考核此刻有混合/特效配置）
+  0x04000210 IE9        loc=00042019  ref=0004200B（本地开着 bit11? 不同组合）
+```
+
+⚠️ 读法提醒：两侧 dump 的**取点相位不同**（本地在 runner 结束、参考核在 RunFrame 结束），
+所以「同一帧」的少数寄存器（DISPCNT/BLDCNT 这类每帧被改多次的）差异可能是**相位**而不是
+状态分叉；判断依据优先看**单调量**（DISPSTAT 的使能位、DMA 用途、IE 组合）。
+
+**工具改进（重要）**：melonDS 核心的 `Log()`（"unknown ARM7 IO read32 04000FFC …"）
+会把参考核的运行写成 **4.1 GB** 日志、单次 2100 帧对照要跑 13 分钟。现在 `Log()`
+默认静音，`REF_VERBOSE=1` 才输出 ⇒ 后续参考核对照会快很多。
+
+**下一步**：按「单调量」顺序对齐——先把 DISPSTAT 的 HBlank/VCount 使能窗口对齐
+（为什么本地会在 f=2084 关掉），再看 DMA3 用途（模式 7 vs 模式 0）分叉的时机。

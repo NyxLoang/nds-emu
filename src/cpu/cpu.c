@@ -563,6 +563,17 @@ int cpu_step(arm_cpu_t *cpu)
     int fetch_nonseq = (cpu->next_fetch_pc != ipc); /* 是否非顺序取指（分支/跳转后） */
     /* 下一条「顺序」指令地址（本条指令长度由执行前的 T 位决定） */
     cpu->next_fetch_pc = ipc + (is_thumb ? 2u : 4u);
+    /* 21-B9yi(续65)：定向实验 —— 预取下一批指令所在的缓存行。
+       依据：续64 的结论是「瓶颈在访存（缓存未命中延迟），不在算术」。
+       预取只在两种最常见代码区（ARM9 ITCM / Main RAM）做，其它区域直接跳过。 */
+    {
+        uint32_t npc = cpu->next_fetch_pc;
+        if (!cpu->is_arm7 && npc - BUS_ARM9_ITCM_BASE < BUS_ARM9_ITCM_SIZE)
+            __builtin_prefetch(&bus->arm9_itcm[npc - BUS_ARM9_ITCM_BASE]);
+        else if (npc >= BUS_MAIN_RAM_BASE &&
+                 npc - BUS_MAIN_RAM_BASE < BUS_MAIN_RAM_SIZE)
+            __builtin_prefetch(&bus->main_ram[npc - BUS_MAIN_RAM_BASE]);
+    }
     if (is_thumb) {
         unsigned long long ft0 = PROF_T0();
         uint16_t insn16 = cpu_fetch16(cpu);

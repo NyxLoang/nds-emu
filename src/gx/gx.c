@@ -25,6 +25,20 @@ static int g_q_head = 0;   /* 队头下标 */
 static int g_q_len = 0;    /* 队列长度 */
 static int g_pending = 0;  /* 还需填充的参数总数（0=下一次 GXFIFO 写是命令字） */
 
+/* 21-B9yi(续32)：命令直方图（按 opcode）。用来判断游戏是否真的提交几何：
+   0x40 BEGIN_VTXS / 0x23-0x28 顶点的计数为 0 就意味着 3D 管线没被用到。 */
+static unsigned long long g_gx_cmd_hist[256];
+
+void gx_cmd_hist_dump(void)
+{
+    printf("gxhist:");
+    for (int c = 0; c < 256; c++) {
+        if (g_gx_cmd_hist[c] != 0)
+            printf(" %02X=%llu", c, g_gx_cmd_hist[c]);
+    }
+    printf("\n");
+}
+
 static int gx_cmd_nparams(uint8_t cmd)
 {
     switch (cmd) {
@@ -51,16 +65,30 @@ static int gx_cmd_nparams(uint8_t cmd)
     case GX_CMD_VTX_YZ:       return 1;
     case GX_CMD_VTX_DIFF:     return 1;
     case GX_CMD_POLYGON_ATTR: return 1;
+    case GX_CMD_TEXIMAGE_PARAM: return 1;
+    case GX_CMD_PLTT_BASE:    return 1;
+    case GX_CMD_DIF_AMB:      return 1;
+    case GX_CMD_SPE_EMI:      return 1;
+    case GX_CMD_LIGHT_VECTOR: return 1;
+    case GX_CMD_LIGHT_COLOR:  return 1;
+    /* 21-B9yi(续32)：SHININESS 是**唯一**的多字命令之一（32 个参数）——
+       漏掉它会让后面 32 个参数字被当成命令字解析，命令流从此错位，
+       队头永久卡在「参数收不满」上，3D 管线一个三角形都画不出来。 */
+    case GX_CMD_SHININESS:    return 32;
     case GX_CMD_BEGIN_VTXS:   return 1;
     case GX_CMD_END_VTXS:     return 0;
     case GX_CMD_SWAP_BUFFERS: return 1;
     case GX_CMD_VIEWPORT:     return 1;
+    case GX_CMD_BOX_TEST:     return 3;
+    case GX_CMD_POS_TEST:     return 2;
+    case GX_CMD_VEC_TEST:     return 1;
     default:                  return 0; /* 未知命令：吞掉，不崩 */
     }
 }
 
 static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p);
 static void gx_update_busy(gx_t *g);   /* 21-B9yi(续27)：前置声明 */
+static void gx_entries_process(gx_t *g);   /* 21-B9yi(续33)：条目流解码 */
 
 /* 21-B9yi(续24)：**按命令成本消费队列**（不再「入队即执行」）。
    melonDS 的 3D 引擎按 `GPU3D::AddCycles()` 记的每命令工作周期推进
@@ -105,6 +133,7 @@ static void gx_run_due(gx_t *g, uint32_t cycles)
         g_q_len--;
         uint32_t words = 1u + (uint32_t)c.nparams;
         g->fifo_words = (g->fifo_words >= words) ? (g->fifo_words - words) : 0u;
+        g_pending = (g_pending >= (int)words) ? (g_pending - (int)words) : 0;
         gx_exec(g, c.cmd, c.params);  /* 内部按命令类型累加 busy_cycles */
     }
     /* 21-B9yi(续27)：bit27 只表达「FIFO 满 / 有未完成工作」（见 gx_update_busy）。
@@ -115,46 +144,158 @@ static void gx_run_due(gx_t *g, uint32_t cycles)
     gx_update_busy(g);
 }
 
-static void gx_enqueue(gx_t *g, uint8_t cmd)
+/* ------------------------------------------------------------------
+   21-B9yi(续33)：GX 命令流的正确模型 —— **条目流**（对齐 melonDS `CmdFIFO`）
+
+   每一次写入（命令端口 0x04000440+N*4、GXFIFO 0x04000400、或模式 7 DMA 搬进来
+   的字）产生**一个条目** `{Command, Param}`：
+
+   * 条目被当作命令字时：`Command` 是命令码，`Param` 是它的**第 1 个参数**；
+   * 条目被当作参数字时：`Param` 是参数值，`Command` 字节**被忽略**。
+
+   解码顺序就是条目顺序：取队头条目当命令，若该命令需要 n 个参数，则紧随其后的
+   n-1 个条目无论来自哪个写入端口都算它的参数。
+
+   本地旧实现把「每次端口写」都当成一条独立命令（命令 + 各自的参数），于是游戏
+   用 64 次连写推的 2 条 SHININESS（各 32 参数）被拆成 64 条缺参数的 SHININESS，
+   队头永远收不满 ⇒ 7300 帧里 8142 次 BEGIN_VTXS、4.1 万个顶点全部卡在队列里，
+   3D 帧缓冲始终全 0（tri=0、fb-nz=0、画面缺 3D 图层）。
+   ------------------------------------------------------------------ */
+
+#define GX_ENTRY_CAP 4096
+
+typedef struct {
+    uint8_t cmd;
+    uint32_t val;
+} gx_entry_t;
+
+static gx_entry_t g_ent[GX_ENTRY_CAP];
+static int g_e_head = 0;
+static int g_e_len = 0;
+static int g_need = 0;        /* >0：正在为 g_ccmd 收集参数，还缺这么多 */
+static uint8_t g_ccmd = 0;
+static int32_t g_cp[32];      /* 收集中的命令的参数（最多 32：SHININESS） */
+static int g_chave = 0;
+
+/* 把一条「参数已收齐」的命令放进执行队列（按成本消费，见 gx_run_due）。 */
+static void gx_push_ready(gx_t *g, uint8_t cmd, const int32_t *p, int n)
 {
-    g->cmd_count++;
-    {   /* 21-B9yi(续24) 诊断：NDS_GXDBG=1 → 打印入队/喂参数 */
-        static int dbg = -1;
-        if (dbg < 0) dbg = (getenv("NDS_GXDBG") != NULL) ? 1 : 0;
-        if (dbg) printf("gxdbg: enqueue cmd=%02X nparams=%d qlen=%d pending=%d\n",
-                        cmd, gx_cmd_nparams(cmd), g_q_len, g_pending);
-    }
-    int n = gx_cmd_nparams(cmd);
+    gx_update_busy(g);
     if (g_q_len >= GX_QUEUE_CAP)
-        return; /* 队列满：丢弃（正常流程不会发生） */
+        return;                      /* 执行队列满：丢弃（正常流程不会发生） */
     int idx = (g_q_head + g_q_len) % GX_QUEUE_CAP;
     g_q[idx].cmd = cmd;
     g_q[idx].nparams = n;
-    g_q[idx].filled = 0;
+    g_q[idx].filled = n;
+    for (int i = 0; i < n && i < 16; i++)
+        g_q[idx].params[i] = p[i];
     g_q_len++;
-    g_pending += n;
-    gx_update_busy(g);                /* 队列满才置忙（对齐 melonDS GXFIFOStall） */
+    g_pending += n + 1;              /* 占用 FIFO 空间：命令字 + 参数 */
 }
 
-static void gx_feed_param(gx_t *g, int32_t val)
+static void gx_entry_push(gx_t *g, uint8_t cmd, uint32_t val)
 {
+    (void)g;
+    if (g_e_len >= GX_ENTRY_CAP)
+        return;                      /* 条目环满：丢弃（应由 FIFO 满阻塞写入方） */
+    int idx = (g_e_head + g_e_len) % GX_ENTRY_CAP;
+    g_ent[idx].cmd = cmd;
+    g_ent[idx].val = val;
+    g_e_len++;
+}
+
+static void gx_entries_process(gx_t *g)
+{
+    int dbg = 0;
     {
-        static int dbg = -1;
-        if (dbg < 0) dbg = (getenv("NDS_GXDBG") != NULL) ? 1 : 0;
-        if (dbg) printf("gxdbg: feed val=%08X qlen=%d pending=%d\n",
-                        (unsigned)val, g_q_len, g_pending);
+        static int d = -1;
+        if (d < 0) d = (getenv("NDS_GXDBG") != NULL) ? 1 : 0;
+        dbg = d;
     }
-    if (g_q_len == 0)
-        return;
-    /* 21-B9yi(续24)：参数要喂给**队尾**那条「还没收齐参数」的命令。
-       队列现在会保留已收齐、等待按成本执行的命令（旧实现是入队即执行，
-       队头永远是待填的那条）——继续喂队头会让参数全部丢失、队列卡死。 */
-    gx_pend_t *p = &g_q[(g_q_head + g_q_len - 1) % GX_QUEUE_CAP];
-    if (p->filled < p->nparams) {
-        p->params[p->filled++] = val;
-        g_pending--;
+    while (g_e_len > 0) {
+        gx_entry_t e = g_ent[g_e_head];
+        g_e_head = (g_e_head + 1) % GX_ENTRY_CAP;
+        g_e_len--;
+
+        if (g_need > 0) {            /* 参数字：命令字节忽略 */
+            if (g_chave < 32)
+                g_cp[g_chave++] = (int32_t)e.val;
+            g_need--;
+            if (dbg)
+                printf("gxdbg: param val=%08X (%d/%d) qlen=%d\n",
+                       (unsigned)e.val, g_chave, g_chave + g_need, g_q_len);
+            if (g_need == 0)
+                gx_push_ready(g, g_ccmd, g_cp, g_chave);
+            continue;
+        }
+
+        int n = gx_cmd_nparams(e.cmd);
+        if (dbg)
+            printf("gxdbg: cmd=%02X nparams=%d val=%08X qlen=%d\n",
+                   e.cmd, n, (unsigned)e.val, g_q_len);
+        if (e.cmd == 0)
+            continue;                /* 0x00 = NOP：不计数、不入队（无副作用） */
+        if (n <= 1) {                /* 0/1 参数的命令：本条就是全部 */
+            g->cmd_count++;
+            g_gx_cmd_hist[e.cmd]++;
+            g_cp[0] = (int32_t)e.val;
+            gx_push_ready(g, e.cmd, g_cp, (n == 1) ? 1 : 0);
+            continue;
+        }
+        /* 多参数命令：本条提供第 1 个参数，其余等后续条目 */
+        g->cmd_count++;
+        g_gx_cmd_hist[e.cmd]++;
+        g_ccmd = e.cmd;
+        g_chave = 0;
+        g_cp[g_chave++] = (int32_t)e.val;
+        g_need = n - 1;
+        break;                       /* 参数不够，等下一次写入 */
     }
-    gx_update_busy(g);
+}
+
+/* 21-B9yi(续33)：GXFIFO 的 32 位写入口。
+   这是 melonDS `GPU3D::WriteToGXFIFO()` 的**逐句直译**——它把一个 32 位字里的
+   最多 4 个命令字节按「每次写派发一个条目」的节拍展开，因此「一个 32 位写 =
+   一个条目」，条目参数取该次写入的值：
+
+   * 字里的第一个命令字节若需要参数，则该字先只占位（`return`），它的 param0 由
+     下一次写入提供；
+   * 0 命令字节（NOP）只在「整个字为 0」时才派发一次，其余跳过。
+
+   本地旧实现把「无待填参数时的一次 32 位写」直接拆成 4 条命令，把游戏用
+   `[命令字][参数字]` 交替推流的方式解析错位（实测 0x20/0x7C00 这种
+   「命令在前、参数在后」的写法会把参数字当成命令字）。 */
+static uint32_t g_fifo_word = 0;      /* CurCommand */
+static int g_fifo_ncmd = 0;           /* NumCommands */
+static int g_fifo_pcnt = 0;           /* ParamCount */
+static int g_fifo_need = 0;           /* TotalParams */
+
+static void gx_fifo_word_in(gx_t *g, uint32_t val)
+{
+    if (g_fifo_ncmd == 0) {
+        g_fifo_ncmd = 4;
+        g_fifo_word = val;
+        g_fifo_pcnt = 0;
+        g_fifo_need = gx_cmd_nparams((uint8_t)(g_fifo_word & 0xFF));
+        if (g_fifo_need > 0)
+            return;                    /* 该字先占位，参数随下一次写入 */
+    } else {
+        g_fifo_pcnt++;
+    }
+    for (;;) {
+        if ((g_fifo_word & 0xFF) || (g_fifo_ncmd == 4 && g_fifo_word == 0))
+            gx_entry_push(g, (uint8_t)(g_fifo_word & 0xFF), val);
+        if (g_fifo_pcnt >= g_fifo_need) {
+            g_fifo_word >>= 8;
+            g_fifo_ncmd--;
+            if (g_fifo_ncmd == 0)
+                break;
+            g_fifo_pcnt = 0;
+            g_fifo_need = gx_cmd_nparams((uint8_t)(g_fifo_word & 0xFF));
+        }
+        if (g_fifo_pcnt < g_fifo_need)
+            break;
+    }
 }
 
 /* ---- 矩阵运算（行主序 4×4，1.19.12） ---- */
@@ -528,24 +669,16 @@ void gx_write32(gx_t *g, uint32_t addr, uint32_t val)
         g->fifo_writes++;
         /* 21-B9yi(续22)：FIFO 里按字计数（32 位写 = 2 字），供模式 7 DMA 判断空位。 */
         g->fifo_words += 2u;
-        if (g_pending == 0) {
-            /* 命令字：低 4 字节各一条命令（0=NOP） */
-            for (int i = 0; i < 4; i++) {
-                uint8_t cmd = (uint8_t)((val >> (i * 8)) & 0xFF);
-                if (cmd)
-                    gx_enqueue(g, cmd);
-            }
-        } else {
-            /* 参数字 */
-            gx_feed_param(g, (int32_t)val);
-        }
+        gx_fifo_word_in(g, val);
     } else if (addr >= GX_CMD_PORT_BASE && addr < GX_CMD_PORT_END) {
         g->port_writes++;
-        /* 命令端口：地址低字节编码命令码，写入值是该命令的唯一参数 */
+        /* 命令端口：地址编码命令码，写入值是该命令的第一个参数（melonDS 口径：
+           `CmdFIFOEntry{Command = (addr & 0x1FC) >> 2, Param = val}`）。 */
         uint8_t cmd = (uint8_t)((addr - GX_GXFIFO) >> 2);
-        gx_enqueue(g, cmd);
-        gx_feed_param(g, (int32_t)val);
+        gx_entry_push(g, cmd, val);
     }
+    gx_entries_process(g);
+    gx_update_busy(g);
 }
 
 void gx_reset(gx_t *g)
@@ -564,6 +697,8 @@ void gx_reset(gx_t *g)
     g->vy2 = GX_SCREEN_H - 1;
     g->color = 0x7FFF;
     g_q_head = g_q_len = g_pending = 0;
+    g_e_head = g_e_len = g_need = g_chave = 0;
+    g_fifo_word = g_fifo_ncmd = g_fifo_pcnt = g_fifo_need = 0;
 }
 
 const uint16_t *gx_framebuffer(const gx_t *g)
@@ -583,8 +718,10 @@ void gx_advance(gx_t *g, uint32_t cycles)
 
 uint32_t gx_fifo_free_words(const gx_t *g)
 {
-    /* 21-B9yi(续27)：按 melonDS 的**条目**口径（112 条），不是字数。 */
-    int free_entries = (int)GX_FIFO_CAP_ENTRIES - g_q_len;
+    /* 21-B9yi(续27/续33)：按 melonDS 的**条目**口径（112 条），不是字数。
+       待执行的命令 + 尚未解码完的条目都在占条目位置。 */
+    int used = g_q_len + g_e_len + ((g_need > 0) ? 1 : 0);
+    int free_entries = (int)GX_FIFO_CAP_ENTRIES - used;
     return (free_entries > 0) ? (uint32_t)free_entries : 0u;
 }
 
@@ -593,9 +730,11 @@ uint32_t gx_fifo_free_words(const gx_t *g)
    melonDS 一样收）；只有「满且无待填参数」时才挡（此时下一个字是新命令）。 */
 int gx_fifo_can_accept(const gx_t *g)
 {
-    if (g_q_len < (int)GX_FIFO_CAP_ENTRIES)
+    int used = g_q_len + g_e_len + ((g_need > 0) ? 1 : 0);
+    if (used < (int)GX_FIFO_CAP_ENTRIES)
         return 1;
-    return (g_pending > 0) ? 1 : 0;
+    /* 满时仍可继续喂参数（参数属于已有条目），只有「下一条是新命令」才挡。 */
+    return (g_need > 0 || g_e_len > 0) ? 1 : 0;
 }
 
 /* 21-B9yi(续27)：用 bit27 表达「FIFO 满 / 有未完成工作」——melonDS 里

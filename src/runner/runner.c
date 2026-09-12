@@ -13,6 +13,15 @@ static uint32_t s_watch_hi[4];
 /* 21-B9xu：`--shot-every N --shot-prefix P` 每 N 帧存一张截图（画面时间线对照） */
 static uint64_t s_shot_every = 0;
 static const char *s_shot_prefix = NULL;
+/* 21-B9yi(续32)：`--stats-every N` 每 N 帧打印双屏画面统计
+   （非黑像素比例 + 均值 RGB），与参考核 harness 的同名统计口径一致，
+   用于客观判定“画面是在推进还是定格”。 */
+static uint64_t s_stats_every = 0;
+
+void runner_set_stats_series(uint64_t every)
+{
+    s_stats_every = every;
+}
 
 void runner_set_shot_series(uint64_t every, const char *prefix)
 {
@@ -509,6 +518,43 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
     (void)shot_path;
 }
 
+/* 21-B9yi(续32)：单屏统计（非黑像素数 + 各通道均值）。本地帧缓冲是
+   0x00RRGGBB（与 save_bmp 同口径）；参考核 harness 里用同一套定义，
+   两边的「非黑比例」可直接对比。 */
+static void runner_screen_stat(const uint32_t *fb, unsigned *nz, unsigned *mr,
+                               unsigned *mg, unsigned *mb)
+{
+    const size_t n = (size_t)RENDER_SCREEN_W * RENDER_SCREEN_H;
+    unsigned long long sr = 0, sg = 0, sb = 0;
+    unsigned count = 0;
+    for (size_t i = 0; i < n; i++) {
+        uint32_t px = fb[i];
+        if ((px & 0x00FFFFFFu) != 0u)
+            count++;
+        sr += (px >> 16) & 0xFFu;
+        sg += (px >> 8) & 0xFFu;
+        sb += px & 0xFFu;
+    }
+    *nz = count;
+    *mr = (unsigned)(sr / n);
+    *mg = (unsigned)(sg / n);
+    *mb = (unsigned)(sb / n);
+}
+
+static void runner_print_screen_stats(uint64_t fr, const uint32_t *fb_t,
+                                      const uint32_t *fb_b)
+{
+    const unsigned total = (unsigned)(RENDER_SCREEN_W * RENDER_SCREEN_H);
+    unsigned nzt = 0, rt = 0, gt = 0, bt = 0;
+    unsigned nzb = 0, rb = 0, gb = 0, bb = 0;
+    runner_screen_stat(fb_t, &nzt, &rt, &gt, &bt);
+    runner_screen_stat(fb_b, &nzb, &rb, &gb, &bb);
+    printf("stats: f=%llu top nz=%u/%u rgb=%u,%u,%u bot nz=%u/%u"
+           " rgb=%u,%u,%u\n",
+           (unsigned long long)fr, nzt, total, rt, gt, bt, nzb, total,
+           rb, gb, bb);
+}
+
 void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                             uint64_t key_frame, uint32_t key_mask,
                             uint64_t key_period)
@@ -530,6 +576,20 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             break;
         uint64_t fr = runner_frame_index(r);
         g_dbg_frame = fr;
+        /* 21-B9yi(续32)：画面统计（每 N 帧一行，与参考核 harness 同口径） */
+        if (s_stats_every != 0 && (fr % s_stats_every) == 0) {
+            uint32_t *fb_t = (uint32_t *)malloc(sizeof(uint32_t)
+                                                * RENDER_SCREEN_W * RENDER_SCREEN_H);
+            uint32_t *fb_b = (uint32_t *)malloc(sizeof(uint32_t)
+                                                * RENDER_SCREEN_W * RENDER_SCREEN_H);
+            if (fb_t != NULL && fb_b != NULL) {
+                render_frame(nds->bus, fb_t, fb_b);
+                runner_print_screen_stats(fr, fb_t, fb_b);
+            }
+            free(fb_t);
+            free(fb_b);
+            fflush(stdout);
+        }
         /* 21-B9xu：画面时间线（每 N 帧一张） */
         if (s_shot_every != 0 && s_shot_prefix != NULL && (fr % s_shot_every) == 0) {
             uint32_t *fb_t = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
@@ -730,6 +790,9 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                n3, nds->io->gx.gxstat, nds->io->gx.disp3dcnt,
                nds->io->gx.cmd_count, nds->io->gx.tri_count,
                nds->io->gx.fifo_writes, nds->io->gx.port_writes);
+        /* 21-B9yi(续32)：NDS_GXHIST=1 → 打印 GX 命令直方图 */
+        if (getenv("NDS_GXHIST") != NULL)
+            gx_cmd_hist_dump();
     }
     printf("headless-frames: summary vram-nz=%llu disp=%08X dispb=%08X"
            " irq9=%d irq7=%d\n",

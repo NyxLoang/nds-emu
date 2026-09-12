@@ -195,6 +195,7 @@ int main(int argc, char *argv[])
     extern int g_pchit_n;
     uint64_t shot_every = 0;
     const char *shot_prefix = NULL;
+    uint64_t stats_every = 0;   /* 21-B9yi(续32)：--stats-every N */
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
         if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
@@ -254,6 +255,11 @@ int main(int argc, char *argv[])
             shot_every = _wcstoui64(wargv[i + 1], NULL, 10);
             runner_set_shot_series(shot_every, shot_prefix);
         }
+        else if (wcscmp(wargv[i], L"--stats-every") == 0 && i + 1 < wargc) {
+            /* 21-B9yi(续32)：--stats-every N（每 N 帧打印双屏画面统计） */
+            stats_every = _wcstoui64(wargv[i + 1], NULL, 10);
+            runner_set_stats_series(stats_every);
+        }
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -299,6 +305,10 @@ int main(int argc, char *argv[])
         else if (strcmp(argv[i], "--shot-every") == 0 && i + 1 < argc) {
             shot_every = strtoull(argv[i + 1], NULL, 10);
             runner_set_shot_series(shot_every, shot_prefix);
+        }
+        else if (strcmp(argv[i], "--stats-every") == 0 && i + 1 < argc) {
+            stats_every = strtoull(argv[i + 1], NULL, 10);
+            runner_set_stats_series(stats_every);
         }
         else if (strcmp(argv[i], "--shot-prefix") == 0 && i + 1 < argc) {
             shot_prefix = argv[i + 1];

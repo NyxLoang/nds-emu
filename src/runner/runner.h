@@ -43,5 +43,7 @@ void runner_set_watch(int idx, uint32_t lo, uint32_t hi);
 void runner_set_watch_read(int idx, uint32_t lo, uint32_t hi);
 /* 21-B9xu：每 every 帧把画面存成 `<prefix>_NNNNN.bmp`（画面时间线对照用）。 */
 void runner_set_shot_series(uint64_t every, const char *prefix);
+/* 21-B9yi(续32)：每 every 帧打印一次双屏画面统计（非黑比例/均值 RGB）。 */
+void runner_set_stats_series(uint64_t every);
 
 #endif /* NDS_EMU_RUNNER_H */

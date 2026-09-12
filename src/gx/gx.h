@@ -58,10 +58,20 @@
 #define GX_CMD_VTX_YZ       0x27
 #define GX_CMD_VTX_DIFF     0x28
 #define GX_CMD_POLYGON_ATTR 0x29
+#define GX_CMD_TEXIMAGE_PARAM 0x2A
+#define GX_CMD_PLTT_BASE     0x2B
+#define GX_CMD_DIF_AMB       0x30
+#define GX_CMD_SPE_EMI       0x31
+#define GX_CMD_LIGHT_VECTOR  0x32
+#define GX_CMD_LIGHT_COLOR   0x33
+#define GX_CMD_SHININESS     0x34
 #define GX_CMD_BEGIN_VTXS   0x40
 #define GX_CMD_END_VTXS     0x41
 #define GX_CMD_SWAP_BUFFERS 0x50
 #define GX_CMD_VIEWPORT     0x60
+#define GX_CMD_BOX_TEST     0x70
+#define GX_CMD_POS_TEST     0x71
+#define GX_CMD_VEC_TEST     0x72
 
 /* 图元类型（BEGIN_VTXS 参数低 2 位） */
 #define GX_PRIM_TRIANGLES 0
@@ -152,6 +162,9 @@ void gx_write32(gx_t *g, uint32_t addr, uint32_t val);
 
 /* 初始化 / 复位（矩阵置单位阵，帧缓冲清零）。 */
 void gx_reset(gx_t *g);
+/* 21-B9yi(续32)：GX 命令直方图（NDS_GXHIST=1 时在无头摘要里打印）。
+   用来回答「游戏到底有没有提交几何」——0x40 BEGIN_VTXS / 0x23-0x28 顶点。 */
+void gx_cmd_hist_dump(void);
 
 /* 21-B9yi(续16)：按系统时钟消耗 3D 引擎工作周期（到 0 时清 GXSTAT bit27）。 */
 void gx_advance(gx_t *g, uint32_t cycles);

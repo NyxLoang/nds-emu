@@ -2,6 +2,7 @@
 #include "bus/bus.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>   /* 21-B9yi(续60)：getenv（NDS_SNDSTAT） */
 
 /* 21-B9xl 诊断：通道启动/结束打点（带帧号），用于与参考核对照“通道生命周期”。 */
 extern unsigned long long g_dbg_frame;
@@ -268,6 +269,16 @@ void snd_render(snd_t *s, const struct bus *bus, int16_t *out_l, int16_t *out_r,
     int master_enable = (s->soundcnt & 0x8000u) != 0;
     int bias = (int)(s->soundbias & 0x3FFu);
 
+    /* 21-B9yi(续60)：音频统计诊断（`NDS_SNDSTAT=1`）。
+       背景：「窗口模式有声音」此前只验证到「SDL 设备能打开」，从没验证过
+       **混音结果不是静音**。这里直接盯 `snd_render()` 的输出：每秒（32768 样本）
+       打一行「非静音样本数 / 峰值」，无头模式也能跑（不依赖声卡）。 */
+    static int stat_state;
+    static unsigned long long stat_n, stat_nz, stat_total;
+    static int stat_peak;
+    if (stat_state == 0)
+        stat_state = (getenv("NDS_SNDSTAT") != NULL) ? 1 : -1;
+
     for (int i = 0; i < n; i++) {
         int32_t mixL = 0, mixR = 0;
         if (master_enable) {
@@ -322,5 +333,24 @@ void snd_render(snd_t *s, const struct bus *bus, int16_t *out_l, int16_t *out_r,
         if (uR < 0) uR = 0; else if (uR > 0x3FF) uR = 0x3FF;
         out_l[i] = (int16_t)((uL - 0x200) << 6);
         out_r[i] = (int16_t)((uR - 0x200) << 6);
+
+        /* 21-B9yi(续60)：统计（见函数开头说明）。以左右声道绝对值的较大者计。 */
+        if (stat_state == 1) {
+            int aL = out_l[i] < 0 ? -(int)out_l[i] : (int)out_l[i];
+            int aR = out_r[i] < 0 ? -(int)out_r[i] : (int)out_r[i];
+            int a = aL > aR ? aL : aR;
+            if (a != 0)
+                stat_nz++;
+            if (a > stat_peak)
+                stat_peak = a;
+            if (++stat_n >= SND_MIX_RATE) {
+                stat_total += stat_n;
+                printf("sndstat: t=%llus nz=%llu/%llu peak=%d master=%d on=%d\n",
+                       stat_total / SND_MIX_RATE, stat_nz, stat_n,
+                       stat_peak, master, master_enable);
+                fflush(stdout);
+                stat_n = 0; stat_nz = 0; stat_peak = 0;
+            }
+        }
     }
 }

@@ -211,6 +211,9 @@ int main(int argc, char *argv[])
     uint64_t stats_every = 0;   /* 21-B9yi(续32)：--stats-every N */
     /* 21-B9yi(续42)：窗口模式自动退出帧数（--frames N，冒烟测试用） */
     uint64_t g_cli_frames = 0;
+    /* 21-B9yi(续46)：触摸注入脚本（--touch-frame/-x/-y/-period） */
+    uint64_t touch_frame = 0, touch_period = 0;
+    int touch_x = 128, touch_y = 96;
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
         if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
@@ -277,6 +280,14 @@ int main(int argc, char *argv[])
         }
         else if (wcscmp(wargv[i], L"--frames") == 0 && i + 1 < wargc)
             g_cli_frames = _wcstoui64(wargv[i + 1], NULL, 10);
+        else if (wcscmp(wargv[i], L"--touch-frame") == 0 && i + 1 < wargc)
+            touch_frame = _wcstoui64(wargv[i + 1], NULL, 0);
+        else if (wcscmp(wargv[i], L"--touch-x") == 0 && i + 1 < wargc)
+            touch_x = (int)wcstol(wargv[i + 1], NULL, 10);
+        else if (wcscmp(wargv[i], L"--touch-y") == 0 && i + 1 < wargc)
+            touch_y = (int)wcstol(wargv[i + 1], NULL, 10);
+        else if (wcscmp(wargv[i], L"--touch-period") == 0 && i + 1 < wargc)
+            touch_period = _wcstoui64(wargv[i + 1], NULL, 0);
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -329,6 +340,14 @@ int main(int argc, char *argv[])
         }
         else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
             g_cli_frames = strtoull(argv[i + 1], NULL, 10);
+        else if (strcmp(argv[i], "--touch-frame") == 0 && i + 1 < argc)
+            touch_frame = strtoull(argv[i + 1], NULL, 0);
+        else if (strcmp(argv[i], "--touch-x") == 0 && i + 1 < argc)
+            touch_x = (int)strtol(argv[i + 1], NULL, 10);
+        else if (strcmp(argv[i], "--touch-y") == 0 && i + 1 < argc)
+            touch_y = (int)strtol(argv[i + 1], NULL, 10);
+        else if (strcmp(argv[i], "--touch-period") == 0 && i + 1 < argc)
+            touch_period = strtoull(argv[i + 1], NULL, 0);
         else if (strcmp(argv[i], "--shot-prefix") == 0 && i + 1 < argc) {
             shot_prefix = argv[i + 1];
             runner_set_shot_series(shot_every, shot_prefix);
@@ -337,6 +356,10 @@ int main(int argc, char *argv[])
 #endif
 
     char err[256];
+
+    /* 21-B9yi(续46)：把触摸注入脚本交给 runner（headless 帧驱动会套用）。 */
+    if (touch_frame != 0)
+        runner_set_touch_series(touch_frame, touch_x, touch_y, touch_period);
 
     /* 一台空机器：整机状态容器，bus 已挂入。
        必须先建 nds，后续装载镜像时才有可写的 Main RAM。headless 诊断也用它。 */

@@ -17,6 +17,19 @@ static const char *s_shot_prefix = NULL;
    （非黑像素比例 + 均值 RGB），与参考核 harness 的同名统计口径一致，
    用于客观判定“画面是在推进还是定格”。 */
 static uint64_t s_stats_every = 0;
+/* 21-B9yi(续46)：`--touch-frame/-x/-y/-period` 配置的触摸注入脚本 */
+static int s_touch_on = 0;
+static uint64_t s_touch_frame = 0, s_touch_period = 0;
+static int s_touch_x = 128, s_touch_y = 96;
+
+void runner_set_touch_series(uint64_t frame, int x, int y, uint64_t period)
+{
+    s_touch_on = 1;
+    s_touch_frame = frame;
+    s_touch_x = x;
+    s_touch_y = y;
+    s_touch_period = period;
+}
 
 void runner_set_stats_series(uint64_t every)
 {
@@ -111,6 +124,12 @@ struct runner {
     uint32_t key_mask;
     int key_down;
     uint64_t key_release_frame;
+    /* 21-B9yi(续46)：触摸注入脚本（屏幕像素坐标 → ADC，按固件默认校准换算） */
+    int touch_x, touch_y;
+    uint64_t touch_frame, touch_period, next_touch;
+    uint64_t touch_release_frame;
+    int touch_down;
+    int touch_enabled;
     uint64_t snd_done;        /* 21-B9wu：已推进的音频样本数（无头模式补推用） */
     uint64_t rtc_done;        /* 21-B9wx：已推进的 RTC 秒数 */
 };
@@ -227,6 +246,7 @@ static void runner_keys(runner_t *r)
 }
 
 /* 一次调度迭代：返回 0 表示没有后续硬件事件，无法继续推进。 */
+static void runner_touch(runner_t *r);   /* 21-B9yi(续46)：触摸注入（定义在下方） */
 static int runner_step(runner_t *r)
 {
     nds_t *nds = r->nds;
@@ -299,6 +319,7 @@ static int runner_step(runner_t *r)
         if (was7) io_advance_timers(nds->io, 1, (uint32_t)delta);
     }
     runner_keys(r);
+    runner_touch(r);      /* 21-B9yi(续46)：触摸注入脚本 */
     return 1;
 }
 
@@ -552,6 +573,59 @@ static void runner_screen_stat(const uint32_t *fb, unsigned *nz, unsigned *mr,
     *mb = (unsigned)(sb / n);
 }
 
+/* 21-B9yi(续46)：触摸注入。
+   固件默认校准（touch.c 的 `fw_user_body`）：ADC x1=0x200 ↔ 像素 0x21(33)、
+   ADC x2=0xE00 ↔ 像素 0xE1(225)；y 同理由 0x200/0x800 ↔ 33/129。
+   ⇒ 每像素 16 个 ADC 单位：`adc = 0x200 + (px - 33) * 16`。
+   脚本与按键一致：到点按下、保持 `touch_hold` 帧后抬起；period>0 时周期重复。 */
+static uint16_t runner_touch_adc(int px, int base_px, int units)
+{
+    int v = 0x200 + (px - base_px) * units;
+    if (v < 0) v = 0;
+    if (v > 0xFFF) v = 0xFFF;
+    return (uint16_t)v;
+}
+
+static void runner_touch(runner_t *r)
+{
+    if (!r->touch_enabled)
+        return;
+    uint64_t fr = runner_frame_index(r);
+    if (r->touch_down) {
+        if (fr >= r->touch_release_frame) {
+            io_set_touch(r->nds->io, 0, 0, 0);
+            r->touch_down = 0;
+            if (r->touch_period == 0)
+                r->next_touch = UINT64_MAX;
+            else
+                r->next_touch += r->touch_period;
+        }
+    } else if (fr >= r->next_touch) {
+        uint16_t ax = runner_touch_adc(r->touch_x, 33, 16);
+        uint16_t ay = runner_touch_adc(r->touch_y, 33, 16);
+        io_set_touch(r->nds->io, ax, ay, 1);
+        r->touch_down = 1;
+        r->touch_release_frame = fr + 12;
+        printf("runner: touch (%d,%d) adc=(%03X,%03X) at frame=%llu\n",
+               r->touch_x, r->touch_y, ax, ay,
+               (unsigned long long)fr);
+    }
+}
+
+void runner_set_touch(runner_t *r, uint64_t frame, int x, int y, uint64_t period)
+{
+    if (r == NULL)
+        return;
+    r->touch_enabled = 1;
+    r->touch_frame = frame;
+    r->touch_x = x;
+    r->touch_y = y;
+    r->touch_period = period;
+    r->next_touch = frame;
+    r->touch_down = 0;
+    r->touch_release_frame = 0;
+}
+
 static void runner_print_screen_stats(uint64_t fr, const uint32_t *fb_t,
                                       const uint32_t *fb_b)
 {
@@ -582,6 +656,8 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     }
     h9_enabled();   /* 21-B9yi(续41)：初始化热点 PC 统计开关（默认关） */
     runner_set_keys(r, key_frame, key_mask, key_period);
+    if (s_touch_on)  /* 21-B9yi(续46)：触摸注入脚本 */
+        runner_set_touch(r, s_touch_frame, s_touch_x, s_touch_y, s_touch_period);
     uint64_t start = runner_frame_index(r);
     for (uint64_t fi = 0; fi < frames; fi++) {
         if (!runner_run_frame(r))

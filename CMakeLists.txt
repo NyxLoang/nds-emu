@@ -119,7 +119,10 @@ endif()
 # 关掉 LTO 时这些调用无法内联；打开后编译器可以跨文件内联/常量传播。
 # 只作用于本工程目标，第三方 SDL 保持各自默认。
 include(CheckIPOSupported)
-check_ipo_supported(RESULT NDS_IPO_OK OUTPUT NDS_IPO_MSG)
+# 21-B9yi(续62)：必须显式指定 `LANGUAGES C`。本工程 `project()` 只声明了 C，
+# 而 `check_ipo_supported()` 默认按 CXX 探测 ⇒ 一直报「CMake doesn't support IPO
+# for current CXX compiler」，LTO **从来没真正生效过**（build.ninja 里只有 -std=c11 -O3）。
+check_ipo_supported(RESULT NDS_IPO_OK OUTPUT NDS_IPO_MSG LANGUAGES C)
 if(NDS_IPO_OK)
     set_property(TARGET ndscore nds-emu test_nds PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 else()

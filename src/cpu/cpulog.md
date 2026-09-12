@@ -856,3 +856,36 @@ r52（改动前）          ：17.72 s (56.4 fps) / 17.52 s (57.1 fps)   ⇒ 约
 
 **结论**：微优化只能拿到 ~2%。要再上一个台阶（目标 60 fps）需要**结构性**改动，
 下一刀应砍在「每步的调用/检查骨架」或「IO 推进的事件化」上。
+
+## 2026-09-13 · 21-B9yi（续62）：LTO 其实**从来没生效过** —— 修好后 **-13.2%**
+
+**怎么发现的**：做性能收口时顺手核对编译命令行，发现主构建 `build.ninja` 里
+`FLAGS = -std=c11 -O3`，**根本没有 `-flto`**：
+
+```cmake
+check_ipo_supported(RESULT NDS_IPO_OK OUTPUT NDS_IPO_MSG)   # 旧写法
+```
+
+本工程 `project(nds-emu C)` **只声明了 C 语言**，而 `check_ipo_supported()`
+默认按 **CXX** 探测 ⇒ 一直返回「CMake doesn't support IPO for current CXX compiler」，
+`INTERPROCEDURAL_OPTIMIZATION` 从未设置成功。
+
+> 更正旧记录：续41 曾把「LTO」记为**零收益实验（配对差 1%）**——那次对比实际是
+> **两个都没开 LTO** 的构建，当然没有差别。本轮是它第一次真正生效。
+
+**修复**：`check_ipo_supported(... LANGUAGES C)`，重新配置后 `build.ninja` 出现
+`-flto=auto -fno-fat-lto-objects`。
+
+**A/B（同机相邻配对）**：
+
+```
+1000 帧（轻段为主）：LTO 10.90 / 10.60 / 10.67 s  vs 无LTO 12.59 / 12.33 / 12.13 s
+                     ⇒ 平均 10.72 s vs 12.35 s（**-13.2%**，帧率 +15%）
+10000 帧（含重场景）：LTO 109.4 s vs 无LTO 122.2 s（**-10.5%**）
+```
+
+**零回归**：931 项单测 0 失败（LTO 版本）；1000 帧 70 行 disp-change 时间线逐行相同；
+2000 帧双屏统计逐值相同、截图 SHA-256 完全相同（`A72E11A2…CC513`）。
+
+**结果**：✅ 保留。解释器形态正是「大量跨 TU 小函数」，LTO 能把 `bus_read*` /
+`timer_advance` / `io_advance_*` / `snd_*` 这些内联进热点路径。

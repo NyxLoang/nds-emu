@@ -568,20 +568,22 @@ static void test_keyinput(nds_t *nds)
 {
     /* 21-B9wv：复位后的默认值必须是“全部松开”。旧实现 calloc 出 0，
        KEYINPUT 读成 0（= 所有键按住），游戏会以为 START/A 一直按着。 */
+    /* 21-B9xy：按 melonDS 口径，只有低 10 位（松开=1），bit10-15 读 0
+       （参考核帧 1900 无按键时 KEYINPUT 读回 0x03FF）。 */
     CHECK_EQ("keypad default released",
-             bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FFFu);
+             bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0x03FFu);
 
-    /* 未按键：全部位为 1（含高 4 位恒 1） */
+    /* 未按键：低 10 位全 1 */
     io_set_keyinput(nds->io, 0x0000);
-    CHECK_EQ("no key pressed", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FFFu);
+    CHECK_EQ("no key pressed", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0x03FFu);
 
     /* 按下 A（bit0）：读值该位变 0 */
     io_set_keyinput(nds->io, KEY_A);
-    CHECK_EQ("A pressed -> bit0=0", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FFEu);
+    CHECK_EQ("A pressed -> bit0=0", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0x03FEu);
 
     /* 按下 UP + B */
     io_set_keyinput(nds->io, KEY_UP | KEY_B);
-    CHECK_EQ("UP+B pressed", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0xF000u | 0x0FBDu);
+    CHECK_EQ("UP+B pressed", bus_read16(nds->bus, IO_KEYINPUT_ADDR), 0x03BDu);
 
     /* 21-B9wr：KEYCNT OR 模式按键中断（ARM9） */
     nds->io->irq[0].ifl = 0;

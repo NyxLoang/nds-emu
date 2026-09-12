@@ -14,8 +14,10 @@ void key_write8(keypad_t *k, uint32_t addr, uint8_t val)
 
 void key_set_pressed(keypad_t *k, uint16_t pressed)
 {
-    /* NDS 约定：按下=0。低 12 位取反；高 4 位（bit12-15）恒为 1。 */
-    k->input = (uint16_t)((~pressed) & 0x0FFFu) | 0xF000u;
+    /* 21-B9xy：按 melonDS 口径——KEYINPUT 只有低 10 位（A/B/Select/Start/
+       右/左/上/下/R/L），松开=1；bit10-15 读回 0（参考核帧 1900 无按键时
+       读到 0x03FF，本地此前是 0xFFFF）。 */
+    k->input = (uint16_t)((~pressed) & 0x03FFu);
 }
 
 void key_reset(keypad_t *k)

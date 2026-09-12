@@ -164,6 +164,10 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return (uint8_t)(io->vcount & 0xFFu);
     if (addr == 0x04000007u)
         return (uint8_t)(io->vcount >> 8);
+    /* 21-B9xy：melonDS 对 0x04000320 硬编码返回 46（GPU3D::Read16/32，TODO）；
+       该区间归 GPU3D、只有 ARM9 看得到。本地此前落到未映射返回 0。 */
+    if (!is_arm7 && addr >= 0x04000320u && addr < 0x04000324u)
+        return (addr == 0x04000320u) ? 0x2Eu : 0x00u;
     if (io->bus != NULL && io->bus->diag && io_addr_first_seen(addr))
         printf("io: read  unknown addr=%08X (arm7=%d)\n", addr, is_arm7);
     return 0;

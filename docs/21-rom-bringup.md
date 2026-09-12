@@ -2958,3 +2958,31 @@ melonDS 只在 **mode 3** 走 display-FIFO 特例（`GPU::UsesDisplayFIFO()`：
 2. 补 `KEYINPUT` 高 6 位为 0（对照参考核 0x3FF）；
 3. 查 BG2/BG3 仿射参数差异（参考核读回全 0、本地是单位阵）——它最可能解释
    帧 1900 那条青色竖条纹（BG 层的取样/掩码不同）。
+
+### 21-B9xy（2026-09-12）：KEYINPUT 与 0x04000320 口径对齐
+
+**1) KEYINPUT 高 6 位**
+
+melonDS 的 `KeyInput` 只有低 10 位（A/B/Select/Start/右/左/上/下/R/L），
+松开 = 1，**bit10-15 读回 0**；参考核帧 1900 无按键时读到 `0x03FF`，
+本地此前是 `0xFFFF`（`key_set_pressed` 把高 4 位置 1）。
+
+`src/io/key.c` 改为 `(~pressed) & 0x03FF`；4 条旧断言同步更新为新口径
+（`0x03FF / 0x03FE / 0x03BD`）。
+
+**2) `0x04000320` = 46**
+
+melonDS `GPU3D::Read16/32` 对该地址**硬编码返回 46**（`// TODO, eventually`），
+且该区间只有 ARM9 看得到。本地此前落到未映射返回 0 → 现在按同口径返回 `0x2E`。
+
+**验证**：
+
+```
+tree 300 帧 --dump：KEYINPUT(0x04000130)=000003FF  ✓（参考核 0x3FF）
+                    0x04000320 = 0000002E          ✓（参考核 0x2E）
+test_nds.exe：907 项检查 0 失败
+```
+
+**剩余工作项（不变）**：GX 区矩阵只读寄存器（`0x04000640-0x040006A3`，melonDS 返回
+ClipMatrix / Vector 矩阵，参考核帧 1900 对角线为 `0x1000`）、BG2/BG3 仿射参数差异
+（参考核全 0、本地单位阵）——后者仍是青色条纹的最大嫌疑。

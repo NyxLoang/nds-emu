@@ -618,6 +618,12 @@ int main(int argc, char *argv[])
 
     /* 21-B9wq：持久化帧驱动调度器（与 headless 共用事件/周期成本模型） */
     runner_t *frame_runner = runner_create(nds);
+    /* 21-B9yi(续69)：**窗口模式也套用键盘脚本**（`--key-frame/-mask/-period`）。
+       此前这些参数只在无头路径生效 ⇒ 所有「窗口带按键」的测量其实都是**无输入**状态，
+       而游戏的输入状态会让工作量差 2.6 倍（见 docs/21 续68）⇒ 之前的窗口帧率
+       并不能代表「真的在玩」时的表现。这里让窗口与无头用同一套脚本，测量才可比。 */
+    if (key_frame != 0 && key_mask != 0)
+        runner_set_keys(frame_runner, key_frame, key_mask, key_period);
     /* 21-B9yi(续49)：显式关掉指令级 trace。它是 bring-up 用的诊断设施，
        开着时**每条指令都会 printf**（窗口模式实测 <2 fps + GB 级日志）。 */
     exec_set_trace(0);
@@ -652,6 +658,7 @@ int main(int argc, char *argv[])
        目的：找出「窗口模式为什么比无头慢」——把每帧拆成
        「SDL 事件泵」与「runner_run_frame（模拟）」两块。 */
     uint64_t t_evt = 0, t_run = 0, freq = SDL_GetPerformanceFrequency();
+    uint64_t t_ppu = 0, t_sdl = 0;   /* 21-B9yi(续70)：宿主渲染再拆分 */
     /* 21-B9yi(续47)：鼠标 → 触摸屏（底屏）。布局（逻辑坐标）：
        菜单栏 [0,28)、顶屏 [28,220)、底屏 [220,412)。
        触摸 ADC 换算与 runner `--touch-*` 同口径（固件默认校准，每像素 16 单位）。 */
@@ -761,6 +768,7 @@ int main(int argc, char *argv[])
         }
 
         if (!skip_render) {
+            uint64_t r0 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
             /* 清屏（物理坐标） */
             SDL_SetRenderDrawColor(renderer, 45, 45, 45, 255);
             SDL_RenderClear(renderer);
@@ -769,12 +777,19 @@ int main(int argc, char *argv[])
 
             /* 阶段 4：每帧从 VRAM framebuffer 读图 → 转 RGB888 → 上传纹理 → 画双屏。
                顶屏在菜单栏下，底屏紧随其后，按当前 scale 缩放。 */
+            uint64_t r1 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
             ppu_render(ppu, scale);
+            uint64_t r2 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
 
             /* 下拉菜单（画在游戏区之上） */
             menu_render_dropdown(renderer, scale);
 
             SDL_RenderPresent(renderer);
+            uint64_t r3 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
+            if (g_cli_fps_every != 0) {
+                t_ppu += r2 - r1;                 /* ppu_render：软件合成 + 纹理上传 + 双屏绘制 */
+                t_sdl += (r1 - r0) + (r3 - r2);   /* 清屏/菜单 + Present */
+            }
         }
 
         /* 21-B9yi(续61)：每 N 帧打一行「这一段的实测 fps」（--fps-every N）。
@@ -792,11 +807,15 @@ int main(int argc, char *argv[])
                        1000.0 * (double)t_evt / (double)freq,
                        1000.0 * (double)t_run / (double)freq,
                        (double)dt - 1000.0 * (double)(t_evt + t_run) / (double)freq);
+                printf("     render: ppu=%.0f ms  sdl(clear/menu/present)=%.0f ms\n",
+                       1000.0 * (double)t_ppu / (double)freq,
+                       1000.0 * (double)t_sdl / (double)freq);
             }
             fflush(stdout);
             fps_frames = 0;
             fps_mark_ms = now_ms;
             t_evt = 0; t_run = 0;
+            t_ppu = 0; t_sdl = 0;
         }
 
         if (frame_limit != 0 && ++frames_done >= frame_limit) {

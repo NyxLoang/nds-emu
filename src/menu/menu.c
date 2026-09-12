@@ -71,34 +71,68 @@ static void draw_text_centered(SDL_Renderer *r, TTF_Font *font, const char *text
     int target_pt = FONT_PT * scale;
     int ss = (scale == 1) ? 2 : 1; /* 超采样系数 */
 
-    TTF_SetFontSize(font, target_pt * ss);
-    SDL_Surface *surf = TTF_RenderUTF8_Blended(font, text, color);
-    if (surf == NULL)
-        return;
-    SDL_Texture *tex = SDL_CreateTextureFromSurface(r, surf);
-    SDL_FreeSurface(surf);
-    if (tex == NULL)
-        return;
-
-    /* 缩小（1x 超采样）用线性平滑；只影响本文字纹理，不改全局 nearest hint */
-    if (ss > 1)
-        SDL_SetTextureScaleMode(tex, SDL_ScaleModeLinear);
-
-    /* 目标尺寸按 target_pt 测，用于居中与缩放绘制 */
-    int tw, th;
-    TTF_SetFontSize(font, target_pt);
-    if (TTF_SizeUTF8(font, text, &tw, &th) != 0) {
-        SDL_DestroyTexture(tex);
-        return;
+    /* 21-B9yi(续70)：**文字纹理缓存**。原来每次调用都要
+       `TTF_RenderUTF8_Blended`（栅格化）+ `SDL_CreateTextureFromSurface`（上传）
+       + 用完销毁，而菜单栏/下拉菜单**每帧**都要画这些标签（实测 SDL 侧约 1.37 ms/帧）。
+       标签都是字符串字面量（指针稳定），所以用「文本指针 + 颜色 + 缩放」做键缓存即可；
+       缩放变化会命中不同的键，因此不需要失效逻辑。 */
+    typedef struct {
+        const char *text;
+        SDL_Color color;
+        int scale;
+        SDL_Texture *tex;
+        int w, h;
+    } text_cache_t;
+    static text_cache_t cache[24];
+    static int cache_next;
+    text_cache_t *hit = NULL;
+    for (int i = 0; i < 24; i++) {
+        if (cache[i].tex != NULL && cache[i].text == text &&
+            cache[i].scale == scale && cache[i].color.r == color.r &&
+            cache[i].color.g == color.g && cache[i].color.b == color.b &&
+            cache[i].color.a == color.a) {
+            hit = &cache[i];
+            break;
+        }
     }
+    if (hit == NULL) {
+        TTF_SetFontSize(font, target_pt * ss);
+        SDL_Surface *surf = TTF_RenderUTF8_Blended(font, text, color);
+        if (surf == NULL)
+            return;
+        SDL_Texture *tex = SDL_CreateTextureFromSurface(r, surf);
+        SDL_FreeSurface(surf);
+        if (tex == NULL)
+            return;
+        if (ss > 1)
+            SDL_SetTextureScaleMode(tex, SDL_ScaleModeLinear);
+        int tw, th;
+        TTF_SetFontSize(font, target_pt);
+        if (TTF_SizeUTF8(font, text, &tw, &th) != 0) {
+            SDL_DestroyTexture(tex);
+            return;
+        }
+        /* 简单轮转淘汰（缓存项都是小纹理，最多 24 个） */
+        text_cache_t *slot = &cache[cache_next];
+        cache_next = (cache_next + 1) % 24;
+        if (slot->tex != NULL)
+            SDL_DestroyTexture(slot->tex);
+        slot->text = text;
+        slot->color = color;
+        slot->scale = scale;
+        slot->tex = tex;
+        slot->w = tw;
+        slot->h = th;
+        hit = slot;
+    }
+
     SDL_Rect dst = {
-        rect.x + (rect.w - tw) / 2,
-        rect.y + (rect.h - th) / 2,
-        tw,
-        th,
+        rect.x + (rect.w - hit->w) / 2,
+        rect.y + (rect.h - hit->h) / 2,
+        hit->w,
+        hit->h,
     };
-    SDL_RenderCopy(r, tex, NULL, &dst);
-    SDL_DestroyTexture(tex);
+    SDL_RenderCopy(r, hit->tex, NULL, &dst);
 }
 
 static TTF_Font *open_font(void)

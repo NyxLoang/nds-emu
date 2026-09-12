@@ -73,6 +73,19 @@ typedef struct {
     uint32_t win0h, win1h, win0v, win1v;
     uint32_t winin, winout;
     uint32_t dispcnt;                /* 窗口使能位 */
+    /* 21-B9yi(续70)：**无窗口快速路径**。合成时每个像素、每个图层都要问一次
+       `comp_winmask()`（一帧约 49 万次调用 ×2 屏）；而绝大多数画面根本没有启用
+       WIN0/WIN1/OBJ 窗口（此时掩码恒为 0x3F=全使能）。这里预先记下「无窗口」，
+       让 comp_put/comp_finalize 直接跳过那次调用。语义完全等价（掩码恒 0x3F）。 */
+    int no_window;
+    /* 21-B9yi(续70)：**简单合成快速路径**。
+       条件：无窗口（掩码恒全使能）且 BLENDCNT 混合模式=0（不混合）。
+       此时「最终像素 = 最后写入的那一层」，完全不需要 px_t 状态机
+       （top/under/混合目标标记）——直接把颜色写进帧缓冲即可，语义等价。
+       好处：绝大多数画面（无窗口、无混合）每条 BG/OBJ/3D 的逐像素合成
+       从「读改写 4 个字段 + 查混合位」降到「一次写」。 */
+    int simple;
+    uint32_t *fb;                    /* simple 模式下的直写目标 */
 } comp_t;
 
 static px_t g_px[PX_COUNT];
@@ -105,7 +118,7 @@ static uint32_t comp_winmask(const comp_t *c, int x, int y)
     return m;
 }
 
-static void comp_reset(comp_t *c, const bus_t *bus, int is_sub)
+static void comp_reset(comp_t *c, const bus_t *bus, int is_sub, uint32_t *fb)
 {
     uint32_t win_base = is_sub ? IO_WIN0H_SUB : IO_WIN0H;
     c->win0h = bus_read16(bus, win_base + 0);
@@ -123,10 +136,29 @@ static void comp_reset(comp_t *c, const bus_t *bus, int is_sub)
     c->bright = bus_read16(bus, is_sub ? IO_MASTER_BRIGHT_SUB : IO_MASTER_BRIGHT);
     c->dispcnt = bus_read32(bus, is_sub ? IO_DISPCNT_SUB : IO_DISPCNT);
     c->px = g_px;
+    c->no_window = (((c->dispcnt >> 13) & 7u) == 0);   /* 见 comp_t 里的说明 */
+    c->fb = fb;
+    c->simple = (c->no_window && (((c->blendcnt >> BLEND_MODE_SHIFT) & 3u) == 0));
+    /* 21-B9yi(续70) 诊断：`NDS_RENDERDBG=1` 时打印前 8 个「非简单路径」的原因
+       （窗口使能位 / BLENDCNT 模式），用来确认快速路径为什么没生效。 */
+    if (!c->simple && getenv("NDS_RENDERDBG") != NULL) {
+        static int dbg_n;
+        if (dbg_n < 8) {
+            dbg_n++;
+            printf("renderdbg: eng=%d dispcnt=%08X win=%u blendcnt=%04X mode=%u\n",
+                   is_sub, c->dispcnt, (c->dispcnt >> 13) & 7u,
+                   c->blendcnt, (c->blendcnt >> BLEND_MODE_SHIFT) & 3u);
+        }
+    }
 
     uint32_t bd = backdrop(bus, is_sub);
     uint8_t bd1st = (uint8_t)((c->blendcnt >> 5) & 1u);
     uint8_t bd2nd = (uint8_t)((c->blendcnt >> 13) & 1u);
+    if (c->simple) {
+        /* 简单路径：底色直接铺进帧缓冲，各图层再直写覆盖 */
+        fill_fb(fb, bd);
+        return;
+    }
     for (int i = 0; i < PX_COUNT; i++) {
         c->px[i].top = c->px[i].under = bd;
         c->px[i].top1st = bd1st;
@@ -139,7 +171,13 @@ static void comp_reset(comp_t *c, const bus_t *bus, int is_sub)
    layer_bit：BG0-3=0-3、OBJ/3D=4；其混合目标位取自 BLENDCNT。 */
 static void comp_put(comp_t *c, int i, int x, int y, uint32_t color, int layer_bit)
 {
-    if (!((comp_winmask(c, x, y) >> layer_bit) & 1u))
+    /* 21-B9yi(续70)：简单合成路径 —— 直接覆盖（最终像素=最后写入的层） */
+    if (c->simple) {
+        c->fb[i] = color;
+        return;
+    }
+    /* 21-B9yi(续70)：无窗口时掩码恒 0x3F ⇒ 直接跳过 winmask 计算。 */
+    if (!c->no_window && !((comp_winmask(c, x, y) >> layer_bit) & 1u))
         return;
     px_t *p = &c->px[i];
     p->under = p->top;
@@ -180,11 +218,14 @@ static uint32_t blend_bright(uint32_t c, uint32_t evy, int up)
 static void comp_finalize(const comp_t *c, uint32_t *fb)
 {
     uint32_t mode = (c->blendcnt >> BLEND_MODE_SHIFT) & 3u;
-    for (int i = 0; i < PX_COUNT; i++) {
+    /* 21-B9yi(续70)：简单路径下帧缓冲已经是「最终像素」（模式=0 不混合），
+       只保留下面的 MASTER_BRIGHT 处理。 */
+    for (int i = 0; !c->simple && i < PX_COUNT; i++) {
         int x = i % RENDER_SCREEN_W, y = i / RENDER_SCREEN_W;
         const px_t *p = &c->px[i];
         uint32_t col = p->top;
-        int effect = (comp_winmask(c, x, y) >> 5) & 1;
+        /* 21-B9yi(续70)：无窗口时掩码 bit5 恒为 1（特效允许） */
+        int effect = c->no_window ? 1 : (int)((comp_winmask(c, x, y) >> 5) & 1u);
         if (effect && mode == 1 && p->top1st && p->under2nd)
             col = blend_alpha(p->top, p->under, c->eva, c->evb);
         else if (effect && mode == 2 && p->top1st)
@@ -278,32 +319,40 @@ static void draw_bg(const bus_t *bus, comp_t *c, uint32_t char_base,
                     uint32_t map_base, uint32_t pal_base, int is_256,
                     int ext, int ext_slot, int bg, int is_sub)
 {
-    for (int y = 0; y < RENDER_SCREEN_H; y++) {
-        for (int x = 0; x < RENDER_SCREEN_W; x++) {
-            int tile_x = x >> 3;
-            int tile_y = y >> 3;
-            int px = x & 7;
-            int py = y & 7;
-            uint16_t entry = bus_read16(bus, map_base + (uint32_t)(tile_y * 32 + tile_x) * 2u);
+    /* 21-B9yi(续70)：**按图块循环**（原来按像素循环，每个像素都要重读一次 tilemap）。
+       同一图块覆盖 8×8 像素，map 条目/翻转位/图块基址只取一次即可 ⇒
+       tilemap 读取次数降到 1/64，且图块 32/64 字节的顺序读也更缓存友好。
+       逐像素的语义（翻转、透明、调色板、comp_put 调用顺序）完全保持不变。 */
+    for (int ty = 0; ty < RENDER_SCREEN_H / 8; ty++) {
+        for (int tx = 0; tx < RENDER_SCREEN_W / 8; tx++) {
+            uint16_t entry = bus_read16(bus, map_base + (uint32_t)(ty * 32 + tx) * 2u);
             uint16_t tile_idx = entry & 0x3FFu;
-            if ((entry >> 10) & 1u) px = 7 - px; /* 水平翻转 */
-            if ((entry >> 11) & 1u) py = 7 - py; /* 垂直翻转 */
+            int hflip = (entry >> 10) & 1;
+            int vflip = (entry >> 11) & 1;
+            int palnum = (int)((entry >> 12) & 0xFu);
             uint32_t tile_addr = char_base + (uint32_t)tile_idx * (is_256 ? 64u : 32u);
-            uint8_t idx = tile_pixel(bus, tile_addr, px, py, is_256);
-            if (idx == 0)
-                continue; /* 透明像素 */
-            uint16_t color;
-            if (is_256 && ext)
-                /* 21-B9yi(续37)：扩展调色板槽号按 melonDS 口径——
-                   `extpalslot = ((bgnum<2) && (bgcnt & 0x2000)) ? 2+bgnum : bgnum`
-                   （BG0/BG1 可用 bit13 切到 2/3 号槽；本地此前一律用 bgnum）。 */
-                color = bus_vram_extpal16(bus, is_sub, ext_slot,
-                                          (entry >> 12) & 0xFu, idx);
-            else if (is_256)
-                color = bus_read16(bus, pal_base + (uint32_t)idx * 2u);
-            else
-                color = bus_read16(bus, pal_base + (uint32_t)(((entry >> 12) & 0xFu) * 16 + idx) * 2u);
-            comp_put(c, y * RENDER_SCREEN_W + x, x, y, rgb555_to_888(color), bg);
+            for (int py0 = 0; py0 < 8; py0++) {
+                int y = ty * 8 + py0;
+                int py = vflip ? (7 - py0) : py0;
+                for (int px0 = 0; px0 < 8; px0++) {
+                    int x = tx * 8 + px0;
+                    int px = hflip ? (7 - px0) : px0;
+                    uint8_t idx = tile_pixel(bus, tile_addr, px, py, is_256);
+                    if (idx == 0)
+                        continue; /* 透明像素 */
+                    uint16_t color;
+                    if (is_256 && ext)
+                        /* 21-B9yi(续37)：扩展调色板槽号按 melonDS 口径——
+                           `extpalslot = ((bgnum<2) && (bgcnt & 0x2000)) ? 2+bgnum : bgnum` */
+                        color = bus_vram_extpal16(bus, is_sub, ext_slot, palnum, idx);
+                    else if (is_256)
+                        color = bus_read16(bus, pal_base + (uint32_t)idx * 2u);
+                    else
+                        color = bus_read16(bus, pal_base +
+                                           (uint32_t)(palnum * 16 + idx) * 2u);
+                    comp_put(c, y * RENDER_SCREEN_W + x, x, y, rgb555_to_888(color), bg);
+                }
+            }
         }
     }
 }
@@ -565,7 +614,7 @@ static void render_engine(const bus_t *bus, uint32_t *fb, int is_sub)
     }
 
     comp_t c;
-    comp_reset(&c, bus, is_sub);
+    comp_reset(&c, bus, is_sub, fb);
 
     if (!render_bitmap(bus, &c, is_sub, dispcnt))
         render_tiled(bus, &c, is_sub, dispcnt);

@@ -1,6 +1,19 @@
 #include "snd.h"
 #include "bus/bus.h"
 #include <string.h>
+#include <stdio.h>
+
+/* 21-B9xl 诊断：通道启动/结束打点（带帧号），用于与参考核对照“通道生命周期”。 */
+extern unsigned long long g_dbg_frame;
+static int g_snd_evt_log = 0;
+
+static void snd_log(const char *what, int ch)
+{
+    if (g_snd_evt_log >= 240)
+        return;
+    g_snd_evt_log++;
+    printf("snd: ch=%d %s f=%llu\n", ch, what, g_dbg_frame);
+}
 
 /* ---- 寄存器地址换算 ---- */
 
@@ -95,7 +108,10 @@ void snd_write8(snd_t *s, uint32_t addr, uint8_t val)
         c->cnt = (c->cnt & ~mask) | (((uint32_t)val << (off * 8)) & mask);
         /* bit31 0→1：启动并复位游标；bit31 1→0：停止 */
         if (!(old & SNDCNT_START) && (c->cnt & SNDCNT_START))
+        {
+            snd_log("start", ch);
             snd_reset_channel(c);
+        }
         break;
     }
     case 4: case 5: case 6: case 7: {
@@ -291,6 +307,7 @@ void snd_render(snd_t *s, const struct bus *bus, int16_t *out_l, int16_t *out_r,
                             snd_reset_channel(c); /* 简化：回绕从头重放 */
                             c->cnt |= SNDCNT_START;
                         } else {
+                            snd_log("end", ch);
                             c->cnt &= ~SNDCNT_START; /* 单发/手动：停止 */
                         }
                     }

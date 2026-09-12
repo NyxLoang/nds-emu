@@ -216,6 +216,7 @@ static void comp_finalize(const comp_t *c, uint32_t *fb)
 static int render_bitmap(const bus_t *bus, comp_t *c, int is_sub, uint32_t dispcnt)
 {
     unsigned bmode = dispcnt & DISPCNT_MODE_MASK;
+
     if (bmode < 3 || bmode > 5)
         return 0;
     uint32_t gfx_base = is_sub ? BG_GFX_SUB : BG_GFX_MAIN;
@@ -366,6 +367,19 @@ static void render_tiled(const bus_t *bus, comp_t *c, int is_sub, uint32_t dispc
     uint32_t disp_char = is_sub ? 0 : ((dispcnt >> DISPCNT_CHAR_BASE_SHIFT) & 7u);
     uint32_t disp_screen = is_sub ? 0 : ((dispcnt >> DISPCNT_SCREEN_BASE_SHIFT) & 7u);
     unsigned bmode = dispcnt & DISPCNT_MODE_MASK;
+
+    /* 21-B9y3 诊断：无条件打印本引擎的 DISPCNT 与 4 个 BGxCNT（不受使能/优先级过滤） */
+    {
+        static int dbg_eng[2] = {0, 0};
+        int eng = is_sub ? 1 : 0;
+        if (!dbg_eng[eng] && getenv("NDS_BGDBG") != NULL) {
+            dbg_eng[eng] = 1;
+            printf("bgdbg: engine=%d dispcnt=%08X mode=%u bgcnt=%04X/%04X/%04X/%04X\n",
+                   is_sub, dispcnt, bmode,
+                   bus_read16(bus, bgcnt_base + 0), bus_read16(bus, bgcnt_base + 2),
+                   bus_read16(bus, bgcnt_base + 4), bus_read16(bus, bgcnt_base + 6));
+        }
+    }
 
     /* 先画低优先级（数字大），再画高优先级（数字小）以正确覆盖 */
     for (int prio = 3; prio >= 0; prio--) {

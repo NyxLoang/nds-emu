@@ -3130,3 +3130,34 @@ loc1900k.bmp（分支在） vs loc1900q.bmp（分支已移除）：MAD = 0.00   
 `screen_base = ((BGxCNT>>8)&0x1F)*0x800`、`char_base = ((BGxCNT>>2)&0xF)*0x4000`、
 尺寸、以及第一个 tile 的取址/取色结果；与 melonDS `GPU2D_Soft::DrawBG_Text` 的同口径
 公式逐项比对，找出本地把哪一层的取数地址算到了空区域（从而全黑）。
+
+### 21-B9y3（2026-09-12）：**渲染时刻的 DISPCNT 与 dump 不一致**（方法论问题）
+
+诊断已实现（`NDS_BGDBG=1` 时每个引擎打印一次 render 时刻的 DISPCNT 与 4 个 BGxCNT）：
+
+```
+bgdbg: engine=0 dispcnt=80111418 mode=0 bgcnt=0003/0006/2185/0204
+bgdbg: bg=2 prio=1 bgcnt=2185 char=06004000 map=06000800 e0=0000 e1=0001 256c=1 ext=0
+bgdbg: engine=1 dispcnt=40011430 mode=0 bgcnt=0003/020E/038D/0404
+bgdbg: bg=2 prio=1 bgcnt=038D char=0620C000 map=06201800 e0=0000 e1=0001 256c=1 ext=1
+```
+
+同一帧的 IO dump 对照：
+
+| 来源 | 引擎 A DISPCNT |
+|---|---|
+| 参考核帧 1900 dump | `00121F10`（mode 2、BG0-3+OBJ 全开） |
+| 本地帧 1900 **dump** | `00121F10`（与参考一致 ✓） |
+| 本地帧 1900 **render 时刻** | **`80111418`（mode 0、只开 BG2+OBJ）** |
+
+即：**游戏一帧内多次改写 DISPCNT，而本地"截图渲染"与"dump"发生在不同时刻**
+（截图在 `runner_headless_frames` 内部、dump 在返回之后），两处寄存器状态不同。
+这解释了"只看到 BG2 参与合成"——那是截图时刻的状态，不是 dump 时刻的状态。
+
+**方法论修正（下一步第一步，优先级最高）**：
+
+1. 把本地**截图与 dump 对齐到同一时刻**（同一函数内固定顺序），并在截图时打印所用
+   DISPCNT；
+2. 参考核是"RunFrame 之后"取图，本地也应固定在**帧边界之后**渲染；
+3. 对齐后重跑 1900 帧逐像素对照——在此之前，之前关于"奇偶列/条纹"的所有结论都要
+   在这个前提下重新确认（很可能其中一部分是采样时刻差异，而非渲染 bug）。

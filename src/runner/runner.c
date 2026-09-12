@@ -579,6 +579,14 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             extern int g_pchit_n;
             for (int i = 0; i < g_pchit_n; i++)
                 printf("pchit: %08X = %llu\n", g_pchit_addr[i], g_pchit_cnt[i]);
+            {
+                extern unsigned long long g_pchit_hist[16];
+                printf("pchit-hist:");
+                for (int i = 0; i < 16; i++)
+                    if (g_pchit_hist[i])
+                        printf(" [%X]=%llu", i, g_pchit_hist[i]);
+                printf("\n");
+            }
         }
         {
             extern unsigned long long g_ipc_sends[2];

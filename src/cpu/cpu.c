@@ -13,6 +13,8 @@
 uint32_t g_pchit_addr[16];
 unsigned long long g_pchit_cnt[16];
 int g_pchit_n = 0;
+/* 21-B9xs：命中时 r0 低 4 位的直方图（用于看“投递索引 0..3 各多少次”） */
+unsigned long long g_pchit_hist[16];
 
 arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc, int is_arm7)
 {
@@ -137,6 +139,7 @@ int cpu_step(arm_cpu_t *cpu)
         for (int i = 0; i < g_pchit_n; i++) {
             if (g_pchit_addr[i] == hit_pc) {
                 g_pchit_cnt[i]++;
+                g_pchit_hist[cpu->r[0] & 0xFu]++;
                 if (g_pchit_log[i] < 3) {
                     g_pchit_log[i]++;
                     const bus_t *b = cpu->nds->bus;

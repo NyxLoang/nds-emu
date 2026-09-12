@@ -4906,14 +4906,14 @@ static void test_gx_layer(nds_t *nds)
     bus_write32(nds->bus, IO_DISPCNT, 5u | DISPCNT_BG2 | (1u << DISPCNT_DISPLAY_MODE_SHIFT));
     bus_write16(nds->bus, IO_BGCNT_BASE + 2 * 2, BGCNT_COLORS_256 | BGCNT_DIRECT_COLOR | (1u << 14));
 
-    /* 3D 未使能：三角形不显示（露出 2D 黑背景） */
-    render_frame(nds->bus, fb_top, fb_bot);
-    CHECK_EQ("gx layer off", fb_top[50 * RENDER_SCREEN_W + 50], 0xFF000000u);
-
-    /* 3D 使能（DISP3DCNT bit13）：三角形像素覆盖到顶屏 */
-    bus_write32(nds->bus, IO_DISP3DCNT, DISP3D_ENABLE);
+    /* 21-B9xw：3D 图层不需要 DISP3DCNT 使能位（melonDS 里 bit12/13 是写 1 清零位，
+       参考核帧 1900 的 DISP3DCNT=0x0011 时 3D 内容照样显示）→ 三角形直接覆盖顶屏 */
     render_frame(nds->bus, fb_top, fb_bot);
     CHECK_EQ("gx layer on", fb_top[50 * RENDER_SCREEN_W + 50], 0xFFF80000u);
+
+    /* DISP3DCNT bit13 的写入语义：写 1 清零、写 0 保持（melonDS GPU3D::Write16） */
+    bus_write32(nds->bus, IO_DISP3DCNT, DISP3D_ENABLE);
+    CHECK_EQ("disp3dcnt w1c", bus_read32(nds->bus, IO_DISP3DCNT) & DISP3D_ENABLE, 0u);
 }
 
 /* ---- 阶段 20.1 用例：仿射背景寄存器读写（PA-PD 1.7.8 / X-Y 1.19.8） ---- */

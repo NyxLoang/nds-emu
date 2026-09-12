@@ -396,8 +396,20 @@ void gx_write8(gx_t *g, uint32_t addr, uint8_t val)
 {
     if (addr >= IO_DISP3DCNT && addr < IO_DISP3DCNT + 4) {
         int shift = (int)((addr - IO_DISP3DCNT) * 8);
-        uint32_t mask = 0xFFu << shift;
-        g->disp3dcnt = (g->disp3dcnt & ~mask) | ((uint32_t)val << shift);
+        /* 21-B9xw：DISP3DCNT 语义对齐 melonDS GPU3D::Write16/32——
+           DispCnt = (val & 0x4FFF) | (DispCnt & 0x3000)；其中 bit12/13
+           是**写 1 清零**位（写 0 不动它们）。本地此前按普通字节写处理，
+           结果 bit12/13 一直是 1（帧 1900 实测本机 0x3011、参考核 0x0011）。 */
+        uint32_t word = g->disp3dcnt;
+        if (shift == 0) {
+            word = (word & ~0x00FFu) | (uint32_t)val;
+        } else if (shift == 8) {
+            word = (word & ~0x0F00u) | ((uint32_t)(val & 0x0Fu) << 8);
+            word = (word & ~0x3000u) | (g->disp3dcnt & 0x3000u);
+            if (val & 0x10u) word &= ~(1u << 12);
+            if (val & 0x20u) word &= ~(1u << 13);
+        }
+        g->disp3dcnt = word;
     }
     /* GXSTAT 0x04000603：bit30-31 为 FIFO IRQ 模式（melonDS Write8 口径），
        0x04000601 bit7 清矩阵栈复位标志；RAM_COUNT 保持只读。 */

@@ -442,15 +442,15 @@ static void render_obj(const bus_t *bus, comp_t *c, int is_sub)
     }
 }
 
-/* 3D 图层（阶段 19.4）：DISP3DCNT 使能位(bit13)置位时，把 3D 帧缓冲覆盖到主引擎。
-   0 像素视为「无几何」，非 0 像素用其颜色覆盖；混合目标位复用 OBJ（bit4/12）。 */
+/* 3D 图层（阶段 19.4 / 21-B9xw 更正）：3D 输出**不**由 DISP3DCNT 使能位控制
+    （melonDS 里 DISP3DCNT bit12/13 是写 1 清零位，帧 1900 参考核 bit13=0 时
+    3D 内容照样出现在顶屏）。因此这里直接合成 3D 帧缓冲：0 像素视为无几何，
+    非 0 像素覆盖到主引擎；混合目标位复用 OBJ（bit4/12）。 */
 static void render_3d(const bus_t *bus, comp_t *c)
 {
     if (bus->io == NULL)
         return;
     const gx_t *g = &bus->io->gx;
-    if (!(g->disp3dcnt & DISP3D_ENABLE))
-        return;
     const uint16_t *src = gx_framebuffer(g);
     for (int i = 0; i < PX_COUNT; i++) {
         if (src[i] == 0)

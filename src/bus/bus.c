@@ -595,6 +595,71 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
     return 0;
 }
 
+/* 21-B9yi(续51)：访存快路径的「普通内存」解析。
+
+   动机：`NDS_PROF=1` 阶段剖析显示时间 82.9% 花在解释器核心（取指/译码/执行/访存），
+   而每次 32 位 LDR/STR 都要「拆成 4 次 `bus_read8`，每次都重走一遍
+   GBA 槽 → IO → ARM7 BIOS → bus_resolve(ITCM→主存→DTCM→镜像→VRAM…) 的判定链」。
+
+   这里只覆盖最热的四段（**判定顺序与偏移换算与 bus_resolve 逐条一致**）：
+     ARM9 ITCM（0x01FF8000，仅 ARM9）→ Main RAM（0x02000000）→
+     ARM9 DTCM（动态基址，仅 ARM9）→ Main RAM 无缓存镜像（0x02400000，与主存同物理数组）
+   命中时给出字节指针、段内偏移与**该段剩余字节数**（`avail`），
+   这样宽访问可以一次取字，并且只在「整次访问都不跨段」时才走快路径。
+   未命中（IO/VRAM/GBA 槽/ARM7 BIOS/未映射）一律回落到原来的通用路径，语义不变。 */
+/* 21-B9yi(续51) 对照开关：`NDS_NOFAST=1` 关闭访存快路径（相邻配对 A/B 用；
+   实测结论见 docs/21-rom-bringup.md 续51）。默认开启快路径，只多一次可预测分支。 */
+static int s_no_fast = -1;
+
+static void bus_fast_init(void)
+{
+    const char *e = getenv("NDS_NOFAST");
+    s_no_fast = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
+}
+
+static int bus_resolve_mem(const bus_t *bus, uint32_t addr,
+                           const uint8_t **region, size_t *off, size_t *avail)
+{
+    size_t rel;
+    if (!bus->active_is_arm7 && addr >= BUS_ARM9_ITCM_BASE) {
+        rel = (size_t)(addr - BUS_ARM9_ITCM_BASE);
+        if (rel < BUS_ARM9_ITCM_SIZE) {
+            *region = bus->arm9_itcm;
+            *off = rel;
+            *avail = (size_t)BUS_ARM9_ITCM_SIZE - rel;
+            return 1;
+        }
+    }
+    if (addr >= BUS_MAIN_RAM_BASE) {
+        rel = (size_t)(addr - BUS_MAIN_RAM_BASE);
+        if (rel < BUS_MAIN_RAM_SIZE) {
+            *region = bus->main_ram;
+            *off = rel;
+            *avail = (size_t)BUS_MAIN_RAM_SIZE - rel;
+            return 1;
+        }
+    }
+    if (!bus->active_is_arm7 && bus->arm9_dtcm_on && addr >= bus->arm9_dtcm_base) {
+        rel = (size_t)(addr - bus->arm9_dtcm_base);
+        if (rel < bus->arm9_dtcm_size) {
+            *region = bus->arm9_dtcm;
+            *off = rel;
+            *avail = (size_t)bus->arm9_dtcm_size - rel;
+            return 1;
+        }
+    }
+    if (addr >= BUS_MAIN_RAM_MIRROR_BASE) {
+        rel = (size_t)(addr - BUS_MAIN_RAM_MIRROR_BASE);
+        if (rel < BUS_MAIN_RAM_SIZE) {
+            *region = bus->main_ram;
+            *off = rel;
+            *avail = (size_t)BUS_MAIN_RAM_SIZE - rel;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* 21-B9xp：读监视包装。宽读（16/32 位）期间抑制字节级打印，只按访问宽度打印一次。 */
 uint8_t bus_read8(const bus_t *bus, uint32_t addr)
 {
@@ -657,6 +722,20 @@ void bus_write8(bus_t *bus, uint32_t addr, uint8_t val)
    低地址字节是最低 8 位，高地址字节移到 <<8 位置（复习 docs/00b）。 */
 uint16_t bus_read16(const bus_t *bus, uint32_t addr)
 {
+    /* 21-B9yi(续51)：宽访问快路径（见 bus_resolve_mem 的注释）。 */
+    {
+        const uint8_t *region;
+        size_t off, avail;
+        if (s_no_fast < 0)
+            bus_fast_init();
+        if (!s_no_fast &&
+            bus_resolve_mem(bus, addr, &region, &off, &avail) && avail >= 2) {
+            uint16_t v = (uint16_t)(region[off] | ((uint16_t)region[off + 1] << 8));
+            if (bus->diag && bus->watch_on)
+                bus_dbg_watch_read(bus, addr, 2, v);
+            return v;
+        }
+    }
     g_wide_read = 1;
     uint16_t v = (uint16_t)bus_read8(bus, addr)
                | ((uint16_t)bus_read8(bus, addr + 1) << 8);
@@ -669,6 +748,21 @@ uint16_t bus_read16(const bus_t *bus, uint32_t addr)
 /* 小端 16 位写：反向拆字节，最低字节落到低地址。 */
 void bus_write16(bus_t *bus, uint32_t addr, uint16_t val)
 {
+    /* 21-B9yi(续51)：宽写快路径（见 bus_resolve_mem 的注释）。 */
+    {
+        const uint8_t *region;
+        size_t off, avail;
+        if (s_no_fast < 0)
+            bus_fast_init();
+        if (!s_no_fast &&
+            bus_resolve_mem(bus, addr, &region, &off, &avail) && avail >= 2) {
+            if (bus->diag && bus->watch_on)
+                bus_dbg_watch(bus, addr, 2, val);
+            ((uint8_t *)region)[off] = (uint8_t)(val & 0xFF);
+            ((uint8_t *)region)[off + 1] = (uint8_t)(val >> 8);
+            return;
+        }
+    }
     if (bus->diag && bus->watch_on)
         bus_dbg_watch(bus, addr, 2, val);
     g_wide_write = 1;
@@ -713,6 +807,23 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
             bus_dbg_watch_read(bus, addr, 4, v);
         return v;
     }
+    /* 21-B9yi(续51)：宽读快路径（见 bus_resolve_mem 的注释）。 */
+    {
+        const uint8_t *region;
+        size_t off, avail;
+        if (s_no_fast < 0)
+            bus_fast_init();
+        if (!s_no_fast &&
+            bus_resolve_mem(bus, addr, &region, &off, &avail) && avail >= 4) {
+            uint32_t v = (uint32_t)region[off]
+                       | ((uint32_t)region[off + 1] << 8)
+                       | ((uint32_t)region[off + 2] << 16)
+                       | ((uint32_t)region[off + 3] << 24);
+            if (bus->diag && bus->watch_on)
+                bus_dbg_watch_read(bus, addr, 4, v);
+            return v;
+        }
+    }
     g_wide_read = 1;
     uint32_t v = (uint32_t)bus_read8(bus, addr)
                | ((uint32_t)bus_read8(bus, addr + 1) << 8)
@@ -749,6 +860,23 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
         if (bus->io != NULL)
             io_gx_write32(bus->io, addr, val);
         return;
+    }
+    /* 21-B9yi(续51)：宽写快路径（见 bus_resolve_mem 的注释）。 */
+    {
+        const uint8_t *region;
+        size_t off, avail;
+        if (s_no_fast < 0)
+            bus_fast_init();
+        if (!s_no_fast &&
+            bus_resolve_mem(bus, addr, &region, &off, &avail) && avail >= 4) {
+            if (bus->diag && bus->watch_on)
+                bus_dbg_watch(bus, addr, 4, val);
+            ((uint8_t *)region)[off]     = (uint8_t)(val & 0xFF);
+            ((uint8_t *)region)[off + 1] = (uint8_t)(val >> 8);
+            ((uint8_t *)region)[off + 2] = (uint8_t)(val >> 16);
+            ((uint8_t *)region)[off + 3] = (uint8_t)(val >> 24);
+            return;
+        }
     }
     if (bus->diag && bus->watch_on)
         bus_dbg_watch(bus, addr, 4, val);

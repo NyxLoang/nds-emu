@@ -91,6 +91,13 @@ typedef struct gx {
        本地此前从不置 bit27 ⇒ 这类等待被整段跳过，游戏跑得比参考核快
        （实测 f=2120 起画面比参考核早 ~30 帧）。 */
     uint32_t busy_cycles;
+    /* 21-B9yi(续22)：GX 命令 FIFO 里已入队、尚未被 3D 引擎消费的**字数**
+       （melonDS 的 `CmdFIFO` 是 112 项 = 224 字）。模式 7（GX FIFO）DMA 每次
+       只能推进到「有空位」为止，搬不完就保持 InProgress 等下次——本地此前
+       一次搬完 ⇒ 立刻满足 RemCount==0 而挂出 IF bit11，且 GXSTAT 的 FIFO
+       电平位恒为「空」，与参考核不同。 */
+    uint32_t fifo_words;
+#define GX_FIFO_CAP_WORDS 224u
 
     int mt_mode;         /* 当前矩阵模式 0=投影 1/2=位置 3=纹理 */
     int64_t proj[16];    /* 投影矩阵 */
@@ -135,6 +142,9 @@ void gx_reset(gx_t *g);
 
 /* 21-B9yi(续16)：按系统时钟消耗 3D 引擎工作周期（到 0 时清 GXSTAT bit27）。 */
 void gx_advance(gx_t *g, uint32_t cycles);
+
+/* 21-B9yi(续22)：GX 命令 FIFO 的剩余空间（字）。模式 7 DMA 用它决定一次搬多少。 */
+uint32_t gx_fifo_free_words(const gx_t *g);
 
 /* 把 3D 帧缓冲暴露给渲染层（ppu 混合 3D 图层用）。 */
 const uint16_t *gx_framebuffer(const gx_t *g);

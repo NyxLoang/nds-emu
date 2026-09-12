@@ -663,3 +663,12 @@ cnt_h=0x7C40 = 使能 + 32 位 + 模式 7（GX FIFO）+ bit14「IRQ on end」
 `Run9` 会 `Stall` 分批推进）。
 
 ⇒ 待办：GX 有界命令 FIFO + 消耗节拍 + GXSTAT 真实电平位 + 模式 7 DMA 分批/续跑。
+
+### 21-B9yi（续22）— 模式 7（GX FIFO）DMA 分批与续跑
+
+- `dma_channel_t` 新增 `rem`（本轮剩余单元数）：模式 7 搬运时按 `gx_fifo_free_words()`
+  决定一次搬多少，搬不完就**保持 enable、不挂完成中断**，等 FIFO 腾空由
+  `dma_gx_resume()`（在 `io_advance_cart()` 里每片调用）继续，直到 `rem==0` 才走
+  原有收尾（重复位保持使能 / 否则清使能 / 按 `DMA_CNT_IRQ` 挂中断）。
+- 效果：本地 `IF bit11` 从 **58 次/81 帧降到 0 次**（参考核 0 次）；
+  逐帧逐像素一致窗口 1900-2110 → **1900-2140**（见 `docs/21-rom-bringup.md` 续22）。

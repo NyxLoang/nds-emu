@@ -463,6 +463,8 @@ void gx_write32(gx_t *g, uint32_t addr, uint32_t val)
 {
     if (addr >= GX_GXFIFO && addr < GX_GXFIFO_END) {
         g->fifo_writes++;
+        /* 21-B9yi(续22)：FIFO 里按字计数（32 位写 = 2 字），供模式 7 DMA 判断空位。 */
+        g->fifo_words += 2u;
         if (g_pending == 0) {
             /* 命令字：低 4 字节各一条命令（0=NOP） */
             for (int i = 0; i < 4; i++) {
@@ -512,6 +514,13 @@ const uint16_t *gx_framebuffer(const gx_t *g)
    让「等 3D 忙」的轮询循环耗时与参考核同量级。 */
 void gx_advance(gx_t *g, uint32_t cycles)
 {
+    /* 21-B9yi(续22)：3D 引擎按节拍消费 FIFO 里的字（约 4 个系统周期 1 字，
+       与 melonDS 的 3D 命令周期同一量级）。模式 7 DMA 靠这个腾出空位推进。 */
+    if (g->fifo_words != 0) {
+        uint32_t drain = cycles / 4u;
+        if (drain > g->fifo_words) drain = g->fifo_words;
+        g->fifo_words -= drain;
+    }
     if (g->busy_cycles == 0)
         return;
     if (cycles >= g->busy_cycles) {
@@ -520,4 +529,11 @@ void gx_advance(gx_t *g, uint32_t cycles)
     } else {
         g->busy_cycles -= cycles;
     }
+}
+
+uint32_t gx_fifo_free_words(const gx_t *g)
+{
+    if (g->fifo_words >= GX_FIFO_CAP_WORDS)
+        return 0;
+    return GX_FIFO_CAP_WORDS - g->fifo_words;
 }

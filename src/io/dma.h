@@ -47,6 +47,10 @@ typedef struct dma_channel {
     uint32_t dad;
     uint16_t cnt_l;
     uint16_t cnt_h;
+    /* 21-B9yi(续22)：本轮搬运**剩余单元数**（0=没有未完成的搬运）。
+       模式 7（GX FIFO）会被 FIFO 空位卡住、分批推进，此时 rem>0 且保持使能：
+       既不清 enable 也不挂完成中断，等 `dma_gx_resume()` 在 FIFO 腾空后继续。 */
+    uint32_t rem;
 } dma_channel_t;
 
 /* 4 条通道（阶段 7 只实现 DMA0 一条；阶段 15 补齐全部 4 条）。 */
@@ -67,5 +71,8 @@ void dma_fire(dma_t *dma, struct bus *bus, int start_mode, int is_arm7);
 
 /* 卡带 DRQ 触发（按核区分语义：ARM9 模式 5，ARM7 模式 = bits13-12|0x10）。 */
 void dma_fire_card(dma_t *dma, struct bus *bus, int is_arm7);
+
+/* 21-B9yi(续22)：FIFO 腾出空位后继续未完成的模式 7（GX FIFO）搬运。 */
+void dma_gx_resume(dma_t *dma, struct bus *bus, int is_arm7);
 
 #endif /* NDS_EMU_IO_DMA_H */

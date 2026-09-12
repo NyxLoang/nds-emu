@@ -111,7 +111,30 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm
     bus->active_is_arm7 = is_arm7;
     int prev_dma = g_dma_active;
     g_dma_active = 1;
-    for (uint32_t i = 0; i < n; i++) {
+    /* 21-B9yi(续22)：**模式 7（GX FIFO）按 FIFO 空位分批**。
+       melonDS 的 `DMA::Run9` 在 GX-FIFO 模式下受 `CmdFIFO`（112 项）容量限制，
+       满了就 `Stall`、等 `GPU3D::CheckFIFODMA()` 再继续，因此这种 DMA 常常
+       跨很多周期才把 RemCount 走完；本地此前一次搬完 ⇒ 立刻满足 RemCount==0
+       ⇒ 立刻挂 IF bit11（实测多出 ~0.7 次/帧，参考核一次都没有）。
+       这里：能搬多少搬多少，搬不完就记在 `dma->rem` 上、保持使能并由
+       `dma_gx_resume()` 续跑；只有全部搬完才走原来的收尾（清使能/挂中断）。 */
+    int is_gx = (!is_arm7
+                 && (((dma->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT)
+                     == DMA_START_GXFIFO));
+    uint32_t to_do = n;
+    if (is_gx && bus != NULL && bus->io != NULL) {
+        uint32_t freew = gx_fifo_free_words(&bus->io->gx);
+        uint32_t units_free = is32 ? freew : (freew * 2u);
+        if (units_free == 0)
+            units_free = 0;
+        if (to_do > units_free)
+            to_do = units_free;
+    }
+    if (dma->rem == 0)
+        dma->rem = n;
+    if (to_do > dma->rem)
+        to_do = dma->rem;
+    for (uint32_t i = 0; i < to_do; i++) {
         /* 21-B9yi(续12)：**去掉 21-B9zb 的「瞬间推进卡带时钟」hack**。
            真机/melonDS 的卡带 DMA 不推进卡带时钟：数据由卡带侧按自己的节拍
            取进 2 字 FIFO 并拉 DRQ（`ROMReceiveData`），DMA 只是把 FIFO 里
@@ -126,9 +149,16 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm
         src = dma_advance(src, src_mode, step);
         dst = dma_advance(dst, dst_mode, step);
     }
+    dma->rem -= to_do;
 
     bus->active_is_arm7 = prev_arm7;
     g_dma_active = prev_dma;
+    if (dma->rem != 0) {
+        /* 未搬完（FIFO 满）：地址照常写回、保持使能、**不**挂完成中断。 */
+        dma->sad = src;
+        dma->dad = dst;
+        return;
+    }
     /* 21-B9yi：把推进后的地址写回通道——重复模式（CNT bit25）下卡带 DMA 会
        反复触发，**地址必须跨轮次保持前进**，否则每个字都写到同一个地址
        （实测：游戏用 `AF000001`（模式 5 + 重复 + 源固定/目的递增）逐字搬 512B，
@@ -245,5 +275,30 @@ void dma_fire_card(dma_t *dma, struct bus *bus, int is_arm7)
         }
         if (!fired)
             break;
+    }
+}
+
+/* 21-B9yi(续22)：GX（模式 7）DMA 的续跑。
+   被 FIFO 空位卡住的通道保持 enable=1、rem>0；3D 引擎消费掉一些 FIFO 字后
+   （`gx_advance()`）由 io 层调用本函数继续搬。对齐 melonDS
+   `GPU3D::CheckFIFODMA()` 的角色。 */
+void dma_gx_resume(dma_t *dma, struct bus *bus, int is_arm7)
+{
+    if (dma == NULL || bus == NULL || is_arm7)
+        return;
+    for (int c = 0; c < IO_DMA_COUNT; c++) {
+        dma_channel_t *d = &dma->ch[c];
+        if (d->rem == 0)
+            continue;
+        if ((d->cnt_h & DMA_CNT_ENABLE) == 0) {
+            d->rem = 0;      /* 被软件撤下武装：丢弃未完成的搬运 */
+            continue;
+        }
+        unsigned mode = (d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT;
+        if (mode != DMA_START_GXFIFO)
+            continue;
+        if (gx_fifo_free_words(&bus->io->gx) == 0)
+            continue;
+        dma_transfer(d, bus, c, is_arm7);
     }
 }

@@ -116,3 +116,22 @@
 f=2090-2110 与参考核仍逐帧 100% 逐像素相同；f=500 开关对照 MAD 均为 135.27（无差异）；
 **f=2120 的首个分歧仍在且逐值不变** ⇒ 该分歧与 3D 忙等待无关（见
 `docs/21-rom-bringup.md` 续16 的下一步：VRAM bank 内容差异 / 双缓冲 + 交换清屏）。
+
+### 21-B9yi（续22）— GX 命令 FIFO 加节拍（模式 7 DMA 分批 / 续跑）
+
+**动机**：`NDS_DMAIRQ` 显示本地 IF bit11（DMA3 完成）多出 ~0.7 次/帧，全部来自
+**模式 7（GX FIFO）DMA**；melonDS 的 GX-FIFO DMA 受 `CmdFIFO`（112 项）容量与
+3D 引擎消耗速度限制，`Run9` 会 `Stall`、分批推进，完成时机完全不同。
+
+**实现**：
+
+- `gx_t.fifo_words`：FIFO 内已入队未消费字数（写命令端口 +2 字/次），
+  上限 `GX_FIFO_CAP_WORDS = 224`（=112 项）；`gx_fifo_free_words()` 给出空位；
+- `gx_advance()`：按系统时钟消费（≈4 周期/字），与 `busy_cycles`（GXSTAT bit27）同一时钟；
+- `dma_transfer()`（模式 7）：只在有空位时推进，搬不完保持 enable、剩余记入
+  `dma_channel_t.rem`、**不挂完成中断**；`dma_gx_resume()` 在 FIFO 腾空后续跑
+  （对齐 melonDS `GPU3D::CheckFIFODMA()`），由 `io_advance_cart()` 每片调用。
+
+**效果**：IF bit11 **58 次/81 帧 → 0 次**（参考核 0 次）；**逐帧逐像素一致窗口
+从 f=1900-2110 扩到 f=1900-2140**；f=2150 起本地只落后 10 帧
+（本地 f=2150 == 参考核 f=2140 逐像素）；931 项单测 0 失败。

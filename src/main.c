@@ -12,6 +12,8 @@
 #include "nds/nds.h"
 #include "bus/bus.h"
 #include "cpu/cpu.h"
+#include "cpu/exec.h"   /* 21-B9yi(续49)：exec_set_trace */
+#include "cpu/thumb.h"  /* 21-B9yi(续49)：thumb_set_trace */
 #include "io/io.h"
 #include "ppu/ppu.h"
 #include "cart/cart.h"
@@ -573,6 +575,10 @@ int main(int argc, char *argv[])
 
     /* 21-B9wq：持久化帧驱动调度器（与 headless 共用事件/周期成本模型） */
     runner_t *frame_runner = runner_create(nds);
+    /* 21-B9yi(续49)：显式关掉指令级 trace。它是 bring-up 用的诊断设施，
+       开着时**每条指令都会 printf**（窗口模式实测 <2 fps + GB 级日志）。 */
+    exec_set_trace(0);
+    thumb_set_trace(0);
 
     /* 阶段 6：SDL 按键 → NDS 按键状态（pressed 位=1 表示按下，按下=0 是 NDS 读值）。
        映射见下方 switch；KEY_* 常量来自 io/key.h。 */

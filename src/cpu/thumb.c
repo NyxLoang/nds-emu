@@ -12,8 +12,9 @@
 #include "bus/bus.h"
 #include "bios/bios.h"
 
-/* 指令级跟踪开关（thumb_set_trace 控制） */
-static int g_trace = 1;
+/* 指令级跟踪开关（thumb_set_trace 控制）。21-B9yi(续49)：默认必须关——
+   理由见 exec.c 里同名开关的注释（窗口模式每条指令 printf ⇒ <2 fps + GB 级日志）。 */
+static int g_trace = 0;
 
 void thumb_set_trace(int on)
 {

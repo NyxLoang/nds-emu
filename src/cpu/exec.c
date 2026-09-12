@@ -4,8 +4,12 @@
 #include "bus/bus.h"
 #include "bios/bios.h"
 
-/* 指令级跟踪开关（exec_set_trace 控制） */
-static int g_trace = 1;
+/* 指令级跟踪开关（exec_set_trace 控制）。
+   21-B9yi(续49)：**默认必须关**。此前默认 1（bring-up 期为了看前几十条指令），
+   但窗口模式从没调用过 exec_set_trace(0)，于是**每条指令都 printf 一次**：
+   实测窗口模式 600 帧跑 5 分钟以上（<2 fps）并写出 GB 级日志（1.97 GB）。
+   改成默认关；要看轨迹用 `--trace`（headless）或显式 exec_set_trace(1)。 */
+static int g_trace = 0;
 
 void exec_set_trace(int on)
 {

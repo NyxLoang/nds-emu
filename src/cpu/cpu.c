@@ -161,8 +161,47 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
     return nonseq ? (uint32_t)s_nonseq_cost : 1u; /* 主存：非顺序取指更贵 */
 }
 
+/* ---------------------------------------------------------------------------
+   21-B9yi(续50) 阶段剖析（诊断设施，`NDS_PROF=1` 才启用）。
+
+   为什么需要它：本机没有可用的采样 profiler —— gprof 在这套 MinGW 上连
+   「hello + 忙循环」都采不到样本（flat profile 恒为空），而 LTO 又让符号消失。
+   于是用 rdtsc 手工把每条指令的时间拆成两块：
+     · IO 推进：`io_advance_timers`（4 个定时器）+ `io_advance_cart`
+       （GX 时钟、卡带时钟、DRQ→DMA 检查）
+     · 其余：取指 / 译码 / 执行 / 访存 / IRQ 检查
+   回答「下一步该优化解释器还是该优化 IO 推进」这个方向性问题。
+   关闭时只多一次全局 int 判断；开启时每条指令多两次 rdtsc（~30 周期，
+   对占比判断影响很小；但**绝对值不能当性能基线**）。
+   --------------------------------------------------------------------------- */
+static unsigned long long s_prof_steps, s_prof_io, s_prof_all;
+static int s_prof_on = -1;
+
+static unsigned long long cpu_rdtsc(void)
+{
+    unsigned int lo, hi;
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((unsigned long long)hi << 32) | lo;
+}
+
+static void cpu_prof_report(void)
+{
+    if (s_prof_steps == 0 || s_prof_all == 0)
+        return;
+    double io_pct = 100.0 * (double)s_prof_io / (double)s_prof_all;
+    printf("prof: steps=%llu  io-advance=%.1f%%  rest(fetch/exec/mem)=%.1f%%\n",
+           s_prof_steps, io_pct, 100.0 - io_pct);
+}
+
 int cpu_step(arm_cpu_t *cpu)
 {
+    if (s_prof_on < 0) {
+        const char *e = getenv("NDS_PROF");
+        s_prof_on = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
+        if (s_prof_on)
+            atexit(cpu_prof_report);
+    }
+    unsigned long long prof_t0 = s_prof_on ? cpu_rdtsc() : 0;
     /* 21-B9yi：上一条指令消耗的周期数（本步用于推进卡带时钟，使其与
        参考核一样按系统时钟节奏取数；见 io_advance_cart 注释） */
     uint32_t prev_cost = cpu->step_cycles;
@@ -219,8 +258,11 @@ int cpu_step(arm_cpu_t *cpu)
     /* 6.5：按本步消耗的周期推进当前核定时器（分频在 timer.c 内处理）。
        21-B9yi：传上一条指令的**实际周期数**（此前固定 1/指令，ARM9 平均 ~1.2，
        定时器会系统性偏慢；melonDS 定时器是挂在系统时钟上的）。 */
+    unsigned long long prof_io_t0 = s_prof_on ? cpu_rdtsc() : 0;
     io_advance_timers(cpu->nds->io, cpu->is_arm7, prev_cost ? prev_cost : 1u);
     io_advance_cart(cpu->nds->io, cpu->is_arm7, prev_cost);
+    if (s_prof_on)
+        s_prof_io += cpu_rdtsc() - prof_io_t0;
     /* 21-B9yi(续12) 诊断：NDS_PCSAMPLE=LO-HI@N → 帧区间内每 N 条 ARM9 指令打印
        一次 PC/lr/cpsr（粗粒度执行轨迹，用来判断「某段等待循环是不是被跳过了」）。
        例：NDS_PCSAMPLE=1903-1905@200 */
@@ -388,6 +430,10 @@ int cpu_step(arm_cpu_t *cpu)
         uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
         if (cpu->step_cycles != 0 && cpu->step_cycles < fc)
             cpu->step_cycles = fc;
+        if (s_prof_on) {
+            s_prof_steps++;
+            s_prof_all += cpu_rdtsc() - prof_t0;
+        }
         return r;
     }
     uint32_t insn = cpu_fetch(cpu);
@@ -397,6 +443,10 @@ int cpu_step(arm_cpu_t *cpu)
         uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
         if (cpu->step_cycles != 0 && cpu->step_cycles < fc)
             cpu->step_cycles = fc;
+    }
+    if (s_prof_on) {
+        s_prof_steps++;
+        s_prof_all += cpu_rdtsc() - prof_t0;
     }
     return r;
 }

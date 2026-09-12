@@ -2581,12 +2581,35 @@ static void test_step_cycles(nds_t *nds)
     CHECK_EQ("wfi step_cycles", cpu->step_cycles, 0u);
     CHECK_EQ("wfi no instruction", (uint32_t)cpu->cycles, 0u);
 
-    /* 普通指令：step_cycles=1，指令计数 +1 */
-    bus_write32(nds->bus, base, 0xEAFFFFFEu); /* B self */
+    /* 21-B9yh：普通指令的 step_cycles 现在含「按取指区域计费」——
+       ARM9 主存的**非顺序取指**（分支/跳转后）3、顺序取指与 ITCM/WRAM/IO
+       等其它区域 1；ARM7 不额外计费。 */
+    bus_write32(nds->bus, base, 0xE3A00001u);     /* mov r0,#1（顺序） */
+    bus_write32(nds->bus, base + 4u, 0xEAFFFFFEu); /* B self（非顺序） */
     cpu_reset(cpu, base);
     cpu_step(cpu);
-    CHECK_EQ("normal step_cycles", cpu->step_cycles, 1u);
+    CHECK_EQ("main RAM seq step_cycles", cpu->step_cycles, 1u);
     CHECK_EQ("normal instruction", (uint32_t)cpu->cycles, 1u);
+    cpu_step(cpu);                                 /* 进到 B self（顺序取指） */
+    CHECK_EQ("main RAM seq2 step_cycles", cpu->step_cycles, 1u);
+    cpu_step(cpu);                                 /* 跳回自身（非顺序取指） */
+    CHECK_EQ("main RAM branch step_cycles", cpu->step_cycles, 3u);
+
+    bus_write32(nds->bus, BUS_ARM9_ITCM_BASE, 0xEAFFFFFEu); /* B self（ITCM） */
+    cpu_reset(cpu, BUS_ARM9_ITCM_BASE);
+    cpu_step(cpu);
+    CHECK_EQ("ITCM step_cycles", cpu->step_cycles, 1u);
+
+    /* ARM7：WRAM 与主存都不额外计费（代码主要在 WRAM，实测指令数已低于参考核） */
+    bus_write32(nds->bus, BUS_ARM7_WRAM_BASE + 0x100u, 0xEAFFFFFEu);
+    cpu_reset(nds->cpu7, BUS_ARM7_WRAM_BASE + 0x100u);
+    cpu_step(nds->cpu7);
+    CHECK_EQ("arm7 WRAM step_cycles", nds->cpu7->step_cycles, 1u);
+
+    bus_write32(nds->bus, base + 0x1000u, 0xEAFFFFFEu);
+    cpu_reset(nds->cpu7, base + 0x1000u);
+    cpu_step(nds->cpu7);
+    CHECK_EQ("arm7 main RAM step_cycles", nds->cpu7->step_cycles, 1u);
 }
 
 /* ---- 21-B9vw：事件目标调度最小事件表 ---- */

@@ -26,6 +26,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-12 | 21-B9yh（代码/测试） | CPU/帧驱动 | **按取指区域计费**：`arm_cpu_t.next_fetch_pc` + `cpu_fetch_cost()`（ARM9 主存非顺序取指 3、其余 1）——ARM9 吞吐从 +45%/+8.9% 收到 **−2.3%/−7.2%**（对照参考核 26 帧/1900 帧指令数）；时间线稳定在 +1~+13 帧；926 项 0 失败 | [cpu](src/cpu/cpulog.md) · [runner](src/runner/runnerlog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9yg（代码/对照） | 帧驱动/时序 | **ARM9 时钟折算对齐参考核**（`cost9/2` → `/1`，可 `NDS_ARM9_DIV=2` 回退）：逐帧对照从「第 20 帧起分歧」变成帧 10/20/30 **100% 逐像素相同**；开显示帧 13→30（参考 26）、标题帧 ~300→535（参考 542）、第 1500 帧两边 OCR 同为 `ILLUSTRATION RYOMA ITO`；新增 runner 模块日志；921 项 0 失败 | [runner](src/runner/runnerlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9ye（代码/测试/对照） | BIOS/CPU | **ARM7 低地址「参考级」实证**：SWI 分发器 0x1080-0x10A8 逐条拆分（IRQ 可像参考核一样插在 0x109C-0x10A8 之间）+ 两边低地址取指直方图对照 —— 900 帧**两边各命中 93 个低地址、集合完全相同**；发现余下差异是「本地 SWI 调用次数偏多（音频查表 +33%）」，留给下一步；921 项 0 失败 | [bios](src/bios/bioslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9yd（代码/测试） | BIOS/总线 | ARM7 低地址换装**完整 FreeBIOS 镜像**（0x4000，BSD-2 同源）+ 未逐条建模的 SWI 函数体**在真地址执行真实字节**（此前 C 版 HLE 直接跳 swi_complete）；CRC16 真执行结果 0x37DD = 独立 CRC-16/ARC，证明字节码算对；顺带纠正 SoundBias/CRC16 两条测试口径（FreeBIOS 语义）；909 项 0 失败 | [bios](src/bios/bioslog.md) · [bus](src/bus/buslog.md) · [tests](tests/testlog.md) · [21](docs/21-rom-bringup.md) |

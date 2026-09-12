@@ -893,3 +893,14 @@
   [docs/21-rom-bringup.md](../docs/21-rom-bringup.md) 的 21-B9yg 一节：
   帧 10/20/30 与参考核**逐像素 100% 相同**、开显示/标题帧差 ~7 帧、
   第 1500 帧两边 OCR 同一句 `ILLUSTRATION RYOMA ITO`。
+
+## 2026-09-12 · 21-B9yh — 按取指区域计费（926 项）
+
+- `[case 21-B9vv]` 扩展：`step_cycles` 现在含「按取指区域计费」——
+  ARM9 主存**顺序**取指 1、主存**非顺序**（分支/跳转后）取指 3、
+  ITCM 1、ARM7 恒 1；
+- 断言：`main RAM seq step_cycles`=1、`main RAM seq2 step_cycles`=1、
+  `main RAM branch step_cycles`=3、`ITCM step_cycles`=1、
+  `arm7 WRAM step_cycles`=1、`arm7 main RAM step_cycles`=1，
+  以及 `normal instruction`（指令计数不受影响）；
+- 全量从 **921 项**增至 **926 项检查，0 项失败**。

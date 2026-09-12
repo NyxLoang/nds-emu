@@ -18,6 +18,7 @@ typedef struct arm_cpu {
     uint32_t r13_bank[5]; /* FIQ/IRQ/SVC/ABT/UND 私有 r13（下标同 spsr；21-B9g） */
     uint32_t r14_bank[5]; /* FIQ/IRQ/SVC/ABT/UND 私有 r14（下标同 spsr；21-B9g） */
     uint32_t step_cycles; /* 周期调度：刚执行指令的近似成本；0=在等待 */
+    uint32_t next_fetch_pc; /* 21-B9yh：下一条「顺序取指」应在的地址（判断非顺序取指） */
     uint32_t swi_num;/* 最近一次 SWI 的 24 位编号（阶段 10.8 记录，阶段 11 BIOS HLE 用） */
     uint32_t cp15[16]; /* CP15 协处理器寄存器（阶段 10.10 MRC/MCR，按 CRn 索引；阶段 12.4 c1 控制向量基址） */
     uint32_t cp15_dtcm; /* CP15 c9,c1,0：ARM9 DTCM 配置（阶段 21-B8） */

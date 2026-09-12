@@ -39,6 +39,7 @@ void cpu_destroy(arm_cpu_t *cpu)
 void cpu_reset(arm_cpu_t *cpu, uint32_t reset_pc)
 {
     cpu->r[15] = reset_pc;
+    cpu->next_fetch_pc = reset_pc; /* 21-B9yh：复位后第一条按「顺序取指」计费 */
     cpu->cycles = 0;
     cpu->deadloop_reported = 0;
     cpu->irq_count = 0;
@@ -117,6 +118,32 @@ static int bios_irq_tail9(arm_cpu_t *cpu)
 /* 单步执行一条指令：
    框架只负责「取指 + 指令计数」，指令语义全部委托给 exec_step（见 exec.c）。
    返回 0 表示停机（本阶段总是返回 1，停机由死循环达成）。 */
+/* 21-B9yh：按取指区域计费（只对「非顺序取指」加价）。
+
+   实测背景（第 26 帧 / 第 1900 帧，本地 vs 参考核 melonDS+FreeBIOS）：
+
+   | 口径 | 26 帧 ARM9 指令 | 1900 帧 ARM9 指令 |
+   |---|---|---|
+   | 参考核 | 8,328,123（14.56M 单位 ⇒ 1.75 单位/条） | 720,588,787 |
+   | 本地：全部 1 单位/条 | 12,065,443（+45%） | 784,957,288（+8.9%） |
+   | 本地：主存一律 2 单位/条 | 7,112,902（−15%） | 618,299,382（−14.2%） |
+
+   ⇒ 差额集中在**启动期（代码在主存）**，而长程只差 8.9%；「主存一律翻倍」
+   会两头都过度惩罚。melonDS 的真实口径是「顺序取指便宜、非顺序取指贵」
+   （ARM9 主存：S16=1 / N16=8，ARM 态顺序 S32=2、非顺序 N32=9）。本地按
+   比例缩小成 **顺序 1 / 非顺序 3**（ITCM 与其它区域都 1；ARM7 不额外计费，
+   它的代码绝大多数跑在 WRAM，且实测本地 ARM7 指令数本就低于参考核）。 */
+static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
+{
+    if (cpu->is_arm7)
+        return 1u;
+    if (pc - BUS_ARM9_ITCM_BASE < BUS_ARM9_ITCM_SIZE)
+        return 1u;                           /* ITCM：melonDS 恒 1 */
+    if ((pc >> 24) != 0x02u)
+        return 1u;                           /* WRAM/IO/VRAM/BIOS 等 */
+    return nonseq ? 3u : 1u;                 /* 主存：非顺序取指更贵 */
+}
+
 int cpu_step(arm_cpu_t *cpu)
 {
     cpu->step_cycles = 1;
@@ -271,12 +298,28 @@ int cpu_step(arm_cpu_t *cpu)
     if (cpu->is_arm7 && cpu->r[15] < 0x4000u && bios7_low_step(cpu))
         return 1;
     /* 13.2：按 CPSR.T 位分发——Thumb 取 16 位半字，ARM 取 32 位字。 */
-    if (cpu->cpsr & CPSR_T) {
+    uint32_t ipc = cpu->r[15];   /* 本步指令地址（取指区域计费用） */
+    int is_thumb = (cpu->cpsr & CPSR_T) != 0;
+    int fetch_nonseq = (cpu->next_fetch_pc != ipc); /* 是否非顺序取指（分支/跳转后） */
+    /* 下一条「顺序」指令地址（本条指令长度由执行前的 T 位决定） */
+    cpu->next_fetch_pc = ipc + (is_thumb ? 2u : 4u);
+    if (is_thumb) {
         uint16_t insn16 = cpu_fetch16(cpu);
         cpu->cycles++;
-        return thumb_step(cpu, insn16);
+        int r = thumb_step(cpu, insn16);
+        /* 21-B9yh：本步取指代价（见 cpu_fetch_cost；step_cycles=0 表示在等待） */
+        uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
+        if (cpu->step_cycles != 0 && cpu->step_cycles < fc)
+            cpu->step_cycles = fc;
+        return r;
     }
     uint32_t insn = cpu_fetch(cpu);
     cpu->cycles++;
-    return exec_step(cpu, insn);
+    int r = exec_step(cpu, insn);
+    {
+        uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
+        if (cpu->step_cycles != 0 && cpu->step_cycles < fc)
+            cpu->step_cycles = fc;
+    }
+    return r;
 }

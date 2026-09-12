@@ -55,6 +55,9 @@ static void dma_irq_done(const dma_channel_t *dma, struct bus *bus, int ch,
 /* 执行一次拷贝：把 N 个字/半字从源搬到目的。
    源/目的地址控制按增/减/固定处理；搬运走 bus_read/write，源可落在卡带 CARD_DATA。
    非重复搬运搬完自动清使能（真机同款行为）；重复模式保持使能，每次触发都重搬同一块。 */
+/* 21-B9yi：诊断用——DMA 搬运期间置 1，供总线侧区分「CPU 读 / DMA 读」。 */
+int g_dma_active;
+
 static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm7)
 {
     uint32_t n = dma->cnt_l != 0 ? dma->cnt_l : 0x4000u; /* 0 按 GBA/NDS 惯例=0x4000 */
@@ -83,6 +86,8 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm
        GX 收不到几何命令（3D 画面全黑），DMA 完成中断也会挂到错的核心。 */
     int prev_arm7 = bus->active_is_arm7;
     bus->active_is_arm7 = is_arm7;
+    int prev_dma = g_dma_active;
+    g_dma_active = 1;
     for (uint32_t i = 0; i < n; i++) {
         /* 21-B9zb: DMA 从 CARD_DATA 取数时按卡带就绪时钟等待 */
         if (src == BUS_CARD_DATA && bus != NULL && bus->io != NULL)
@@ -96,6 +101,7 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm
     }
 
     bus->active_is_arm7 = prev_arm7;
+    g_dma_active = prev_dma;
     if ((dma->cnt_h & DMA_CNT_REPEAT) == 0)
         dma->cnt_h &= (uint16_t)~DMA_CNT_ENABLE;
     dma_irq_done(dma, bus, ch, is_arm7);

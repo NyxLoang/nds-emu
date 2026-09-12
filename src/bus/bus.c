@@ -576,9 +576,13 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
                 lo = 0; hi = -1;
                 if (e != NULL && sscanf(e, "%ld-%ld", &lo, &hi) != 2) { lo = 0; hi = -1; }
             }
-            if ((long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi)
-                printf("cartrd: f=%llu cpsr=%08X pc=%08X\n",
-                       g_dbg_frame, bus->dbg_cpsr, bus->dbg_pc);
+            {
+                extern int g_dma_active; /* 定义在 io/dma.c（21-B9yi 诊断） */
+                if ((long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi)
+                    printf("cartrd: f=%llu cpsr=%08X pc=%08X src=%s\n",
+                           g_dbg_frame, bus->dbg_cpsr, bus->dbg_pc,
+                           g_dma_active ? "dma" : "cpu");
+            }
         }
         uint32_t v = bus->io != NULL ? io_card_data_read32(bus->io) : 0xFFFFFFFFu;
         if (bus->diag)

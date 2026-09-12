@@ -109,6 +109,16 @@ struct runner {
 #define RUNNER_WAKE7_IO(io_) (((io_)->irq[1].ie & (io_)->irq[1].ifl) != 0)
 #define RUNNER_WAKE9_IO(io_) irq_pending(&(io_)->irq[0])
 
+/* 21-B9yg：ARM9 每条指令折算成多少个「系统时钟单位」（33.513982MHz）。
+   参考核（melonDS）按 1 指令 ≈ 1 单位计费（另有 MemTimings 取指代价）；
+   本地旧口径是 ÷2（把 ARM9 当成 2× ARM7 时钟的「硬件周期」计数），实测
+   ARM9 每帧指令数达参考核的 2.25 倍（frame 8：本地 758 万 vs 参考 337 万），
+   于是开机时间线整体提前（参考核第 26 帧才开显示，本地第 ~13 帧就开了）。
+   默认改为 ÷1；`NDS_ARM9_DIV=2` 可切回旧口径做 A/B。 */
+static int s_arm9_div = 1;
+#define RUNNER_ARM9_DIV (s_arm9_div)
+#define RUNNER_SYS9(c) ((c) / (uint64_t)RUNNER_ARM9_DIV)
+
 /* 21-B9wz 诊断：整段运行的 ARM9 累积热点（hot9: 前 16 + 占比 + 总数）。
    和参考核的 ins9/hist9 对照用：两边热点集合一致说明代码路径相同，
    差异只可能在时序/外设状态。 */
@@ -123,6 +133,10 @@ runner_t *runner_create(nds_t *nds)
     runner_t *r = (runner_t *)calloc(1, sizeof(runner_t));
     if (r == NULL)
         return NULL;
+    {   /* 21-B9yg：ARM9 时钟折算口径（默认 1；NDS_ARM9_DIV=2 切回旧口径做 A/B） */
+        const char *e = getenv("NDS_ARM9_DIV");
+        s_arm9_div = (e != NULL && e[0] == '2') ? 2 : 1;
+    }
     r->nds = nds;
     r->frame_cycles = 560190;
     uint64_t line_cycles = r->frame_cycles / 263;
@@ -200,7 +214,7 @@ static int runner_step(runner_t *r)
 
     if (r->a9_wait && RUNNER_WAKE9_IO(nds->io)) {
         r->a9_wait = 0;
-        r->cost9 = r->tm.now * 2;
+        r->cost9 = r->tm.now * RUNNER_ARM9_DIV;
     }
     if (r->a7_wait && RUNNER_WAKE7_IO(nds->io)) {
         r->a7_wait = 0;
@@ -228,7 +242,7 @@ static int runner_step(runner_t *r)
     else if (r->a7_wait)
         step7 = 0;
     else
-        step7 = (r->cost9 / 2 > r->cost7);
+        step7 = (RUNNER_SYS9(r->cost9) > r->cost7);
     if (step7) {
         cpu_step(nds->cpu7);
         r->a7_wait = (nds->cpu7->step_cycles == 0);
@@ -250,9 +264,9 @@ static int runner_step(runner_t *r)
     if (r->a9_wait)
         sys = r->cost7;
     else if (r->a7_wait)
-        sys = r->cost9 / 2;
+        sys = RUNNER_SYS9(r->cost9);
     else
-        sys = (r->cost9 / 2 < r->cost7) ? r->cost9 / 2 : r->cost7;
+        sys = (RUNNER_SYS9(r->cost9) < r->cost7) ? RUNNER_SYS9(r->cost9) : r->cost7;
     timing_advance(&r->tm, sys);
     uint64_t delta = r->tm.now - r->last_now;
     r->last_now = r->tm.now;
@@ -392,7 +406,7 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
         else if (a7_wait)
             step7 = 0;
         else
-            step7 = (cost9 / 2 > cost7);
+            step7 = (RUNNER_SYS9(cost9) > cost7);
         if (step7) {
             cpu_step(nds->cpu7);
             a7_wait = (nds->cpu7->step_cycles == 0);
@@ -410,9 +424,9 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
         if (a9_wait)
             sys = cost7;
         else if (a7_wait)
-            sys = cost9 / 2;
+            sys = RUNNER_SYS9(cost9);
         else
-            sys = (cost9 / 2 < cost7) ? cost9 / 2 : cost7;
+            sys = (RUNNER_SYS9(cost9) < cost7) ? RUNNER_SYS9(cost9) : cost7;
         timing_advance(&tm, sys);
         {
             uint64_t delta = tm.now - last_now;

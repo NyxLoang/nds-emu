@@ -347,6 +347,8 @@ int main(int argc, char** argv)
     if (const char* v = std::getenv("REF_KEY_PERIOD")) key_period = std::atoi(v);
     int stats_every = 0;
     if (const char* v = std::getenv("REF_STATS_EVERY")) stats_every = std::atoi(v);
+    int iodump_frame = -1;
+    if (const char* v = std::getenv("REF_IODUMP_FRAME")) iodump_frame = std::atoi(v);
 
     for (int frame = 0; frame < ref_frames; frame++)
     {
@@ -357,6 +359,24 @@ int main(int argc, char** argv)
             nds->SetKeyMask((phase < 12) ? (u32)key_mask : 0u);
         }
         nds->RunFrame();
+        /* 21-B9yi(续36)：REF_IODUMP_FRAME=N → 打印第 N 帧的 2D 显示寄存器
+           （与本地 runner 的 `NDS_IODUMP_FRAME` 同口径对照）。 */
+        if (frame == iodump_frame) {
+            static const u32 regs[] = {
+                0x04000000, 0x04000008, 0x0400000A, 0x0400000C, 0x0400000E,
+                0x04000010, 0x04000012, 0x04000014, 0x04000016,
+                0x04001000, 0x04001008, 0x0400100A, 0x0400100C, 0x0400100E,
+                0x04001010, 0x04001012, 0x04001014, 0x04001016,
+                0x04000060, 0x04000064, 0x04000240, 0x04000241, 0x04000242,
+                0x04000243, 0x04000244, 0x04000245, 0x04000246, 0x04000247,
+                0x04000248,
+                0x04000050, 0x04000052, 0x04000054, 0x0400006C,
+                0x04001050, 0x04001052, 0x04001054, 0x0400106C
+            };
+            for (u32 a : regs)
+                std::printf("refio: %08X=%04X\n", a, (unsigned)nds->ARM9IORead16(a));
+            std::fflush(stdout);
+        }
         /* 画面统计：与本地 runner 的 `--stats-every` 同一口径（非黑像素数 +
            各通道均值），用于判定某段画面是「定格」还是「持续推进」。 */
         if (stats_every > 0 && (frame % stats_every) == 0) {

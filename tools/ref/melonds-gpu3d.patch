@@ -1,5 +1,5 @@
 diff --git a/src/GPU3D.cpp b/src/GPU3D.cpp
-index 3272a34..58a8d31 100644
+index 3272a34..c987cea 100644
 --- a/src/GPU3D.cpp
 +++ b/src/GPU3D.cpp
 @@ -139,6 +139,14 @@ const u8 CmdNumParams[256] =
@@ -77,10 +77,32 @@ index 3272a34..58a8d31 100644
      // this probably shouldn't be.
      // the way color is handled during clipping needs investigation. TODO
      vertextrans->Color[0] = (VertexColor[0] << 12) + 0xFFF;
-@@ -1735,6 +1789,34 @@ void GPU3D::ExecuteCommand() noexcept
+@@ -1735,6 +1789,56 @@ void GPU3D::ExecuteCommand() noexcept
  {
      CmdFIFOEntry entry = CmdFIFORead();
  
++    /* 21-B9yi(续36)：`REF_PROJDBG_FRAME=N` → 在 [N,N+20] 帧内，投影矩阵一变就打印
++       「上一条命令」+ 新矩阵（与本地 NDS_PROJDBG 同口径）。 */
++    {
++        static long pf = -2;
++        static int prevcmd = -1;
++        static int pmatrix[4] = { 0, 0, 0, 0 };
++        if (pf == -2) {
++            const char* e = std::getenv("REF_PROJDBG_FRAME");
++            pf = (e != nullptr) ? std::atol(e) : -1;
++        }
++        if (pf >= 0 && RefDbgFrame >= pf && RefDbgFrame <= pf + 20) {
++            int now[4] = { ProjMatrix[0], ProjMatrix[5], ProjMatrix[15], ProjMatrix[3] };
++            if (std::memcmp(now, pmatrix, sizeof now) != 0) {
++                std::printf("projchg: f=%d prevcmd=%02X proj=(%d,%d,%d,%d)\n",
++                            RefDbgFrame, prevcmd, now[0], now[1], now[2], now[3]);
++                std::memcpy(pmatrix, now, sizeof now);
++                std::fflush(stdout);
++            }
++        }
++        prevcmd = entry.Command;
++    }
++
 +    {
 +        static int on = -1;
 +        if (on < 0) on = (getenv("REF_GXHIST") != nullptr) ? 1 : 0;
@@ -112,7 +134,36 @@ index 3272a34..58a8d31 100644
      //printf("FIFO: processing %02X %08X. Levels: FIFO=%d, PIPE=%d\n", entry.Command, entry.Param, CmdFIFO->Level(), CmdPIPE->Level());
  
      // each FIFO entry takes 1 cycle to be processed
-@@ -2294,6 +2376,7 @@ void GPU3D::ExecuteCommand() noexcept
+@@ -2122,6 +2226,28 @@ void GPU3D::ExecuteCommand() noexcept
+ 
+             if (ExecParamCount >= paramsRequiredCount)
+             {
++                /* 21-B9yi(续36)：REF_GXDBG_FRAME=N → 打印多参数命令的完整参数
++                   （对照本地 NDS_GXDBG_FRAME 的 p[0..11]）。 */
++                {
++                    static long df = -2;
++                    static int left = 40;
++                    if (df == -2) {
++                        const char* e = std::getenv("REF_GXDBG_FRAME");
++                        df = (e != nullptr) ? std::atol(e) : -1;
++                    }
++                    if (df >= 0 && RefDbgFrame >= df && RefDbgFrame <= df + 20 &&
++                        left > 0 &&
++                        (entry.Command == 0x19 || entry.Command == 0x1A ||
++                         entry.Command == 0x1B || entry.Command == 0x1C)) {
++                        std::printf("refpar: cmd=%02X n=%d p=", entry.Command,
++                                    ExecParamCount);
++                        for (int i = 0; i < ExecParamCount && i < 12; i++)
++                            std::printf("%08X,", ExecParams[i]);
++                        std::printf("\n");
++                        left--;
++                        std::fflush(stdout);
++                    }
++                }
+                 /*printf("[GXS:%08X] 0x%02X,  ", GXStat, entry.Command);
+                 for (int k = 0; k < ExecParamCount; k++) printf("0x%08X, ", ExecParams[k]);
+                 printf("\n");*/
+@@ -2294,6 +2420,7 @@ void GPU3D::ExecuteCommand() noexcept
                      }
                      break;
  

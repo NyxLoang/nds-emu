@@ -44,6 +44,8 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_GXHIST=1` | 进程结束前打印 GX 命令码直方图（`refgxhist:` 行），与本地 `NDS_GXHIST` 对照 |
 | `REF_POLYDBG=1` | 帧号 ≥3800 后打印前 6 个顶点的**裁剪空间坐标**与矩阵（对应本地 `NDS_POLYDBG=1`） |
 | `REF_GXDBG_FRAME=N` / `REF_MAT_FRAME=N` | 只 dump 第 N 帧窗口的**矩阵类命令序列** / 打印该帧的 `proj/pos/tex` 关键元素（对应本地 `NDS_GXDBG_FRAME` / `NDS_MAT_FRAME`） |
+| `REF_PROJDBG_FRAME=N` | 在 [N,N+20] 帧内，投影矩阵一变就打印「上一条命令 + 新矩阵」（对应本地 `NDS_PROJDBG`） |
+| `REF_IODUMP_FRAME=N` | 打印第 N 帧的 2D 显示寄存器 + VRAMCNT + 颜色特效寄存器（对应本地 `NDS_IODUMP_FRAME`） |
 
 ## melonDS 侧需要的补丁
 

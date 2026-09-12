@@ -8,3 +8,7 @@ tools/*.sav
 
 # 历史遗留：早期中断安装时下载的 CMake 便携包（工具链已由 WinLibs 提供）
 tools/cmake.zip
+
+# 无头运行默认写到当前目录的截图/图像产物（诊断用，不入库）
+headless_shot*.bmp
+/*.bmp

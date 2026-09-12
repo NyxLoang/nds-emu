@@ -586,6 +586,10 @@ int main(int argc, char *argv[])
        验证 SDL 初始化/出图/退出与存档写回，又不用人工关窗口）。 */
     uint64_t frame_limit = g_cli_frames;
     uint64_t frames_done = 0;
+    /* 21-B9yi(续47)：鼠标 → 触摸屏（底屏）。布局（逻辑坐标）：
+       菜单栏 [0,28)、顶屏 [28,220)、底屏 [220,412)。
+       触摸 ADC 换算与 runner `--touch-*` 同口径（固件默认校准，每像素 16 单位）。 */
+    int touch_mouse_down = 0;
     while (!quit) {
         int scale = window_get_scale();
 
@@ -597,12 +601,40 @@ int main(int argc, char *argv[])
                        e.button.button == SDL_BUTTON_LEFT) {
                 /* 无 logical size，事件坐标即物理坐标；窗口尺寸恒为
                    WIN_W*scale × WIN_H*scale，除以 scale 得逻辑坐标 */
-                int new_scale = menu_handle_click(e.button.x / scale,
-                                                  e.button.y / scale);
-                if (new_scale >= 1) {
-                    window_set_scale(new_scale);
-                    scale = new_scale;
+                int lx = e.button.x / scale;
+                int ly = e.button.y / scale;
+                if (ly >= MENU_H + SCREEN_H && lx < SCREEN_W) {
+                    /* 21-B9yi(续47)：底屏区域 → 触摸屏按下（FFXII 这类游戏靠触控操作）。
+                       换算：`adc = 0x200 + (px - 33) * 16`（固件默认校准）。 */
+                    int sx = lx, sy = ly - (MENU_H + SCREEN_H);
+                    int ax = 0x200 + (sx - 33) * 16;
+                    int ay = 0x200 + (sy - 33) * 16;
+                    if (ax < 0) ax = 0; else if (ax > 0xFFF) ax = 0xFFF;
+                    if (ay < 0) ay = 0; else if (ay > 0xFFF) ay = 0xFFF;
+                    io_set_touch(nds->io, (uint16_t)ax, (uint16_t)ay, 1);
+                    touch_mouse_down = 1;
+                } else {
+                    int new_scale = menu_handle_click(lx, ly);
+                    if (new_scale >= 1) {
+                        window_set_scale(new_scale);
+                        scale = new_scale;
+                    }
                 }
+            } else if (e.type == SDL_MOUSEBUTTONUP &&
+                       e.button.button == SDL_BUTTON_LEFT && touch_mouse_down) {
+                io_set_touch(nds->io, 0, 0, 0);   /* 抬笔 */
+                touch_mouse_down = 0;
+            } else if (e.type == SDL_MOUSEMOTION && touch_mouse_down) {
+                /* 拖动 = 笔移动（保持在底屏范围内） */
+                int lx = e.motion.x / scale;
+                int ly = e.motion.y / scale - (MENU_H + SCREEN_H);
+                int sx = lx < 0 ? 0 : (lx > SCREEN_W - 1 ? SCREEN_W - 1 : lx);
+                int sy = ly < 0 ? 0 : (ly > SCREEN_H - 1 ? SCREEN_H - 1 : ly);
+                int ax = 0x200 + (sx - 33) * 16;
+                int ay = 0x200 + (sy - 33) * 16;
+                if (ax < 0) ax = 0; else if (ax > 0xFFF) ax = 0xFFF;
+                if (ay < 0) ay = 0; else if (ay > 0xFFF) ay = 0xFFF;
+                io_set_touch(nds->io, (uint16_t)ax, (uint16_t)ay, 1);
             } else if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
                 /* 阶段 6.6：把 SDL 键码映射成 NDS 键位并写入 io 模块 */
                 int down = (e.type == SDL_KEYDOWN);

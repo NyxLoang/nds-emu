@@ -554,15 +554,32 @@ void io_advance_cart(io_t *io, int is_arm7, uint32_t cycles)
         return;
     if (cycles == 0)
         cycles = 1;
-    if (cartbus_advance(&io->cartbus, cycles)) {
-        /* 21-B9yi：数据就绪（DRQ 边沿）只触发卡带 DMA，**不**挂卡带中断——
-           melonDS 的 `RaiseDRQ()` 只置 ROMCnt bit23 并 CheckDMA()；卡带中断
-           只在**传输结束**且 AUXSPICNT bit14 使能时由 ROMEndTransfer 挂出。
-           旧实现每个字都挂 IF bit19 ⇒ ARM9 每 ~170 周期被中断一次（实测
-           空闲期每帧 6 次 0x02009580 处的 IRQ），游戏任务调度相位被彻底打乱，
-           最终在卡带轮询里死锁。 */
-        io_card_dma_check(io, 0);
-        io_card_dma_check(io, 1);
+    /* 21-B9yi(续15)：**把一次调用里没用完的周期接着用完**。
+       `cartbus_advance()` 每次最多取「一个字」（约 20 个卡带周期）就返回，
+       剩余周期以前被直接丢掉 ⇒ 空闲期（ARM9 在 WFI、runner 按扫描线事件
+       一次性给 delta≈2130 个周期）本地每帧只取到 ~290 个字，参考核同段是
+       6400 字/帧，加载画面因此比参考核多等约 330 帧。
+       这里循环「取字 → 触发该字对应的卡带 DMA（把 FIFO 读走，腾出位置）→
+       继续用剩余周期取下一个字」，直到周期用完、或卡带没有待取事件
+       （FIFO 满且没人读、块已取完）。净行为与 melonDS「卡带取数挂系统时钟
+       事件 + 每字一次 CheckDMA」一致。
+       注：数据就绪（DRQ 边沿）只触发卡带 DMA、不挂卡带中断——melonDS 的
+       `RaiseDRQ()` 只置 ROMCnt bit23 并 `CheckDMA()`；卡带中断只在**传输
+       结束**且 AUXSPICNT bit14 使能时由 `ROMEndTransfer` 挂出。 */
+    {
+        uint32_t left = cycles;
+        int guard = 0;
+        while (left > 0 && guard++ < 4096) {
+            uint32_t before = io->cartbus.wait_cycles;
+            if (!cartbus_advance(&io->cartbus, left))
+                break;              /* 无待取事件 / 余量已计入等待 */
+            io_card_dma_check(io, 0);
+            io_card_dma_check(io, 1);
+            uint32_t used = (before != 0 && before <= left) ? before : 1u;
+            if (used >= left)
+                break;
+            left -= used;
+        }
     }
     /* 21-B9yi：一次卡带传输在 FIFO 取空后结束——AUXSPICNT bit14 使能时挂
        卡带完成中断（melonDS `ROMEndTransfer`）。

@@ -65,6 +65,7 @@ static uint32_t rom_le32(const uint8_t *rom, size_t rom_size, uint32_t addr)
    只实现读命令 B7/B8（GetData）；其余命令（芯片 ID / KEY1 激活等）后续阶段补。 */
 static void cartbus_fetch_delay(cartbus_t *cb, int first); /* 前向声明 */
 static void cartbus_end(cartbus_t *cb);
+extern int g_dma_active;   /* 21-B9yi(续14)：读来源标记（1=DMA 搬运中） */
 
 static void cartbus_activate(cartbus_t *cb)
 {
@@ -369,9 +370,10 @@ uint32_t cartbus_read32(cartbus_t *cb)
             if (e != NULL && sscanf(e, "%ld-%ld", &lo, &hi) != 2) { lo = 0; hi = -1; }
         }
         if ((long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi)
-            printf("cartlog2: f=%llu READ ret=%08X pos=%u len=%u cnt=%d romctrl=%08X\n",
+            printf("cartlog2: f=%llu READ ret=%08X pos=%u len=%u cnt=%d romctrl=%08X"
+                   " src=%s\n",
                    g_dbg_frame, ret, cb->xfer_pos, cb->xfer_len, cb->data_count,
-                   cb->romctrl);
+                   cb->romctrl, g_dma_active ? "dma" : "cpu");
     }
 
     if (cb->xfer_pos < cb->xfer_len) {

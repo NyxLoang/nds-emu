@@ -287,8 +287,7 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         }
         /* 命令刚被激活（卡带由 Busy 变 Ready）：置卡带完成中断并触发卡带 DMA */
         if (!was_ready && cartbus_ready(&io->cartbus)) {
-            irq_set_card(&io->irq[0]);
-            irq_set_card(&io->irq[1]);
+            /* 21-B9yi：同 io_advance_cart——就绪边沿只触发 DMA，不挂中断 */
             io_card_dma_check(io, 0);
             io_card_dma_check(io, 1);
         }
@@ -511,8 +510,12 @@ void io_advance_cart(io_t *io, int is_arm7, uint32_t cycles)
     if (cycles == 0)
         cycles = 1;
     if (cartbus_advance(&io->cartbus, cycles)) {
-        irq_set_card(&io->irq[0]);
-        irq_set_card(&io->irq[1]);
+        /* 21-B9yi：数据就绪（DRQ 边沿）只触发卡带 DMA，**不**挂卡带中断——
+           melonDS 的 `RaiseDRQ()` 只置 ROMCnt bit23 并 CheckDMA()；卡带中断
+           只在**传输结束**且 AUXSPICNT bit14 使能时由 ROMEndTransfer 挂出。
+           旧实现每个字都挂 IF bit19 ⇒ ARM9 每 ~170 周期被中断一次（实测
+           空闲期每帧 6 次 0x02009580 处的 IRQ），游戏任务调度相位被彻底打乱，
+           最终在卡带轮询里死锁。 */
         io_card_dma_check(io, 0);
         io_card_dma_check(io, 1);
     }

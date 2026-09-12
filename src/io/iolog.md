@@ -530,3 +530,18 @@
   （对应 melonDS `ROMEndTransfer` 里的 `SetIRQ(Num, TransferIRQ)`）；
 - 说明：卡带寄存器本体在 `src/cart/cartbus.c`，本模块只负责「按周期推进 +
   把就绪/结束事件接到中断与 DMA 触发线上」。
+
+## 2026-09-12 · 21-B9yi — 卡带中断语义修正（去掉「就绪边沿挂中断」）
+
+- **问题（实测）**：`io_advance_cart` 与 `io_write8` 的卡带分支此前在**数据就绪
+  （DRQ）边沿**就挂两核 IF bit19；melonDS 的 `RaiseDRQ()` 只置 ROMCnt bit23 并
+  `CheckDMA()`，卡带中断只在**传输结束**（`ROMEndTransfer`，且 AUXSPICNT bit14
+  使能）时挂出。后果：ARM9 每取一个字就被中断一次（实测空闲期每帧 6 次
+  `0x02009580` 处的 IRQ、单帧内间隔仅 ~170 周期），游戏任务调度相位被打乱，
+  最终在「等 ROMCTRL 空闲」轮询里死锁（两核停在 IRQ 模式、IPC FIFO 积压 16 条）。
+- **修正**：两条路径都只保留 `io_card_dma_check`（DMA 触发），中断改由
+  `cartbus_end → end_irq`（传输结束 + AUXSPICNT bit14）统一挂出。
+- **效果**：按键离开标题后不再死锁；ARM9 在第 1900 帧后与参考核一样进入空闲任务
+  （`cpsr=0000001F`、`if9=0x00200000`、IPC `fifo=0/0`）。
+- 单测改写：`card no irq on DRQ`（DRQ 不挂中断）+ `card irq on transfer end`
+  （传输结束挂中断）；全量 **930 项检查 0 失败**。

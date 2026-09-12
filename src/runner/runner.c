@@ -231,6 +231,10 @@ static int runner_step(runner_t *r)
         if (delta != 0) {
             io_advance_timers(nds->io, 0, (uint32_t)delta);
             io_advance_timers(nds->io, 1, (uint32_t)delta);
+            /* 21-B9yi：两核都空闲时也要推进卡带时钟——否则一笔「数据取完、
+               等软件读走」的传输永远结束不了，`end_irq`（传输完成中断）
+               也送不出去，游戏任务就此睡死（实测卡在空闲任务、IF bit19 不亮）。 */
+            io_advance_cart(nds->io, 0, (uint32_t)delta);
         }
         runner_keys(r);
         return 1;

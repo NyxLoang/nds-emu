@@ -15,6 +15,17 @@
 - `timing` 事件表按系统时间挂 VBlank（每帧）与扫描线（每行）；
   两核都在等待时直接跳到下一个事件（21-B9wf 的「等待期时间照常流逝」）。
 - 每帧结束补推 SPU（`snd_advance`，32768Hz = 33.51MHz/1024）与 RTC 秒数。
+- 21-B9yi：两核都空闲的快进分支里**也要推进卡带时钟**
+  （`io_advance_cart(io, 0, delta)`）；否则一笔「数据取完、等软件读走」的
+  传输在空闲期永远结束不了，传输完成中断也送不出去。
+
+## 2026-09-12 · 21-B9yi — 帧窗口诊断（ftrace / irqlog / modelog）
+
+- `NDS_FTRACE=LO-HI`：逐帧打印两核 PC/CPSR/IF/IME/IPC FIFO/卡带状态与 DMA3；
+- `NDS_IRQLOG=1`：打印每次 ARM9 IRQ 受理（帧、被打断 PC、CPSR、lr、周期数），
+  与参考核 `refirq:` 行（`ARM::TriggerIRQ` 内同口径）逐条对照；
+- `NDS_MODELOG=1`：打印 ARM9 的每次模式切换（帧、旧→新模式、PC/lr/sp）——
+  用于确认「游戏内核在 IRQ 里切任务」这条路径是否与参考核一致。
 
 ## 2026-09-12 · 21-B9yg — ARM9 时钟折算对齐参考核（时间线差从 ~240 帧缩到 ~7 帧）
 

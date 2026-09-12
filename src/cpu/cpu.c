@@ -246,6 +246,22 @@ int cpu_step(arm_cpu_t *cpu)
     }
     if (irq_pending(irq) && !(cpu->cpsr & CPSR_I)) {
         cpu->cycles++;
+        /* 21-B9yi 诊断：NDS_IRQLOG=1 → 打印每次 IRQ 受理时的
+           （帧, 被打断 PC, CPSR, lr），与参考核 `refirq:` 行逐条对照。 */
+        {
+            extern unsigned long long g_dbg_frame;
+            static int irqlog_state, irqlog_n;
+            if (irqlog_state == 0) {
+                const char *e = getenv("NDS_IRQLOG");
+                irqlog_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+            }
+            if (irqlog_state == 1 && !cpu->is_arm7 && irqlog_n < 400000) {
+                irqlog_n++;
+                printf("locirq: f=%llu pc=%08X cpsr=%08X lr=%08X t=%llu\n",
+                       g_dbg_frame, cpu->r[15], cpu->cpsr, cpu->r[14],
+                       (unsigned long long)cpu->cycles);
+            }
+        }
         /* 21-B9b：诊断首中断现场——FFXII 的 ARM9 第一次 IRQ 会跳到高向量 0xFFFF0018，
            真 BIOS 在那里从“可读写 RAM 的约定槽”取用户 handler。先看游戏把 handler
            装到哪：ARM9 槽在 DTCM 末 8 字节（0x3FF8=等待标志/0x3FFC=handler 指针），

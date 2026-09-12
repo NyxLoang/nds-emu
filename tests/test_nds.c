@@ -4337,8 +4337,18 @@ static void test_card_dma(nds_t *nds)
     CHECK_EQ("card romctrl DRQ after dma",
              bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
              CART_ROMCTRL_DRQ);
-    CHECK_EQ("card irq bit19", bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_CARD_DONE,
-             IO_IF_CARD_DONE);
+    /* 21-B9yi：melonDS 口径——数据就绪（DRQ）只触发 DMA，**不**挂卡带中断；
+       卡带中断只在 AUXSPICNT bit14 使能时由「传输结束」挂出。 */
+    CHECK_EQ("card no irq on DRQ", bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_CARD_DONE, 0u);
+    /* 打开 AUXSPICNT bit14（传输完成中断使能）后把本块读完 → 传输结束挂 IRQ */
+    bus_write16(nds->bus, CART_AUXSPICNT, AUXSPICNT_ENABLE | 0x4000u);
+    for (int i = 8; i < 128; i++) {
+        cartbus_advance(&nds->io->cartbus, 100000u);
+        (void)bus_read32(nds->bus, BUS_CARD_DATA);
+        io_advance_cart(nds->io, 0, 1u);
+    }
+    CHECK_EQ("card irq on transfer end",
+             bus_read32(nds->bus, IO_IF_ADDR) & IO_IF_CARD_DONE, IO_IF_CARD_DONE);
 }
 
 /* ---- 21-B9wr 用例：NDS7（ARM7）卡带 DMA 触发模式 ----

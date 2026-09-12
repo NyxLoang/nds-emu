@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "exec.h"
 #include "bus/bus.h"
 #include "bios/bios.h"
@@ -234,6 +235,22 @@ void exec_apply_cpsr(arm_cpu_t *cpu, uint32_t new_cpsr)
 {
     unsigned old_mode = cpu->cpsr & CPSR_MODE_MASK;
     unsigned new_mode = new_cpsr & CPSR_MODE_MASK;
+    /* 21-B9yi 诊断：NDS_MODELOG=1 → 打印 ARM9 的每次模式切换
+       （帧、旧→新模式、切换时的 PC/lr），用于确认「任务在 IRQ 模式下跑」的成因。 */
+    if (!cpu->is_arm7 && old_mode != new_mode) {
+        extern unsigned long long g_dbg_frame;
+        static int modelog_state, modelog_n;
+        if (modelog_state == 0) {
+            const char *e = getenv("NDS_MODELOG");
+            modelog_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+        }
+        if (modelog_state == 1 && modelog_n < 200000) {
+            modelog_n++;
+            printf("modelog: f=%llu pc=%08X %02X->%02X lr=%08X sp=%08X\n",
+                   g_dbg_frame, cpu->r[15], old_mode, new_mode,
+                   cpu->r[14], cpu->r[13]);
+        }
+    }
     /* 先把“当前可见”的 r13/r14 存入所属模式（User/System 存主寄存器槽） */
     int old_idx = exec_spsr_index(old_mode);
     if (old_idx >= 0) {

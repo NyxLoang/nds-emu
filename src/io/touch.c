@@ -9,19 +9,21 @@ static int touch_active(const touch_t *t)
 }
 
 /* 按通道算出 12 位 ADC 结果。
-   X/Y 未按下时按协议回 X=000h、Y=FFFh；电池在 NDS 接 GND 恒 0。 */
+
+   21-B9yi(续73)：**按参考核口径对齐**。melonDS 的 `TSC::Write()` 只处理三种通道：
+     X(0x50) → TouchX、Y(0x10) → TouchY、AUX(0x60) → 麦克风采样；
+     其余通道（含 Z1/Z2 压力、BAT、TEMP0/TEMP1）**一律 0xFFF**。
+   本地此前自己编了一套 Z1=0x300/Z2=0xB00/BAT=0/TEMP=0 —— 与参考核不一致。
+   实测里游戏 ARM7 的触摸驱动轮询的正是**通道 0（TEMP0，命令字节 0x84）**，
+   因此这条差异很可能影响游戏是否认可“这是有效触摸”（战斗相位比早期画面更严格）。
+   X/Y 与“未按下”口径保持不变（未按下 X=000h、Y=FFFh，与参考核一致）。 */
 static uint16_t touch_convert(const touch_t *t, int channel)
 {
     switch (channel) {
     case TSC_CH_X:   return t->down ? t->adc_x : 0x000u;
     case TSC_CH_Y:   return t->down ? t->adc_y : 0xFFFu;
-    case TSC_CH_Z1:  return t->down ? 0x300u : 0xFFFu;
-    case TSC_CH_Z2:  return t->down ? 0xB00u : 0x000u;
-    case TSC_CH_BAT: return 0x000u;               /* 接 GND */
-    case TSC_CH_AUX: return 0x000u;               /* 麦克风关闭 */
-    case TSC_CH_TEMP0:
-    case TSC_CH_TEMP1:
-    default:         return 0x000u;               /* 温度：本阶段返回 0 */
+    case TSC_CH_AUX: return 0x800u;   /* 麦克风静音：参考核 sample^0x8000 后 >>4 = 0x800 */
+    default:         return 0xFFFu;   /* 其余通道（Z1/Z2/BAT/TEMP）：与参考核一致 */
     }
 }
 
@@ -31,20 +33,14 @@ static uint16_t touch_convert(const touch_t *t, int channel)
         次字节 = 结果 bit0 + 7 位填充。 */
 static uint8_t touch_reply(const touch_t *t)
 {
-    uint8_t r8;
+    /* 21-B9yi(续73)：8 位模式按参考核口径 —— 把结果掩到 0xFF0（`ConvResult &= 0x0FF0`），
+       字节拆分仍走 12 位那套；此前本地另写了一套 8 位拆分，与参考核不一致。 */
+    uint16_t result = (t->mode8) ? (uint16_t)(t->result & 0x0FF0u) : t->result;
     if (t->reply_idx == 0) {
-        if (t->mode8) {
-            r8 = (uint8_t)((t->result >> 4) & 0xFF);
-            return (uint8_t)(r8 >> 1);
-        }
-        return (uint8_t)((t->result >> 5) & 0x7F);
+        return (uint8_t)((result >> 5) & 0x7F);
     }
     if (t->reply_idx == 1) {
-        if (t->mode8) {
-            r8 = (uint8_t)((t->result >> 4) & 0xFF);
-            return (uint8_t)((r8 & 1) << 7);
-        }
-        return (uint8_t)((t->result & 0x1F) << 3);
+        return (uint8_t)((result & 0x1F) << 3);
     }
     return 0; /* 无限填充 */
 }

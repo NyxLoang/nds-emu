@@ -224,6 +224,11 @@ int main(int argc, char *argv[])
        参数在解析阶段只记录，等整条命令行解析完（touch_frame/period 都确定后）再下发。 */
     int drag_on = 0, drag_x1 = 96, drag_y1 = 96, drag_x2 = 160, drag_y2 = 96;
     int drag_steps = 12;
+    /* 21-B9yi(续71)：随机输入浸泡（--key-random SEED / --touch-random SEED） */
+    int key_random_on = 0;
+    uint32_t key_random_seed = 1;
+    int touch_random_on = 0;
+    uint32_t touch_random_seed = 1;
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
         if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
@@ -310,6 +315,14 @@ int main(int argc, char *argv[])
         }
         else if (wcscmp(wargv[i], L"--touch-drag-steps") == 0 && i + 1 < wargc)
             drag_steps = (int)wcstol(wargv[i + 1], NULL, 10);
+        else if (wcscmp(wargv[i], L"--key-random") == 0 && i + 1 < wargc) {
+            key_random_on = 1;
+            key_random_seed = (uint32_t)wcstoul(wargv[i + 1], NULL, 0);
+        }
+        else if (wcscmp(wargv[i], L"--touch-random") == 0 && i + 1 < wargc) {
+            touch_random_on = 1;
+            touch_random_seed = (uint32_t)wcstoul(wargv[i + 1], NULL, 0);
+        }
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -381,6 +394,14 @@ int main(int argc, char *argv[])
         }
         else if (strcmp(argv[i], "--touch-drag-steps") == 0 && i + 1 < argc)
             drag_steps = (int)strtol(argv[i + 1], NULL, 10);
+        else if (strcmp(argv[i], "--key-random") == 0 && i + 1 < argc) {
+            key_random_on = 1;
+            key_random_seed = (uint32_t)strtoul(argv[i + 1], NULL, 0);
+        }
+        else if (strcmp(argv[i], "--touch-random") == 0 && i + 1 < argc) {
+            touch_random_on = 1;
+            touch_random_seed = (uint32_t)strtoul(argv[i + 1], NULL, 0);
+        }
         else if (strcmp(argv[i], "--shot-prefix") == 0 && i + 1 < argc) {
             shot_prefix = argv[i + 1];
             runner_set_shot_series(shot_every, shot_prefix);
@@ -396,6 +417,13 @@ int main(int argc, char *argv[])
                                      drag_x2, drag_y2, drag_steps, touch_period);
     else if (touch_frame != 0)
         runner_set_touch_series(touch_frame, touch_x, touch_y, touch_period);
+    /* 21-B9yi(续71)：随机输入浸泡（见 runner_keys / runner_touch） */
+    if (key_random_on)
+        runner_set_keys_random_series(key_frame ? key_frame : 1, key_random_seed,
+                                      key_period ? key_period : 60);
+    if (touch_random_on)
+        runner_set_touch_random_series(touch_frame, touch_random_seed,
+                                       touch_period ? touch_period : 90);
 
     /* 一台空机器：整机状态容器，bus 已挂入。
        必须先建 nds，后续装载镜像时才有可写的 Main RAM。headless 诊断也用它。 */
@@ -624,6 +652,13 @@ int main(int argc, char *argv[])
        并不能代表「真的在玩」时的表现。这里让窗口与无头用同一套脚本，测量才可比。 */
     if (key_frame != 0 && key_mask != 0)
         runner_set_keys(frame_runner, key_frame, key_mask, key_period);
+    /* 21-B9yi(续71)：窗口模式同样支持随机输入浸泡 */
+    if (key_random_on)
+        runner_set_keys_random(frame_runner, key_frame ? key_frame : 1,
+                               key_random_seed, key_period ? key_period : 60);
+    if (touch_random_on)
+        runner_set_touch_random(frame_runner, touch_frame, touch_random_seed,
+                                touch_period ? touch_period : 90);
     /* 21-B9yi(续49)：显式关掉指令级 trace。它是 bring-up 用的诊断设施，
        开着时**每条指令都会 printf**（窗口模式实测 <2 fps + GB 级日志）。 */
     exec_set_trace(0);

@@ -37,6 +37,30 @@ void runner_set_touch_drag_series(uint64_t frame, int x1, int y1, int x2, int y2
     s_drag_steps = (steps > 0) ? steps : 12;
 }
 
+/* 21-B9yi(续71)：随机按键/随机触摸的 CLI 配置（见 runner_keys / runner_touch）。 */
+static int s_keyrandom_on;
+static uint32_t s_keyrandom_seed = 1;
+static uint64_t s_keyrandom_frame, s_keyrandom_period = 60;
+static int s_touchrandom_on;
+static uint32_t s_touchrandom_seed = 1;
+static uint64_t s_touchrandom_frame, s_touchrandom_period = 90;
+
+void runner_set_keys_random_series(uint64_t frame, uint32_t seed, uint64_t period)
+{
+    s_keyrandom_on = 1;
+    s_keyrandom_frame = frame;
+    s_keyrandom_seed = seed ? seed : 1u;
+    s_keyrandom_period = (period > 0) ? period : 60;
+}
+
+void runner_set_touch_random_series(uint64_t frame, uint32_t seed, uint64_t period)
+{
+    s_touchrandom_on = 1;
+    s_touchrandom_frame = frame;
+    s_touchrandom_seed = seed ? seed : 1u;
+    s_touchrandom_period = (period > 0) ? period : 90;
+}
+
 void runner_set_touch_series(uint64_t frame, int x, int y, uint64_t period)
 {
     s_touch_on = 1;
@@ -149,6 +173,11 @@ struct runner {
     int drag_on, drag_x1, drag_y1, drag_x2, drag_y2, drag_steps, drag_step;
     int drag_active;              /* 拖拽进行中（按下到抬起之间） */
     uint64_t drag_start_frame;    /* 按下时的帧号（步进按帧计） */
+    /* 21-B9yi(续71)：随机输入浸泡（见 runner_keys / runner_touch） */
+    int key_random;
+    uint32_t key_seed;
+    int touch_random;
+    uint32_t touch_seed;
     uint64_t snd_done;        /* 21-B9wu：已推进的音频样本数（无头模式补推用） */
     uint64_t rtc_done;        /* 21-B9wx：已推进的 RTC 秒数 */
 };
@@ -232,6 +261,34 @@ void runner_set_keys(runner_t *r, uint64_t frame, uint32_t mask,
     r->next_press = (mask != 0) ? frame : UINT64_MAX;
 }
 
+/* 21-B9yi(续71)：随机按键/触摸浸泡（每次触发取随机值，见 runner_keys/runner_touch） */
+void runner_set_keys_random(runner_t *r, uint64_t frame, uint32_t seed,
+                            uint64_t period)
+{
+    if (r == NULL)
+        return;
+    r->key_random = 1;
+    r->key_mask = 0;
+    r->key_seed = seed ? seed : 1u;
+    r->key_period = (period > 0) ? period : 60;
+    r->key_down = 0;
+    r->key_release_frame = 0;
+    r->next_press = frame;
+}
+
+void runner_set_touch_random(runner_t *r, uint64_t frame, uint32_t seed,
+                             uint64_t period)
+{
+    if (r == NULL)
+        return;
+    r->touch_enabled = 1;
+    r->touch_random = 1;
+    r->touch_seed = seed ? seed : 1u;
+    r->touch_period = (period > 0) ? period : 90;
+    r->touch_down = 0;
+    r->next_touch = frame;
+}
+
 uint64_t runner_frame_index(const runner_t *r)
 {
     return (r != NULL) ? (r->tm.now / r->frame_cycles) : 0;
@@ -245,6 +302,32 @@ uint64_t runner_now(const runner_t *r)
 /* 帧号到达脚本时刻时注入按键，保持 8 帧后释放（游戏按帧轮询）。 */
 static void runner_keys(runner_t *r)
 {
+    /* 21-B9yi(续71)：**随机按键浸泡**（`--key-random SEED`）。
+       固定脚本只能走游戏的一条固定路径；随机输入用来「撞」出没走过的代码/未实现
+       路径（这是模拟器常见的 soak 测试）。每次触发时用种子 LCG 取一个新掩码。 */
+    if (r->key_random) {
+        uint64_t fr = runner_frame_index(r);
+        if (r->key_down) {
+            if (fr >= r->key_release_frame) {
+                io_set_keyinput(r->nds->io, 0);
+                r->key_down = 0;
+                r->next_press = (r->key_period > 0) ? (fr + r->key_period) : UINT64_MAX;
+            }
+            return;
+        }
+        if (fr >= r->next_press) {
+            r->key_seed = r->key_seed * 1664525u + 1013904223u;   /* LCG */
+            /* 只取真实存在的 12 个键位（bit0-11），并强制非 0 */
+            uint16_t m = (uint16_t)((r->key_seed >> 8) & 0xFFFu);
+            if (m == 0)
+                m = 0x001u;
+            io_set_keyinput(r->nds->io, m);
+            r->key_mask = m;
+            r->key_down = 1;
+            r->key_release_frame = fr + 12;
+        }
+        return;
+    }
     if (r->key_mask == 0)
         return;
     uint64_t fr = runner_frame_index(r);
@@ -614,6 +697,29 @@ static void runner_touch(runner_t *r)
     if (!r->touch_enabled)
         return;
     uint64_t fr = runner_frame_index(r);
+    /* 21-B9yi(续71)：随机触摸浸泡（`--touch-random SEED`）——每次按下一个随机位置
+       （底屏 0..255 × 0..191），与随机按键配合用来撞未走过的 UI 路径。 */
+    if (r->touch_random) {
+        if (r->touch_down) {
+            if (fr >= r->touch_release_frame) {
+                io_set_touch(r->nds->io, 0, 0xFFFu, 0);
+                r->touch_down = 0;
+                r->next_touch = (r->touch_period > 0) ? (fr + r->touch_period)
+                                                      : UINT64_MAX;
+            }
+            return;
+        }
+        if (fr >= r->next_touch) {
+            r->touch_seed = r->touch_seed * 1664525u + 1013904223u;
+            int px = (int)((r->touch_seed >> 8) & 0xFFu);
+            int py = (int)((r->touch_seed >> 16) % 192u);
+            io_set_touch(r->nds->io, runner_touch_adc(px, 33, 16),
+                         runner_touch_adc(py, 33, 16), 1);
+            r->touch_down = 1;
+            r->touch_release_frame = fr + 12;
+        }
+        return;
+    }
     /* 21-B9yi(续67)：**拖拽注入**（`--touch-drag X1,Y1,X2,Y2 --touch-drag-steps N`）。
        战斗里下指令是「从单位拖到目标点」的手势，只点一下验证不了；
        这里按帧推进：按下 → 沿直线分 N 帧移动 → 抬起。坐标同样是底屏像素。 */
@@ -744,7 +850,15 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         return;
     }
     h9_enabled();   /* 21-B9yi(续41)：初始化热点 PC 统计开关（默认关） */
-    runner_set_keys(r, key_frame, key_mask, key_period);
+    /* 21-B9yi(续71)：随机按键浸泡优先于固定按键脚本 */
+    if (s_keyrandom_on)
+        runner_set_keys_random(r, s_keyrandom_frame, s_keyrandom_seed,
+                               s_keyrandom_period);
+    else
+        runner_set_keys(r, key_frame, key_mask, key_period);
+    if (s_touchrandom_on)
+        runner_set_touch_random(r, s_touchrandom_frame, s_touchrandom_seed,
+                                s_touchrandom_period);
     if (s_drag_on)   /* 21-B9yi(续67)：拖拽注入（优先于单击注入） */
         runner_set_touch_drag(r, s_touch_frame, s_drag_x1, s_drag_y1,
                               s_drag_x2, s_drag_y2, s_drag_steps, s_touch_period);

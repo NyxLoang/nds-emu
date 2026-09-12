@@ -91,6 +91,10 @@ static void dump_state(const nds_t *nds,
 #endif
                        )
 {
+    /* 21-B9y4：打印 dump 时刻的 DISPCNT，用于与 runner 截图时刻对照 */
+    printf("dump: t=after-runner DISPCNT=%08X DISPCNT_SUB=%08X\n",
+           bus_read32(nds->bus, 0x04000000u),
+           bus_read32(nds->bus, 0x04001000u));
     dump_part_t parts[] = {
         { "mainram",    nds->bus->main_ram,    BUS_MAIN_RAM_SIZE },
         { "arm7wram",   nds->bus->arm7_wram,   BUS_ARM7_WRAM_SIZE },

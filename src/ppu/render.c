@@ -409,6 +409,19 @@ static void render_tiled(const bus_t *bus, comp_t *c, int is_sub, uint32_t dispc
                            (dispcnt & (1u << 30)) != 0);
                     if (bg == 3 && prio == 3)
                         bgdbg_done = 1;
+                    /* 21-B9y5：顺手打印 tile0 的前 8 字节与调色板前 4 项，
+                       用于判断"全黑"是取址错（读到空区）还是取色错（索引 0 透明）。 */
+                    {
+                        uint16_t t0 = (uint16_t)(e0 & 0x3FFu);
+                        uint32_t ta = char_base + (uint32_t)t0 * 64u;
+                        printf("bgdbg:   tile0_addr=%08X bytes=", ta);
+                        for (int k = 0; k < 8; k++)
+                            printf("%02X", bus_read8(bus, ta + (uint32_t)k));
+                        printf(" pal0..3=");
+                        for (int k = 0; k < 4; k++)
+                            printf("%04X ", bus_read16(bus, pal_base + (uint32_t)k * 2));
+                        printf("\n");
+                    }
                 }
             }
             int ext = (dispcnt & (1u << 30)) != 0;

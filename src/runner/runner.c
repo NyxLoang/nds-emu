@@ -466,6 +466,10 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
            bus_read32(nds->bus, 0x04001000u),
         nds->cpu->irq_count, nds->cpu7->irq_count);
     if (shot_path != NULL) {
+        /* 21-B9y4：打印截图时刻的 DISPCNT，用于与 main 的 dump 时刻对照 */
+        printf("shot: t=frame-end DISPCNT=%08X DISPCNT_SUB=%08X\n",
+               bus_read32(nds->bus, 0x04000000u),
+               bus_read32(nds->bus, 0x04001000u));
         uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
                                               * RENDER_SCREEN_H);
         uint32_t *fb_bot = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W

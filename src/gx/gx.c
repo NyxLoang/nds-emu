@@ -387,33 +387,38 @@ static void gx_mat_mul_left(int64_t *m, const int64_t *s)
         }
 }
 
-/* m = s(4x3) * m：s 的第四列固定 [0,0,0,1] */
-static void gx_mat_mul4x3_left(int64_t *m, const int64_t *s)
+/* 21-B9yi(续36)：`MTX_MULT_4x3` / `MTX_MULT_3x3` 的参数是 melonDS 的**扁平布局**
+   （每行 3 个：`s[i*3+k]`），不是「先展开成 4x4 再乘」——本地此前把 12/9 个参数
+   按 4 列铺开，从第 1 行起就错位（行 3 更完全错），**这正是投影矩阵
+   `proj[15]` 恒为 0、`proj[0]/[5]` 偏大 ~13%、取景与参考核不同的根因**。
+   同帧对照：参考核 `cmd=19 → proj=(10708,16060,86432,2227)`，本地 (12093,18477,0,2344)。 */
+static void gx_mat_mul4x3_left(int64_t *m, const int32_t *p)
 {
     int64_t t[16];
     memcpy(t, m, sizeof t);
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 4; j++) {
-            int64_t acc = 0;
-            for (int k = 0; k < 3; k++)
-                acc += s[i * 4 + k] * t[k * 4 + j];
+            int64_t acc = (int64_t)p[i * 3 + 0] * t[j]
+                        + (int64_t)p[i * 3 + 1] * t[4 + j]
+                        + (int64_t)p[i * 3 + 2] * t[8 + j];
             m[i * 4 + j] = acc >> GX_FP_SHIFT;
         }
     for (int j = 0; j < 4; j++)
-        m[12 + j] = (s[9] * t[0 + j] + s[10] * t[4 + j] + s[11] * t[8 + j]
+        m[12 + j] = ((int64_t)p[9] * t[j] + (int64_t)p[10] * t[4 + j]
+                     + (int64_t)p[11] * t[8 + j]
                      + GX_FP_ONE * t[12 + j]) >> GX_FP_SHIFT;
 }
 
 /* m = s(3x3) * m：只更新左上 3x3（melonDS MatrixMult3x3） */
-static void gx_mat_mul3x3_left(int64_t *m, const int64_t *s)
+static void gx_mat_mul3x3_left(int64_t *m, const int32_t *p)
 {
     int64_t t[16];
     memcpy(t, m, sizeof t);
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 4; j++) {
-            int64_t acc = 0;
-            for (int k = 0; k < 3; k++)
-                acc += s[i * 4 + k] * t[k * 4 + j];
+            int64_t acc = (int64_t)p[i * 3 + 0] * t[j]
+                        + (int64_t)p[i * 3 + 1] * t[4 + j]
+                        + (int64_t)p[i * 3 + 2] * t[8 + j];
             m[i * 4 + j] = acc >> GX_FP_SHIFT;
         }
 }
@@ -1130,15 +1135,10 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
         gx_mat_mul_left(m, tmp);
         break;
     case GX_CMD_MTX_MULT_4x3:
-        gx_mat_load4x3(tmp, p);
-        gx_mat_mul4x3_left(m, tmp);
+        gx_mat_mul4x3_left(m, p);
         break;
     case GX_CMD_MTX_MULT_3x3:
-        gx_mat_identity(tmp);
-        /* melonDS 把 9 个参数按行填入 s[0..8]（第四列固定 [0,0,0,1]） */
-        for (int i = 0; i < 9; i++)
-            tmp[(i / 3) * 4 + (i % 3)] = p[i];
-        gx_mat_mul3x3_left(m, tmp);
+        gx_mat_mul3x3_left(m, p);
         break;
     case GX_CMD_MTX_SCALE: gx_mat_scale(m, p); break;
     case GX_CMD_MTX_TRANS: gx_mat_translate(m, p); break;
@@ -1233,10 +1233,16 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
     if (cmd >= 0x10 && cmd <= 0x1C) {
         static int md = -1;
         static long mframe = -2;
+        static int pd = -1;
+        static long pframe = -2;
+        static int64_t last_proj[4] = { 0, 0, 0, 0 };
         if (md < 0) {
             md = (getenv("NDS_MDBG") != NULL) ? 1 : 0;
             const char *e = getenv("NDS_MDBG_FRAME");
             mframe = (e != NULL) ? strtol(e, NULL, 10) : -1;
+            pd = (getenv("NDS_PROJDBG") != NULL) ? 1 : 0;
+            const char *e2 = getenv("NDS_PROJDBG_FRAME");
+            pframe = (e2 != NULL) ? strtol(e2, NULL, 10) : -1;
         }
         if (md && mframe >= 0 && (long)g_dbg_frame >= mframe
             && (long)g_dbg_frame <= mframe + 20)
@@ -1248,6 +1254,38 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
                    (long long)g->proj[15], (long long)g->proj[3],
                    (long long)g->pos[0], (long long)g->pos[5],
                    (long long)g->pos[15], (long long)g->pos[3]);
+        /* 21-B9yi(续36)：多参数矩阵命令的完整参数（与参考核 refpar 对照） */
+        {
+            static long pvframe = -2;
+            static int pvleft = 40;
+            if (pvframe == -2) {
+                const char *e = getenv("NDS_GXDBG_FRAME");
+                pvframe = (e != NULL) ? strtol(e, NULL, 10) : -1;
+            }
+            if (pvframe >= 0 && (long)g_dbg_frame >= pvframe
+                && (long)g_dbg_frame <= pvframe + 20 && pvleft > 0
+                && (cmd == 0x19 || cmd == 0x1A || cmd == 0x1B || cmd == 0x1C)) {
+                printf("ourpar: cmd=%02X p=", cmd);
+                for (int i = 0; i < 12; i++)
+                    printf("%08X,", (unsigned)p[i]);
+                printf("\n");
+                pvleft--;
+            }
+        }
+        /* 21-B9yi(续36)：`NDS_PROJDBG=1 NDS_PROJDBG_FRAME=N` →
+           在 [N, N+20] 帧内，只要投影矩阵的关键元素变化就打印改动者。 */
+        if (pd && pframe >= 0 && (long)g_dbg_frame >= pframe
+            && (long)g_dbg_frame <= pframe + 20) {
+            int64_t now[4] = { g->proj[0], g->proj[5], g->proj[15], g->proj[3] };
+            if (memcmp(now, last_proj, sizeof now) != 0) {
+                printf("projchg: f=%llu cmd=%02X mode=%d p=%08X,%08X,%08X"
+                       " proj=(%lld,%lld,%lld,%lld)\n",
+                       g_dbg_frame, cmd, g->mt_mode, (unsigned)p[0], (unsigned)p[1],
+                       (unsigned)p[2], (long long)now[0], (long long)now[1],
+                       (long long)now[2], (long long)now[3]);
+                memcpy(last_proj, now, sizeof now);
+            }
+        }
     }
 }
 

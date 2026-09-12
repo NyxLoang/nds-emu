@@ -102,6 +102,10 @@ typedef struct disp {
     uint32_t dispcnt_sub;             /* 副 DISPCNT */
     uint16_t dispstat;                /* 主 DISPSTAT（bit0=VBlank 等） */
     uint16_t dispstat_sub;            /* 副 DISPSTAT */
+    /* 21-B9xj：ARM7 自己的一套 DISPSTAT（melonDS `DispStat[1]`）。
+       ARM7 常拿它做“按扫描线分段”的时序控制；此前两核共用 dispstat，
+       ARM7 的写入会污染 ARM9 的 VCount 匹配中断使能。 */
+    uint16_t dispstat7;
     uint16_t bgcnt[IO_BG_COUNT];      /* 主 BG0-3 CNT */
     uint16_t bgcnt_sub[IO_BG_COUNT];  /* 副 BG0-3 CNT */
     uint16_t hofs[IO_BG_COUNT];       /* 主 BG0-3 水平滚动 */
@@ -131,7 +135,7 @@ typedef struct disp {
 } disp_t;
 
 int disp_is_addr(uint32_t addr);
-uint8_t disp_read8(const disp_t *d, uint32_t addr);
-void disp_write8(disp_t *d, uint32_t addr, uint8_t val);
+uint8_t disp_read8(const disp_t *d, uint32_t addr, int is_arm7);
+void disp_write8(disp_t *d, uint32_t addr, uint8_t val, int is_arm7);
 
 #endif /* NDS_EMU_IO_DISP_H */

@@ -6,6 +6,24 @@
 
 /* 21-B9xi：诊断用的“当前帧号”（定义在 io.c，供 IPC 报文记录带帧号）。 */
 extern unsigned long long g_dbg_frame;
+
+/* 21-B9xj：CLI `--watch LO-HI` 配置的写监视区间（最多 4 组）。 */
+static uint32_t s_watch_lo[4];
+static uint32_t s_watch_hi[4];
+
+void runner_set_watch(int idx, uint32_t lo, uint32_t hi)
+{
+    if (idx < 0 || idx >= 4)
+        return;
+    s_watch_lo[idx] = lo;
+    s_watch_hi[idx] = hi;
+}
+
+static void runner_apply_watch(nds_t *nds)
+{
+    for (int i = 0; i < 4; i++)
+        bus_set_watch(nds->bus, i, s_watch_lo[i], s_watch_hi[i]);
+}
 #include "cpu/cpu.h"      /* cpu_step / arm_cpu_t（r / cycles） */
 #include "cpu/exec.h"     /* exec_set_trace */
 #include "cpu/thumb.h"    /* thumb_set_trace */
@@ -453,6 +471,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     bus_set_diag(nds->bus, 1);
     exec_set_trace(0);
     thumb_set_trace(0);
+    runner_apply_watch(nds);
 
     runner_t *r = runner_create(nds);
     if (r == NULL) {
@@ -534,8 +553,13 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         extern unsigned long long g_snd_cnt_writes;
         extern unsigned long long g_snd_bias_writes;
         extern unsigned int g_snd_bias_last;
-        printf("io: rtc-reads=%llu snd-cnt-writes=%llu snd-bias-writes=%llu last=%03X\n",
-               g_rtc_reads, g_snd_cnt_writes, g_snd_bias_writes, g_snd_bias_last);
+            printf("io: rtc-reads=%llu snd-cnt-writes=%llu snd-bias-writes=%llu last=%03X\n",
+                   g_rtc_reads, g_snd_cnt_writes, g_snd_bias_writes, g_snd_bias_last);
+        {
+            extern unsigned long long g_vblank_events, g_scanline_events;
+            printf("evt: vblank=%llu scanline=%llu\n", g_vblank_events,
+                   g_scanline_events);
+        }
         {
             extern unsigned long long g_ipc_sends[2];
             extern unsigned long long g_ipc_c187;

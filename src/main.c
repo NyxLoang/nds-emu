@@ -183,6 +183,7 @@ int main(int argc, char *argv[])
     uint64_t key_frame = 0;
     uint32_t key_mask = 0;
     uint64_t key_period = 0;
+    int watch_n = 0;   /* 21-B9xj：--watch LO-HI 的组数（最多 4） */
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
         if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
@@ -212,6 +213,12 @@ int main(int argc, char *argv[])
             key_period = _wcstoui64(wargv[i + 1], NULL, 0);
         else if (wcscmp(wargv[i], L"--dump") == 0 && i + 1 < wargc)
             dump_prefix_w = wargv[i + 1];
+        else if (wcscmp(wargv[i], L"--watch") == 0 && i + 1 < wargc) {
+            /* 21-B9xj：--watch LO-HI（如 --watch 04000106-04000108），最多 4 组 */
+            uint32_t lo = 0, hi = 0;
+            if (swscanf(wargv[i + 1], L"%x-%x", &lo, &hi) == 2)
+                runner_set_watch(watch_n++, lo, hi);
+        }
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -239,6 +246,11 @@ int main(int argc, char *argv[])
             key_period = strtoull(argv[i + 1], NULL, 0);
         else if (strcmp(argv[i], "--dump") == 0 && i + 1 < argc)
             dump_prefix = argv[i + 1];
+        else if (strcmp(argv[i], "--watch") == 0 && i + 1 < argc) {
+            uint32_t lo = 0, hi = 0;
+            if (sscanf(argv[i + 1], "%x-%x", &lo, &hi) == 2)
+                runner_set_watch(watch_n++, lo, hi);
+        }
     }
 #endif
 

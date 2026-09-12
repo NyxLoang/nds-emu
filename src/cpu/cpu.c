@@ -114,6 +114,14 @@ int cpu_step(arm_cpu_t *cpu)
     cpu->step_cycles = 1;
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
+    /* 21-B9xj：写监视用 PC。取值口径与 melonDS 解释器一致（ARM=当前指令+8、
+       Thumb=+4），这样本地与参考 harness 打出来的 pc 可直接对照。 */
+    if (cpu->nds->bus->diag)
+        cpu->nds->bus->dbg_pc = cpu->r[15] + ((cpu->cpsr & CPSR_T) ? 4u : 8u);
+    if (cpu->nds->bus->diag)
+        cpu->nds->bus->dbg_lr = cpu->r[14];
+    if (cpu->nds->bus->diag)
+        cpu->nds->bus->dbg_sp = cpu->r[13];
     irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
     /* 21-B9wt：ARM7 的 HALTCNT 暂停（BIOS SWI 6 Halt / SWI 7 Stop / 游戏
        直接写 0x04000301 都走这里）。唤醒口径与 melonDS HaltInterrupted(1)

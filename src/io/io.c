@@ -19,6 +19,9 @@ unsigned long long g_ipc_c187 = 0;          /* 参考核每帧 1 条的 0000C187
 uint32_t g_ipc_trace[32][3];                /* {core, val, frame} 环形，最近 32 条 */
 unsigned g_ipc_trace_n = 0;                 /* 累计发送数 */
 unsigned long long g_dbg_frame = 0;         /* 由 runner 每帧更新（诊断用） */
+/* 21-B9xj 诊断：VBlank / 扫描线事件计数（每帧应当恰好 1 次 VBlank、263 次扫描线） */
+unsigned long long g_vblank_events = 0;
+unsigned long long g_scanline_events = 0;
 uint32_t g_ipc9_trace[16][2];               /* {val, frame} 最近 16 条 ARM9 发送 */
 unsigned g_ipc9_n = 0;
 
@@ -148,7 +151,7 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
     if (cartbus_is_addr(addr))
         return cartbus_read8((cartbus_t *)&io->cartbus, addr);
     if (disp_is_addr(addr))
-        return disp_read8(&io->disp, addr);
+        return disp_read8(&io->disp, addr, is_arm7);
     if (touch_is_addr(addr))
         return touch_read8((touch_t *)&io->touch, addr);
     if (gx_is_addr(addr) && !is_arm7)
@@ -259,7 +262,7 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         return;
     }
     if (disp_is_addr(addr)) {
-        disp_write8(&io->disp, addr, val);
+        disp_write8(&io->disp, addr, val, is_arm7);
         return;
     }
     if (touch_is_addr(addr)) {
@@ -358,6 +361,7 @@ save_t *io_get_save(io_t *io)
 
 void io_set_vblank(io_t *io)
 {
+    g_vblank_events++;
     /* 21-B9j：VBlank 是 LCD 信号，两套中断控制器都会收到；
        FFXII 的 ARM7 IE bit0 也开着，只有 ARM7 也能被帧事件唤醒，
       service6 的完成状态机才会推进。 */
@@ -367,6 +371,7 @@ void io_set_vblank(io_t *io)
     irq_set_vblank(&io->irq[1]);
     /* DISPSTAT bit0 = VBlank 标志（第 192-262 行期间为 1） */
     io->disp.dispstat = (uint16_t)(io->disp.dispstat | 1u);
+    io->disp.dispstat7 = (uint16_t)(io->disp.dispstat7 | 1u);
     io->disp.dispstat_sub = (uint16_t)(io->disp.dispstat_sub | 1u);
     dma_fire(&io->dma[0], io->bus, DMA_START_VBLANK, 0); /* 双核各自 VBlank DMA */
     dma_fire(&io->dma[1], io->bus, DMA_START_VBLANK, 1);
@@ -377,24 +382,32 @@ void io_frame_boundary(io_t *io)
 {
     io->vcount = 0;
     io->disp.dispstat = (uint16_t)(io->disp.dispstat & ~1u);
+    io->disp.dispstat7 = (uint16_t)(io->disp.dispstat7 & ~1u);
     io->disp.dispstat_sub = (uint16_t)(io->disp.dispstat_sub & ~1u);
 }
 
 void io_advance_scanline(io_t *io)
 {
+    g_scanline_events++;
     io->vcount = (uint16_t)((io->vcount + 1u) % 263u);
-    /* DISPSTAT VCount 匹配：扫描线到达 bit8-15 设定值时置 bit2，
-       IRQ 使能（bit5）时把 IF bit2 挂起。FFXII 的 0x37FDDF0 任务调度器靠它被调起。 */
-    uint8_t v = (uint8_t)(io->vcount & 0xFFu);
-    uint16_t *stat[2] = { &io->disp.dispstat, &io->disp.dispstat_sub };
-    for (int s = 0; s < 2; s++) {
-        uint16_t old = *stat[s];
-        uint16_t setting = (uint16_t)((*stat[s] >> 8) & 0xFFu);
-        uint16_t match = (setting == v) ? 4u : 0u;
-        *stat[s] = (uint16_t)((*stat[s] & ~4u) | match);
-        if (match && !(old & 4u) && (*stat[s] & 0x20u)) {
-            io->irq[0].ifl |= 4u;
-            io->irq[1].ifl |= 4u;
+    /* 21-B9xj：DISPSTAT 每核一套（melonDS DispStat[0]=ARM9 / DispStat[1]=ARM7），
+       VCount 比较值 = bit8-15 | (bit7<<8)，匹配是**边沿触发**（标志已置位不再触发）。
+       副引擎（0x04001004）的匹配中断也挂到 ARM9。 */
+    uint16_t v = (uint16_t)(io->vcount & 0x1FFu);
+    uint16_t *stat[3] = { &io->disp.dispstat, &io->disp.dispstat7,
+                          &io->disp.dispstat_sub };
+    irq_t *own[3] = { &io->irq[0], &io->irq[1], &io->irq[0] };
+    for (int s = 0; s < 3; s++) {
+        uint16_t setting = (uint16_t)(((*stat[s] >> 8) & 0xFFu)
+                                      | ((*stat[s] & 0x80u) << 1));
+        if (setting == v) {
+            if (!(*stat[s] & 4u)) {
+                *stat[s] |= 4u;
+                if (*stat[s] & 0x20u)
+                    own[s]->ifl |= 4u;
+            }
+        } else {
+            *stat[s] = (uint16_t)(*stat[s] & ~4u);
         }
     }
 }

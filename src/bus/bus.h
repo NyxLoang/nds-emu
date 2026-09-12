@@ -107,6 +107,13 @@ typedef struct bus {
     uint32_t arm9_dtcm_size;              /* ARM9 DTCM 大小 */
     int active_is_arm7;                   /* 当前访问者身份：0=ARM9, 1=ARM7 */
     int diag;                             /* 诊断开关：只打印异常事件（未知 SWI/未实现指令/未知 IO），供 bring-up 定位卡点 */
+    /* 21-B9xj：写监视（把写入者的 PC 打出来，用于“谁改了这个寄存器”这类定位）。
+       addr ∈ [watch_lo[i], watch_hi[i]) 时打印；dbg_pc 由 cpu_step 维护。 */
+    uint32_t dbg_pc;
+    uint32_t dbg_lr;   /* 21-B9xj：写监视打印的 LR（helper 的调用点） */
+    uint32_t dbg_sp;   /* 21-B9xj：写监视打印的 SP 与栈上 4 个字（找调用链） */
+    uint32_t watch_lo[4];
+    uint32_t watch_hi[4];
 } bus_t;
 
 bus_t *bus_create(void);
@@ -114,6 +121,8 @@ void bus_destroy(bus_t *bus);
 
 /* 诊断开关：on=1 时，未实现指令 / 未知 SWI / 未知 IO 访问打印一次日志（阶段 21 bring-up）。 */
 void bus_set_diag(bus_t *bus, int on);
+/* 21-B9xj：设置写监视区间（最多 4 组，lo==hi 表示关闭）。 */
+void bus_set_watch(bus_t *bus, int idx, uint32_t lo, uint32_t hi);
 
 /* CP15 更新 ARM9 DTCM 映射（阶段 21-B8）：enabled=0 时 0x027E0000 等地址走 Main RAM
    镜像；enabled=1 时 ARM9 对 [base, base+size) 的读写改走私有 DTCM。 */

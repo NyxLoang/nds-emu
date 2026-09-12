@@ -3306,6 +3306,45 @@ static void test_arm7_biosprot_soundbias(nds_t *nds)
     nds->bus->active_is_arm7 = 0;
 }
 
+/* ---- 21-B9xj 用例：DISPSTAT 每核一套（ARM7 不再污染 ARM9）----
+   参考核：ARM9IORead16(0x04000004)=DispStat[0]、ARM7IORead16(0x04000004)=
+   DispStat[1]；只读位 0-2/6，VCount 比较值 = bit8-15 | (bit7<<8)，
+   匹配是边沿触发，且只有使能位（bit5）才挂 IF bit2。 */
+static void test_dispstat_per_core(nds_t *nds)
+{
+    /* ARM7 写自己的：VCount=0x20 + VBlank IRQ 使能（bit3） */
+    nds->bus->active_is_arm7 = 1;
+    bus_write16(nds->bus, 0x04000004u, 0x2008u);
+    CHECK_EQ("dispstat7 readback", bus_read16(nds->bus, 0x04000004u), 0x2008u);
+    nds->bus->active_is_arm7 = 0;
+    CHECK_EQ("dispstat9 untouched", bus_read16(nds->bus, 0x04000004u), 0x0000u);
+
+    /* ARM9 写自己的：VCount=0x20 + VCount IRQ 使能（bit5） */
+    bus_write16(nds->bus, 0x04000004u, 0x2020u);
+    CHECK_EQ("dispstat9 write", bus_read16(nds->bus, 0x04000004u), 0x2020u);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("dispstat7 still", bus_read16(nds->bus, 0x04000004u), 0x2008u);
+    nds->bus->active_is_arm7 = 0;
+
+    /* 只读位（0-2/6）写不进去：写全 1 后低字节只剩可写位（0xB8） */
+    bus_write16(nds->bus, 0x04000004u, 0xFFFFu);
+    CHECK_EQ("dispstat ro bits", bus_read16(nds->bus, 0x04000004u) & 0x0047u,
+             0x0000u);
+    /* 复位成 VCount=0x20 + VCount IRQ 使能（bit5）后再验匹配 */
+    bus_write16(nds->bus, 0x04000004u, 0x2020u);
+
+    /* VCount 匹配：扫描线 0x20 命中两核各自的 VMatch */
+    nds->io->irq[0].ifl = 0;
+    nds->io->irq[1].ifl = 0;
+    nds->io->vcount = 0x1Fu;
+    io_advance_scanline(nds->io);
+    CHECK_EQ("vcount match flag9", nds->io->disp.dispstat & 4u, 4u);
+    CHECK_EQ("vcount match irq9", nds->io->irq[0].ifl & 4u, 4u);
+    /* ARM7 的 VMatch 也是 0x20，但它没使能 bit5 → 只置标志、不挂中断 */
+    CHECK_EQ("vcount match flag7", nds->io->disp.dispstat7 & 4u, 4u);
+    CHECK_EQ("vcount match irq7", nds->io->irq[1].ifl & 4u, 0u);
+}
+
 /* ---- 21-B9wy 用例：GXSTAT 的 FIFO 状态位（bit25/26）----
    参考核 GPU3D::Read32(0x04000600) 在 FIFO 空时同时置 bit25（不足半满）与
    bit26（空）；游戏常靠 bit25 判断“还能不能往 FIFO 塞命令”。本地旧实现只有
@@ -5611,6 +5650,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_arm7_biosprot_soundbias(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9xj] DISPSTAT 每核一套（ARM7 独立寄存器 + VCount 匹配）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_dispstat_per_core(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9wy] GXSTAT FIFO 状态位（bit25/26）\n");

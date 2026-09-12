@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include "bus.h"
 #include "io/io.h"
@@ -51,6 +52,40 @@ void bus_set_diag(bus_t *bus, int on)
     if (bus != NULL)
         bus->diag = on;
 }
+
+/* 21-B9xj：写监视。addr 落在任一 [lo,hi) 时打印写入者身份与 PC，
+   用于“这个寄存器是谁改的”这类 bring-up 定位（lo==hi 表示该组关闭）。 */
+extern unsigned long long g_dbg_frame;   /* 定义在 io.c（runner 每帧更新） */
+
+void bus_set_watch(bus_t *bus, int idx, uint32_t lo, uint32_t hi)
+{
+    if (bus == NULL || idx < 0 || idx >= 4)
+        return;
+    bus->watch_lo[idx] = lo;
+    bus->watch_hi[idx] = hi;
+}
+
+static void bus_dbg_watch(const bus_t *bus, uint32_t addr, int width,
+                          uint32_t val)
+{
+    for (int i = 0; i < 4; i++) {
+        if (bus->watch_lo[i] == bus->watch_hi[i])
+            continue;
+        if (addr < bus->watch_lo[i] || addr >= bus->watch_hi[i])
+            continue;
+        printf("watch: arm%d w%d a=%08X v=%08X pc=%08X lr=%08X sp=%08X"
+               " st=%08X/%08X/%08X/%08X f=%llu\n",
+               bus->active_is_arm7 ? 7 : 9, width * 8, addr, val,
+               bus->dbg_pc, bus->dbg_lr, bus->dbg_sp,
+               bus_read32(bus, bus->dbg_sp), bus_read32(bus, bus->dbg_sp + 4u),
+               bus_read32(bus, bus->dbg_sp + 8u),
+               bus_read32(bus, bus->dbg_sp + 12u), g_dbg_frame);
+        return;
+    }
+}
+
+/* 宽写（16/32 位）拆分过程中抑制 8 位监视，避免同一次写打印多行。 */
+static int g_wide_write = 0;
 
 void bus_set_arm9_dtcm(bus_t *bus, int enabled, uint32_t base, uint32_t size)
 {
@@ -427,6 +462,8 @@ uint8_t bus_read8(const bus_t *bus, uint32_t addr)
 
 void bus_write8(bus_t *bus, uint32_t addr, uint8_t val)
 {
+    if (bus->diag && !g_wide_write)
+        bus_dbg_watch(bus, addr, 1, val);
     /* IO 区间转发给 io 模块（含未实现寄存器写忽略的桩语义） */
     if (addr >= BUS_IO_BASE && addr - BUS_IO_BASE < BUS_IO_SIZE) {
         if (bus->io != NULL)
@@ -451,8 +488,12 @@ uint16_t bus_read16(const bus_t *bus, uint32_t addr)
 /* 小端 16 位写：反向拆字节，最低字节落到低地址。 */
 void bus_write16(bus_t *bus, uint32_t addr, uint16_t val)
 {
+    if (bus->diag)
+        bus_dbg_watch(bus, addr, 2, val);
+    g_wide_write = 1;
     bus_write8(bus, addr, (uint8_t)(val & 0xFF));         /* 最低字节 → addr */
     bus_write8(bus, addr + 1, (uint8_t)(val >> 8));       /* 最高字节 → addr+1 */
+    g_wide_write = 0;
 }
 
 /* 小端 32 位：四个字节按 b0<<0 | b1<<8 | b2<<16 | b3<<24 拼成字。 */
@@ -492,8 +533,12 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
             io_gx_write32(bus->io, addr, val);
         return;
     }
+    if (bus->diag)
+        bus_dbg_watch(bus, addr, 4, val);
+    g_wide_write = 1;
     bus_write8(bus, addr,     (uint8_t)(val & 0xFF));
     bus_write8(bus, addr + 1, (uint8_t)(val >> 8));
     bus_write8(bus, addr + 2, (uint8_t)(val >> 16));
     bus_write8(bus, addr + 3, (uint8_t)(val >> 24));
+    g_wide_write = 0;
 }

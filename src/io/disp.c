@@ -97,10 +97,15 @@ static uint16_t *disp_reg16(disp_t *d, uint32_t addr)
     return NULL;
 }
 
-uint8_t disp_read8(const disp_t *d, uint32_t addr)
+uint8_t disp_read8(const disp_t *d, uint32_t addr, int is_arm7)
 {
-    if (addr >= IO_DISPSTAT && addr < IO_DISPSTAT + 2)
-        return (uint8_t)(d->dispstat >> ((addr - IO_DISPSTAT) * 8));
+    /* 21-B9xj：0x04000004 按访问者分流——ARM9 读主引擎 DISPSTAT，
+       ARM7 读它自己的 DISPSTAT（melonDS ARM9IORead16/ARM7IORead16 分别取
+       DispStat[0]/DispStat[1]）。 */
+    if (addr >= IO_DISPSTAT && addr < IO_DISPSTAT + 2) {
+        uint16_t v = is_arm7 ? d->dispstat7 : d->dispstat;
+        return (uint8_t)(v >> ((addr - IO_DISPSTAT) * 8));
+    }
     if (addr >= IO_DISPSTAT_SUB && addr < IO_DISPSTAT_SUB + 2)
         return (uint8_t)(d->dispstat_sub >> ((addr - IO_DISPSTAT_SUB) * 8));
     /* DISPCNT：32 位，小端按字节取（基址=最低字节） */
@@ -161,14 +166,17 @@ static void write_byte16(uint16_t *reg, int byte_idx, uint8_t val)
     *reg = (uint16_t)((*reg & ~mask) | ((uint16_t)val << (byte_idx * 8)));
 }
 
-void disp_write8(disp_t *d, uint32_t addr, uint8_t val)
+void disp_write8(disp_t *d, uint32_t addr, uint8_t val, int is_arm7)
 {
     /* DISPSTAT：bit0-2 只读状态位；bit3-5 IRQ 使能可写；bit8-15 VCount 比较值。
        游戏写它配置 VCount 匹配中断，之前被当写忽略。 */
     if (addr >= IO_DISPSTAT && addr < IO_DISPSTAT + 2) {
-        uint16_t old = d->dispstat;
-        uint16_t mask = (addr & 1u) ? 0xFF00u : 0x0038u;
-        d->dispstat = (uint16_t)((old & ~mask) | ((uint16_t)val << ((addr & 1u) * 8) & mask));
+        /* 21-B9xj：可写位 = 全部 - 只读位（melonDS ro_mask=0x0047，即 bit0/1/2/6 只读），
+           即 bit3/4/5/7-15 可写（bit7 是 VCount 比较值的 bit8）。 */
+        uint16_t *reg = is_arm7 ? &d->dispstat7 : &d->dispstat;
+        uint16_t mask = (addr & 1u) ? 0xFF00u : 0x00B8u;
+        uint16_t old = *reg;
+        *reg = (uint16_t)((old & ~mask) | (((uint16_t)val << ((addr & 1u) * 8)) & mask));
         return;
     }
     if (addr >= IO_DISPSTAT_SUB && addr < IO_DISPSTAT_SUB + 2) {

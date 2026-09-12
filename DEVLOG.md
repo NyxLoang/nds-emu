@@ -25,6 +25,7 @@
 
 | 日期 | 微步 | 模块 | 一句话说明 | 详情 |
 |------|------|------|------------|------|
+| 2026-09-12 | 21-B9xc（代码/测试） | IO/主循环 | VBlank 时序对齐真机（第 192 行触发、帧边界结束）：IF 模式与参考一致，标题 frame1900 仍逐像素一致，885 项 0 失败 | [io](src/io/iolog.md) 路 [main](src/mainlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9xa（代码/测试） | IO | IME 只保留 bit0（dump 与参考一致）+ 声音驱动诊断 `io: snd-cnt-writes`：879 项 0 失败 | [io](src/io/iolog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9wy（代码/测试） | 3D/IO | GXSTAT FIFO 状态位对齐参考核（bit25+bit26，与参考 0x86000000 一致）：879 项 0 失败 | [gx](src/gx/gxlog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |
 | 2026-09-12 | 21-B9ww/B9wx（代码/测试） | IO/音频/3D | ARM9 DMA 模式 7（GX 显示列表 FIFO）+ NDS RTC 串行时钟（0x04000134/138）：875 项 0 失败 | [io](src/io/iolog.md) 路 [tests](tests/testlog.md) 路 [21](docs/21-rom-bringup.md) |

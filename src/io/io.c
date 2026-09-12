@@ -323,16 +323,24 @@ void io_set_vblank(io_t *io)
 {
     /* 21-B9j：VBlank 是 LCD 信号，两套中断控制器都会收到；
        FFXII 的 ARM7 IE bit0 也开着，只有 ARM7 也能被帧事件唤醒，
-       service6 的完成状态机才会推进。 */
+      service6 的完成状态机才会推进。 */
+    /* 21-B9xc：真机 VBlank 从第 192 扫描线开始（不是帧边界）。本函数现在
+       在 VCOUNT==192 时被调用；VCOUNT 归零改由 io_frame_boundary() 处理。 */
     irq_set_vblank(&io->irq[0]);
     irq_set_vblank(&io->irq[1]);
-    /* DISPSTAT bit0 = VBlank 标志（近似：VBlank 事件后到下一次帧事件前视为处于
-       VBlank；FFXII ARM7 会读它确认帧边界）。 */
+    /* DISPSTAT bit0 = VBlank 标志（第 192-262 行期间为 1） */
     io->disp.dispstat = (uint16_t)(io->disp.dispstat | 1u);
     io->disp.dispstat_sub = (uint16_t)(io->disp.dispstat_sub | 1u);
-    io->vcount = 0;
     dma_fire(&io->dma[0], io->bus, DMA_START_VBLANK, 0); /* 双核各自 VBlank DMA */
     dma_fire(&io->dma[1], io->bus, DMA_START_VBLANK, 1);
+}
+
+/* 21-B9xc：帧边界（VCOUNT 回 0）——离开 VBlank 区间。 */
+void io_frame_boundary(io_t *io)
+{
+    io->vcount = 0;
+    io->disp.dispstat = (uint16_t)(io->disp.dispstat & ~1u);
+    io->disp.dispstat_sub = (uint16_t)(io->disp.dispstat_sub & ~1u);
 }
 
 void io_advance_scanline(io_t *io)

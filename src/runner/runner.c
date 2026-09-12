@@ -30,6 +30,9 @@ static void runner_ev_line(void *ctx)
 {
     runner_ev_ctx_t *c = (runner_ev_ctx_t *)ctx;
     io_advance_scanline(c->io);
+    /* 21-B9xc：真机 VBlank 从第 192 扫描线开始（263 行/帧，192-262 为 VBlank） */
+    if (c->io->vcount == 192u)
+        io_set_vblank(c->io);
     c->next_line += c->line_cycles;
     timing_arm(c->tm, 0, c->next_line - c->tm->now, runner_ev_line, c);
 }
@@ -37,7 +40,7 @@ static void runner_ev_line(void *ctx)
 static void runner_ev_frame(void *ctx)
 {
     runner_ev_ctx_t *c = (runner_ev_ctx_t *)ctx;
-    io_set_vblank(c->io);
+    io_frame_boundary(c->io);
     c->next_frame += c->frame_cycles;
     timing_arm(c->tm, 1, c->next_frame - c->tm->now, runner_ev_frame, c);
 }
@@ -612,12 +615,14 @@ void runner_headless(nds_t *nds, uint64_t steps, int trace,
         else
             cpu_step(nds->cpu);
 
-        /* 近似一帧（约 100 万步）触发一次 VBlank，模拟显示硬件，让等 VBlank 的游戏能继续 */
-        if ((i & 0xFFFFFu) == 0xFFFFFu)
-            io_set_vblank(nds->io);
-        /* VCOUNT 逐行：一帧约 263 条扫描线，100 万步内约 4000 步一条线 */
-        if ((i & 0xFFFu) == 0)
+        /* 21-B9xc：VBlank 在第 192 行触发、帧边界把 VCOUNT 归零（与事件驱动一致） */
+        if ((i & 0xFFFu) == 0) {
             io_advance_scanline(nds->io);
+            if (nds->io->vcount == 192u)
+                io_set_vblank(nds->io);
+        }
+        if ((i & 0xFFFFFu) == 0xFFFFFu)
+            io_frame_boundary(nds->io);
         /* 每 100 万步打一次进度 */
         if ((i & 0xFFFFFu) == 0xFFFFFu) {
             /* 21-B9h：进度附带两核中断寄存器，便于判断“等 IRQ 但没来”是

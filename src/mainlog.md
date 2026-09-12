@@ -196,3 +196,6 @@
   再和已验收的标题图逐像素比较）。
 - 进度行再补 `sp9/lr9`：卡住时用 `lr9` 就能看出 ARM9 处在哪个等待例程
   （例如 `lr9=0200761C` = `0x0200760C` 的“关中断+无限 WFI”深睡例程）。
+- VBlank 事件改到 **第 192 扫描线**（`runner_ev_line` 里 `vcount == 192`），
+  帧边界改调 `io_frame_boundary()`（VCOUNT 归零 + 清 VBlank 标志）；
+  旧的 `--headless` 步进路径同样处理。

@@ -470,3 +470,17 @@
 - **声音驱动诊断**：`io: snd-cnt-writes=N` 统计 ARM7 写 SOUNDxCNT 最高字节
   的次数（含 start 位）。FFXII 开局后该计数持续增长说明 ARM7 声音驱动在跑；
   排查「ARM7 卡在 0x037FEFD0 轮询 SOUNDxCNT bit31」时用它判断通道是否被重触发。
+
+## 2026-09-12 · 21-B9xc — VBlank 时序对齐真机（第 192 行起）
+
+- **证据**：本地 IF9/IF7 在帧边界总带着 VBlank 位（`00280005`/`00080001`），
+  参考核同一阶段是 `00280000`/`00000000` —— 说明参考的 VBlank 在帧内就被
+  处理掉了。查 runner：`runner_ev_frame`（帧边界）调用 `io_set_vblank`，
+  而真机一帧 263 行、**第 192-262 行才是 VBlank**。
+- **修复**：`io_set_vblank` 不再把 VCOUNT 归零，改由新增的
+  `io_frame_boundary()`（帧边界）负责归零并清 DISPSTAT bit0；
+  `runner_ev_line` 在 `vcount == 192` 时触发 VBlank IRQ 与 VBlank DMA。
+  事件驱动与旧的 `--headless` 步进路径都按这个模型。
+- **效果**：IF 模式与参考一致（VBlank 帧内被消费），而且**标题画面仍然
+  在 frame1900 与已验收截图逐像素 0 差异**（本轮重新截图比对）。
+- 单测 `[case 21-B9xc]` 6 项（IRQ 两核、DISPSTAT 主副、帧边界归零与清标志）。

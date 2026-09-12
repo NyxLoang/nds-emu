@@ -819,3 +819,9 @@
 
 - `[case 6.2]` 的 IME 读写用例在整字写入 0x04000000+1 之后仍应读回 bit0=1；
   掩码到 bit0 后全量保持 **879 项检查，0 项失败**。
+
+## 2026-09-12 · 21-B9xc — VBlank 时序（新增 6 项）
+
+- `[case 21-B9xc]`：`io_set_vblank()` 应同时置两核 IF bit0 与主/副 DISPSTAT
+  bit0；`io_frame_boundary()` 应把 VCOUNT 归零并清 DISPSTAT bit0。
+- 全量从 **879 项**增至 **885 项检查，0 项失败**。

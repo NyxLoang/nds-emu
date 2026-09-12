@@ -3294,6 +3294,29 @@ static void test_gxstat_fifo_bits(nds_t *nds)
     CHECK_EQ("gxstat fifo bits kept", v & 0x06000000u, 0x06000000u);
 }
 
+/* ---- 21-B9xc 用例：VBlank 时序（第 192 行开始、帧边界结束）----
+   真机一帧 263 行，第 192-262 行为 VBlank：IRQ 与 DISPSTAT bit0 都在第 192 行
+   置位，到帧边界（VCOUNT 回 0）清除。旧实现把 VBlank 挂在帧边界上，
+   游戏每帧的工作窗口整体错位。 */
+static void test_vblank_timing(nds_t *nds)
+{
+    nds->io->irq[0].ifl = 0;
+    nds->io->irq[1].ifl = 0;
+    nds->io->disp.dispstat = 0;
+    nds->io->disp.dispstat_sub = 0;
+
+    io_set_vblank(nds->io);
+    CHECK_EQ("vblank irq9", nds->io->irq[0].ifl & IO_IF_VBLANK, IO_IF_VBLANK);
+    CHECK_EQ("vblank irq7", nds->io->irq[1].ifl & IO_IF_VBLANK, IO_IF_VBLANK);
+    CHECK_EQ("vblank flag main", nds->io->disp.dispstat & 1u, 1u);
+    CHECK_EQ("vblank flag sub", nds->io->disp.dispstat_sub & 1u, 1u);
+
+    nds->io->vcount = 262u;
+    io_frame_boundary(nds->io);
+    CHECK_EQ("frame boundary vcount", nds->io->vcount, 0u);
+    CHECK_EQ("frame boundary flag cleared", nds->io->disp.dispstat & 1u, 0u);
+}
+
 /* ---- 21-B9ww 用例：ARM9 DMA 模式 7 = GX 命令 FIFO（显示列表 DMA）----
    真机显示列表不靠 CPU 逐字写端口，而是把主存里的列表用 DMA 送到
    0x04000400（目的地址固定）。本地旧实现只认立即模式与 VBlank/卡带触发，
@@ -5560,6 +5583,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_gxstat_fifo_bits(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9xc] VBlank 时序（第 192 行起、帧边界结束）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_vblank_timing(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9wu] 无头模式 SPU 时间推进（单发通道清 start 位）\n");

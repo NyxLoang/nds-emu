@@ -213,6 +213,10 @@ int main(int argc, char *argv[])
     uint64_t stats_every = 0;   /* 21-B9yi(续32)：--stats-every N */
     /* 21-B9yi(续42)：窗口模式自动退出帧数（--frames N，冒烟测试用） */
     uint64_t g_cli_frames = 0;
+    /* 21-B9yi(续61)：窗口模式每 N 帧打一行实测 fps（--fps-every N）。
+       动机：此前只有「整段平均帧率」，看不出**哪一段**卡；游戏不同场景
+       （地牢/对话/战斗指挥界面）负载差别很大，需要分段数据。 */
+    uint64_t g_cli_fps_every = 0;
     /* 21-B9yi(续46)：触摸注入脚本（--touch-frame/-x/-y/-period） */
     uint64_t touch_frame = 0, touch_period = 0;
     int touch_x = 128, touch_y = 96;
@@ -282,6 +286,8 @@ int main(int argc, char *argv[])
         }
         else if (wcscmp(wargv[i], L"--frames") == 0 && i + 1 < wargc)
             g_cli_frames = _wcstoui64(wargv[i + 1], NULL, 10);
+        else if (wcscmp(wargv[i], L"--fps-every") == 0 && i + 1 < wargc)
+            g_cli_fps_every = _wcstoui64(wargv[i + 1], NULL, 10);
         else if (wcscmp(wargv[i], L"--touch-frame") == 0 && i + 1 < wargc)
             touch_frame = _wcstoui64(wargv[i + 1], NULL, 0);
         else if (wcscmp(wargv[i], L"--touch-x") == 0 && i + 1 < wargc)
@@ -342,6 +348,8 @@ int main(int argc, char *argv[])
         }
         else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
             g_cli_frames = strtoull(argv[i + 1], NULL, 10);
+        else if (strcmp(argv[i], "--fps-every") == 0 && i + 1 < argc)
+            g_cli_fps_every = strtoull(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--touch-frame") == 0 && i + 1 < argc)
             touch_frame = strtoull(argv[i + 1], NULL, 0);
         else if (strcmp(argv[i], "--touch-x") == 0 && i + 1 < argc)
@@ -592,6 +600,8 @@ int main(int argc, char *argv[])
        验证 SDL 初始化/出图/退出与存档写回，又不用人工关窗口）。 */
     uint64_t frame_limit = g_cli_frames;
     uint64_t frames_done = 0;
+    /* 21-B9yi(续61)：分段 fps 统计（--fps-every N）。 */
+    uint64_t fps_frames = 0, fps_mark_ms = SDL_GetTicks64();
     /* 21-B9yi(续47)：鼠标 → 触摸屏（底屏）。布局（逻辑坐标）：
        菜单栏 [0,28)、顶屏 [28,220)、底屏 [220,412)。
        触摸 ADC 换算与 runner `--touch-*` 同口径（固件默认校准，每像素 16 单位）。 */
@@ -708,6 +718,21 @@ int main(int argc, char *argv[])
         menu_render_dropdown(renderer, scale);
 
         SDL_RenderPresent(renderer);
+
+        /* 21-B9yi(续61)：每 N 帧打一行「这一段的实测 fps」（--fps-every N）。
+           用真实时钟（SDL_GetTicks64）算，含渲染/音频宿主开销，就是玩家实际体验。 */
+        if (g_cli_fps_every != 0 && ++fps_frames >= g_cli_fps_every) {
+            uint64_t now_ms = SDL_GetTicks64();
+            uint64_t dt = now_ms - fps_mark_ms;
+            printf("fps: frames=%llu..%llu  %llu ms  %.1f fps\n",
+                   (unsigned long long)(frames_done + 1 - fps_frames),
+                   (unsigned long long)(frames_done + 1),
+                   (unsigned long long)dt,
+                   dt ? (1000.0 * (double)fps_frames / (double)dt) : 0.0);
+            fflush(stdout);
+            fps_frames = 0;
+            fps_mark_ms = now_ms;
+        }
 
         if (frame_limit != 0 && ++frames_done >= frame_limit) {
             printf("window: reached --frames %llu, exiting\n",

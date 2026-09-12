@@ -98,9 +98,11 @@ target_link_libraries(test_nds PRIVATE ndscore)
 add_test(NAME nds_test COMMAND test_nds)
 
 # 21-B9wq：本工程源码用 -O2（第三方 SDL 保持各自默认），提高窗口模式帧率。
-target_compile_options(ndscore PRIVATE -O2)
-target_compile_options(nds-emu PRIVATE -O2)
-target_compile_options(test_nds PRIVATE -O2)
+# 21-B9yi(续57)：解释器是「大量小函数 + 热点 switch」的形态，试 -O3
+# （更多内联/向量化机会）。是否保留以同机相邻配对 A/B 为准。
+target_compile_options(ndscore PRIVATE -O3)
+target_compile_options(nds-emu PRIVATE -O3)
+target_compile_options(test_nds PRIVATE -O3)
 
 # 21-B9yi(续54)：**细粒度阶段剖析**编译开关。
 # `NDS_PROF=1` 的取指/译码/IO 分桶要在热路径上每步插 rdtsc，这些分支**默认构建里

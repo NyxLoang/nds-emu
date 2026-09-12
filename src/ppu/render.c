@@ -188,7 +188,10 @@ static void comp_finalize(const comp_t *c, uint32_t *fb)
     }
 
     uint32_t bmode = (c->bright >> MB_MODE_SHIFT) & 3u;
-    if (bmode == 0)
+    /* 21-B9y7：`NDS_NOMB=1` 时跳过 MASTER_BRIGHT（仅用于与参考核 dump 对齐：
+       melonDS 的 `GPU.GetFramebuffers` 返回的是**加主亮度之前**的合成结果，
+       而本地把主亮度做进了输出，导致"参考核有画面、本地全黑"的假分歧）。 */
+    if (bmode == 0 || getenv("NDS_NOMB") != NULL)
         return;
     uint32_t f = c->bright & MB_FACTOR_MASK; if (f > 16) f = 16;
     for (int i = 0; i < PX_COUNT; i++) {
@@ -545,12 +548,20 @@ static void render_engine(const bus_t *bus, uint32_t *fb, int is_sub)
 
     if (!render_bitmap(bus, &c, is_sub, dispcnt))
         render_tiled(bus, &c, is_sub, dispcnt);
+    if (getenv("NDS_BGDBG"))
+        printf("bgdbg: stage=tiled eng=%d px=%08X\n", is_sub, c.px[100 * 256 + 50]);
     if (dispcnt & DISPCNT_OBJ)
         render_obj(bus, &c, is_sub);
+    if (getenv("NDS_BGDBG"))
+        printf("bgdbg: stage=obj eng=%d px=%08X\n", is_sub, c.px[100 * 256 + 50]);
     if (!is_sub)
         render_3d(bus, &c);
+    if (getenv("NDS_BGDBG"))
+        printf("bgdbg: stage=3d eng=%d px=%08X\n", is_sub, c.px[100 * 256 + 50]);
 
     comp_finalize(&c, fb);
+    if (getenv("NDS_BGDBG"))
+        printf("bgdbg: stage=final eng=%d fb=%08X\n", is_sub, fb[100 * 256 + 50]);
 }
 
 /* 显示捕获（阶段 20.2 最小实现）：DISPCAPCNT bit31 置位时，把主引擎（顶屏）出图

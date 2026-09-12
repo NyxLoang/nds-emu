@@ -3197,3 +3197,39 @@ pal[0]=001F（红）、pal[1]=0000（黑）、pal[2]=0421、pal[3]=0842
 **下一步（一次定位）**：在渲染管线各阶段后各打印同一采样点 `fb[100*256+50]`：
 `render_tiled` 之后、`render_obj` 之后、`render_3d` 之后、`comp_finalize` 之后——
 哪一步开始变黑，问题就在那一步。
+
+### 21-B9y7（2026-09-12）：**"全黑"来自 MASTER_BRIGHT，且参考核 dump 是加亮度之前的画面**
+
+**1) 阶段诊断结果**
+
+```
+bgdbg: stage=tiled eng=0 px=D35FEB20     ← 合成累加器里是颜色（低 16 位 0xEB20 = RGB(0,200,208) 青）
+bgdbg: stage=obj   eng=0 px=D35FEB20
+bgdbg: stage=3d    eng=0 px=D35FEB20
+bgdbg: stage=final eng=0 fb=FF000000     ← comp_finalize 之后变黑
+```
+
+即：**BG2 的数据确实画进了合成器（青色），最后一步 `comp_finalize` 把它变成了黑**。
+
+**2) 原因：MASTER_BRIGHT（0x0400006C）= 0x8010（两边一致）**
+
+```
+MASTER_BRIGHT: ref=8010  loc=8010     ; bit14-15 = 10b = 减暗模式, 因子/16 = 16 → 全黑
+BLDCNT=2142/2142  BLDALPHA=040C/040C  WININ=0000/0000  WINOUT=0000/0000
+```
+
+**melonDS 的 `GPU.GetFramebuffers()`（harness dump 用的）返回的是"加主亮度之前"的
+合成结果**（主亮度在 melonDS 里由前端在显示阶段套用），而本地 `render_frame` 把主亮度
+做进了输出。于是出现"参考核有画面（青条纹）、本地全黑"的**假分歧**。
+
+实验：给本地加了 `NDS_NOMB=1`（跳过主亮度）后画面确实变了（不再是全黑），
+但与参考核 dump 仍不重合（MAD 390、相同像素 0%）——说明**除了主亮度之外，
+2D 混合（BLDCNT/BLDALPHA，melonDS 在 2D 渲染阶段就应用）等效果也需要对齐口径**。
+
+**结论 / 下一步（比较方法必须修正）**：
+
+1. 比较时要么**在参考核侧把主亮度套用到 dump 上**（与硬件显示阶段一致），
+   要么在本地输出"未套主亮度"的中间结果；两者必须选其一并固定；
+2. 之前所有"奇偶列/条纹"的对比结论都要在**同一效果口径**下重做；
+3. 主亮度/混合的真实实现差异要单独验证（本地 `blend_bright` 的 6bit 公式与 melonDS
+   `MasterBrightness` 的实现逐行对照）。

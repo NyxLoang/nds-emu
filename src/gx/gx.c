@@ -751,6 +751,52 @@ static uint8_t gx_poly_alpha(const gx_t *g)
     return (pa == 0) ? 31 : pa;   /* 0 = 不透明（DS 里 0 表示不混合） */
 }
 
+/* 21-B9yi(续39)：纹理色与顶点色的合成（melonDS `SoftRenderer3D` 口径）。
+   纹理色先按「15 位 → 18 位」转成 6 位通道（`v*2 + (v!=0)`），顶点色同样处理，
+   再按 `POLYGON_ATTR` bits4-5 的混合模式合成：
+     0 = modulate：`((t+1)*(v+1)-1) >> 6`
+     1 = decal： 纹理 alpha=0 用顶点色、=31 用纹理色、否则按 alpha 插值
+     （2=toon / 3=shadow 需要 toon 表与阴影遮罩，本地暂按 modulate 处理）
+   返回 RGB555 与 0..31 的 alpha。 */
+static uint16_t gx_blend_tex_vtx(uint16_t tex555, uint8_t talpha,
+                                 int vr, int vg, int vb, uint8_t palpha,
+                                 uint32_t blendmode, uint8_t *out_alpha)
+{
+    int tr = (tex555 & 0x1Fu), tg = ((tex555 >> 5) & 0x1Fu), tb = ((tex555 >> 10) & 0x1Fu);
+    tr = (tr << 1) | (tr != 0);
+    tg = (tg << 1) | (tg != 0);
+    tb = (tb << 1) | (tb != 0);
+    int r6 = (vr << 1) | (vr != 0);
+    int g6 = (vg << 1) | (vg != 0);
+    int b6 = (vb << 1) | (vb != 0);
+    int r, g, b, a;
+    if ((blendmode & 0x1u) != 0) {            /* decal */
+        if (talpha == 0) {
+            r = r6; g = g6; b = b6;
+        } else if (talpha >= 31) {
+            r = tr; g = tg; b = tb;
+        } else {
+            r = ((tr * talpha) + (r6 * (31 - talpha))) >> 5;
+            g = ((tg * talpha) + (g6 * (31 - talpha))) >> 5;
+            b = ((tb * talpha) + (b6 * (31 - talpha))) >> 5;
+        }
+        a = palpha;
+    } else {                                  /* modulate */
+        r = ((tr + 1) * (r6 + 1) - 1) >> 6;
+        g = ((tg + 1) * (g6 + 1) - 1) >> 6;
+        b = ((tb + 1) * (b6 + 1) - 1) >> 6;
+        a = ((talpha + 1) * (palpha + 1) - 1) >> 5;
+    }
+    if (r > 31) r = 31;
+    if (g > 31) g = 31;
+    if (b > 31) b = 31;
+    if (a > 31) a = 31;
+    if (a < 0) a = 0;
+    if (out_alpha != NULL)
+        *out_alpha = (uint8_t)a;
+    return (uint16_t)((r >> 1) | ((g >> 1) << 5) | ((b >> 1) << 10));
+}
+
 /* ------------------------------------------------------------------
    21-B9yi(续35)：视体裁剪（melonDS `ClipPolygon` 的最小可用版本）
 
@@ -1015,12 +1061,22 @@ static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
             }
 
             uint8_t talpha = 31;
-            uint16_t col = gx_tex_lookup(g, g->tex_param, g->pltt_base, u, v, &talpha);
-            if (talpha == 0)
-                continue;                    /* 全透明：不写，露出下面图层 */
-            uint8_t aa = (uint8_t)(((unsigned)talpha * (unsigned)palpha) / 31u);
+            uint16_t tex = gx_tex_lookup(g, g->tex_param, g->pltt_base, u, v, &talpha);
+            /* 顶点色插值（5 位通道，melonDS 也是线性插值，不做透视校正） */
+            int vr = (int)(((int64_t)(a->color & 0x1Fu) * w0
+                            + (int64_t)(b->color & 0x1Fu) * w1
+                            + (int64_t)(c->color & 0x1Fu) * w2) / area);
+            int vg = (int)(((int64_t)((a->color >> 5) & 0x1Fu) * w0
+                            + (int64_t)((b->color >> 5) & 0x1Fu) * w1
+                            + (int64_t)((c->color >> 5) & 0x1Fu) * w2) / area);
+            int vb = (int)(((int64_t)((a->color >> 10) & 0x1Fu) * w0
+                            + (int64_t)((b->color >> 10) & 0x1Fu) * w1
+                            + (int64_t)((c->color >> 10) & 0x1Fu) * w2) / area);
+            uint8_t aa = 0;
+            uint16_t col = gx_blend_tex_vtx(tex, talpha, vr, vg, vb, palpha,
+                                            (g->poly_attr >> 4) & 0x3u, &aa);
             if (aa == 0)
-                continue;
+                continue;                    /* 全透明：不写，露出下面图层 */
             g->fb[pi] = col;
             g->fba[pi] = aa;
             g->zbuf[pi] = (uint32_t)pz;
@@ -1069,6 +1125,75 @@ static int64_t *gx_cur(gx_t *g)
     }
 }
 
+/* 21-B9yi(续39)：矩阵**数据**操作（不含栈操作）。`MTX_MODE=2`（位置+向量）时
+   同一操作要同时作用到位置矩阵与向量矩阵——光照靠向量矩阵变换法线。 */
+static void gx_mat_one(gx_t *g, int64_t *m, uint8_t cmd, const int32_t *p)
+{
+    int64_t tmp[16];
+    (void)g;
+    switch (cmd) {
+    case GX_CMD_MTX_IDENTITY: gx_mat_identity(m); break;
+    case GX_CMD_MTX_LOAD_4x4: gx_mat_load4x4(m, p); break;
+    case GX_CMD_MTX_LOAD_4x3: gx_mat_load4x3(m, p); break;
+    case GX_CMD_MTX_MULT_4x4: gx_mat_load4x4(tmp, p); gx_mat_mul_left(m, tmp); break;
+    case GX_CMD_MTX_MULT_4x3: gx_mat_mul4x3_left(m, p); break;
+    case GX_CMD_MTX_MULT_3x3: gx_mat_mul3x3_left(m, p); break;
+    case GX_CMD_MTX_SCALE: gx_mat_scale(m, p); break;
+    case GX_CMD_MTX_TRANS: gx_mat_translate(m, p); break;
+    default: break;
+    }
+}
+
+/* 位置矩阵类命令：`MTX_MODE=2` 时同时作用到向量矩阵 */
+static void gx_mat_apply(gx_t *g, uint8_t cmd, const int32_t *p)
+{
+    int64_t *m = gx_cur(g);
+    gx_mat_one(g, m, cmd, p);
+    if (g->mt_mode == 2 && m == g->pos)
+        gx_mat_one(g, g->vec, cmd, p);
+}
+
+/* 21-B9yi(续39)：顶点光照（melonDS `GPU3D::CalculateLighting` 的漫反射 +
+   环境光 + 自发光部分；高光/光泽表暂未实现，shinelevel 取 0）。
+   结果写进 `g->color`（RGB555），后续顶点提交时随顶点一起带上。 */
+static void gx_calculate_lighting(gx_t *g)
+{
+    int64_t nt[3];
+    for (int c = 0; c < 3; c++)
+        nt[c] = (((int64_t)g->normal[0] * g->vec[0 * 4 + c]
+                  + (int64_t)g->normal[1] * g->vec[1 * 4 + c]
+                  + (int64_t)g->normal[2] * g->vec[2 * 4 + c]) << 9) >> 21;
+
+    int64_t v[3] = {
+        (int64_t)g->mat_emi[0] << 14,
+        (int64_t)g->mat_emi[1] << 14,
+        (int64_t)g->mat_emi[2] << 14
+    };
+    for (int i = 0; i < 4; i++) {
+        if ((g->poly_attr & (1u << i)) == 0)
+            continue;                       /* 该光源未使能 */
+        int64_t dot = (((int64_t)g->light_dir[i][0] * nt[0]) >> 9)
+                    + (((int64_t)g->light_dir[i][1] * nt[1]) >> 9)
+                    + (((int64_t)g->light_dir[i][2] * nt[2]) >> 9);
+        if (dot > 0) {
+            int32_t diffdot = (int32_t)((dot << 21) >> 21);   /* 11 位有符号 */
+            for (int c = 0; c < 3; c++)
+                v[c] += (int64_t)((g->mat_diff[c] * g->light_col[i][c] * diffdot)
+                                  & 0xFFFFF);
+        }
+        for (int c = 0; c < 3; c++)
+            v[c] += (int64_t)(g->mat_amb[c] << 9) * g->light_col[i][c];
+    }
+    uint32_t col = 0;
+    for (int c = 0; c < 3; c++) {
+        int32_t cv = (int32_t)(v[c] >> 14);
+        if (cv > 31) cv = 31;
+        if (cv < 0) cv = 0;
+        col |= (uint32_t)cv << (c * 5);
+    }
+    g->color = col;
+}
+
 static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
 {
     int64_t *m = gx_cur(g);
@@ -1115,7 +1240,16 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
     }
     switch (cmd) {
     case GX_CMD_MTX_MODE: g->mt_mode = p[0] & 3; break;
-    case GX_CMD_MTX_IDENTITY: gx_mat_identity(m); break;
+    case GX_CMD_MTX_IDENTITY:
+    case GX_CMD_MTX_LOAD_4x4:
+    case GX_CMD_MTX_LOAD_4x3:
+    case GX_CMD_MTX_MULT_4x4:
+    case GX_CMD_MTX_MULT_4x3:
+    case GX_CMD_MTX_MULT_3x3:
+    case GX_CMD_MTX_SCALE:
+    case GX_CMD_MTX_TRANS:
+        gx_mat_apply(g, cmd, p);
+        break;
     /* 21-B9yi(续35)：矩阵栈语义逐句对齐 melonDS（投影/纹理单槽、位置 32 槽，
        POP 的参数是**带符号偏移**、从栈指针里减掉）。 */
     case GX_CMD_MTX_PUSH:
@@ -1173,22 +1307,15 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
             gx_mat_copy(g->pos, g->pos_stack[p[0] & 0x1F]);
         }
         break;
-    case GX_CMD_MTX_LOAD_4x4: gx_mat_load4x4(m, p); break;
-    case GX_CMD_MTX_LOAD_4x3: gx_mat_load4x3(m, p); break;
-    case GX_CMD_MTX_MULT_4x4:
-        gx_mat_load4x4(tmp, p);
-        gx_mat_mul_left(m, tmp);
-        break;
-    case GX_CMD_MTX_MULT_4x3:
-        gx_mat_mul4x3_left(m, p);
-        break;
-    case GX_CMD_MTX_MULT_3x3:
-        gx_mat_mul3x3_left(m, p);
-        break;
-    case GX_CMD_MTX_SCALE: gx_mat_scale(m, p); break;
-    case GX_CMD_MTX_TRANS: gx_mat_translate(m, p); break;
     case GX_CMD_COLOR: g->color = (uint32_t)(p[0] & 0xFFFF); break;
-    case GX_CMD_NORMAL: break; /* 无光照，忽略法线 */
+    case GX_CMD_NORMAL:
+        /* 21-B9yi(续39)：法线（10 位有符号 × 3）→ 立即算一次顶点光照
+           （melonDS 就是在 0x21 处调 `CalculateLighting()`）。 */
+        g->normal[0] = gx_sext10(p[0] & 0x3FF);
+        g->normal[1] = gx_sext10((p[0] >> 10) & 0x3FF);
+        g->normal[2] = gx_sext10((p[0] >> 20) & 0x3FF);
+        gx_calculate_lighting(g);
+        break;
     case GX_CMD_TEXCOORD:
         {
             int32_t rs = (int32_t)(p[0] & 0xFFFF);
@@ -1250,6 +1377,49 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
     case GX_CMD_POLYGON_ATTR: g->poly_attr = (uint32_t)p[0]; break;
     case GX_CMD_TEXIMAGE_PARAM: g->tex_param = (uint32_t)p[0]; break;
     case GX_CMD_PLTT_BASE: g->pltt_base = (uint32_t)p[0] & 0x1FFFu; break;
+    /* 21-B9yi(续39)：材质与光源（melonDS 0x30/0x31/0x32/0x33 口径） */
+    case GX_CMD_DIF_AMB:
+        g->mat_diff[0] = p[0] & 0x1F;
+        g->mat_diff[1] = (p[0] >> 5) & 0x1F;
+        g->mat_diff[2] = (p[0] >> 10) & 0x1F;
+        g->mat_amb[0] = (p[0] >> 16) & 0x1F;
+        g->mat_amb[1] = (p[0] >> 21) & 0x1F;
+        g->mat_amb[2] = (p[0] >> 26) & 0x1F;
+        if ((p[0] & 0x8000) != 0)      /* melonDS：置该位时直接把漫反射当顶点色 */
+            g->color = (uint32_t)((g->mat_diff[0]) | (g->mat_diff[1] << 5)
+                                  | (g->mat_diff[2] << 10));
+        break;
+    case GX_CMD_SPE_EMI:
+        g->mat_spec[0] = p[0] & 0x1F;
+        g->mat_spec[1] = (p[0] >> 5) & 0x1F;
+        g->mat_spec[2] = (p[0] >> 10) & 0x1F;
+        g->mat_emi[0] = (p[0] >> 16) & 0x1F;
+        g->mat_emi[1] = (p[0] >> 21) & 0x1F;
+        g->mat_emi[2] = (p[0] >> 26) & 0x1F;
+        break;
+    case GX_CMD_LIGHT_VECTOR:
+        {
+            unsigned l = (unsigned)p[0] >> 30;
+            int32_t dir[3] = { gx_sext10(p[0] & 0x3FF),
+                               gx_sext10((p[0] >> 10) & 0x3FF),
+                               gx_sext10((p[0] >> 20) & 0x3FF) };
+            for (int c = 0; c < 3; c++) {
+                int64_t t = (int64_t)dir[0] * g->vec[0 * 4 + c]
+                          + (int64_t)dir[1] * g->vec[1 * 4 + c]
+                          + (int64_t)dir[2] * g->vec[2 * 4 + c];
+                /* melonDS：先 >>12 丢低位、取负、再符号扩展到 11 位 */
+                g->light_dir[l][c] = (int32_t)(((-(t >> GX_FP_SHIFT)) << 21) >> 21);
+            }
+        }
+        break;
+    case GX_CMD_LIGHT_COLOR:
+        {
+            unsigned l = (unsigned)p[0] >> 30;
+            g->light_col[l][0] = p[0] & 0x1F;
+            g->light_col[l][1] = (p[0] >> 5) & 0x1F;
+            g->light_col[l][2] = (p[0] >> 10) & 0x1F;
+        }
+        break;
     case GX_CMD_BEGIN_VTXS:
         g->begin_prim = p[0] & 3;
         g->in_vtxs = 1;
@@ -1417,6 +1587,7 @@ void gx_reset(gx_t *g)
     gx_mat_identity(g->proj);
     gx_mat_identity(g->pos);
     gx_mat_identity(g->tex);
+    gx_mat_identity(g->vec);      /* 21-B9yi(续39)：向量矩阵（MTX_MODE=2 时同步更新） */
     gx_mat_identity(g->proj_stack);
     gx_mat_identity(g->tex_stack);
     for (int i = 0; i < 32; i++)

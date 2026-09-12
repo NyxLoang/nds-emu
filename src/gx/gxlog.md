@@ -462,3 +462,38 @@ CPU 解释器与每指令的 IO 推进**（`cpu_step` 每步都要走 `bios_irq_
 
 **结果**：✅ 光栅化工作量降 72.6%（输出不变），并**定位**出真正的性能瓶颈
 （CPU 解释器/每指令 IO 推进），为下一步优化给出明确方向。
+
+### 21-B9yi（续39）— 纹理/顶点色合成（调制/贴花）+ 光照设施
+
+**背景**：续38 的画面颜色与真机仍有系统差异。melonDS 的 `SoftRenderer3D::RenderPixel`
+里，纹理色不是直接用，而是与**顶点色**按 `POLYGON_ATTR` bits4-5 的模式合成：
+
+```
+纹理色 → 6 位（v*2+1，0 仍为 0）；顶点色同为 6 位
+模式 0 modulate： c = ((tex+1)*(vtx+1)-1) >> 6
+模式 1 decal   ： 按纹理 alpha 在顶点色与纹理色之间插值
+（模式 2/3 = toon / shadow，需要 toon 表与阴影遮罩，本地暂按 modulate 处理）
+```
+本地此前**完全忽略顶点色**，直接用纹理色 ⇒ 颜色偏亮偏平。
+
+**参考核取证**：给参考核的 `REF_POLYDBG` dump 加了顶点色/材质打印，f≥3800 实测
+`vtxcol=(7,8,10) texparam=4E432D00 polyattr=2D1F8080`——顶点色确实是暗的
+（与本地同量级），说明**真机确实是拿暗顶点色去调制纹理**（本地此前的「亮」是错的）。
+
+**改动**：
+
+1. 顶点色按分量线性插值（不加透视校正，melonDS 同）；
+2. `gx_blend_tex_vtx()`：按上述公式合成，输出 RGB555 + alpha；
+3. **光照设施**（为后续其它游戏/场景准备，本游戏不用）：
+   `VecMatrix`（`MTX_MODE=2` 时与位置矩阵同步更新）、`0x30 DIF_AMB`/`0x31 SPE_EMI`
+   材质、`0x32 LIGHT_VECTOR`（按 VecMatrix 变换后取反、符号扩展到 11 位）、
+   `0x33 LIGHT_COLOR`、`0x21 NORMAL` 触发 `gx_calculate_lighting()`
+   （melonDS `CalculateLighting` 的漫反射 + 环境光 + 自发光；高光/光泽表暂缺）。
+
+**怎么验证**：`build\test_nds.exe` 931 项 0 失败；f=1000/2000/3000 两屏统计与
+续38 逐值相同（无回归）；f=4000 顶屏均值由 `88,140,176` 变为 **`39,59,63`**
+（更接近真机的暗色地牢），`build\lt__04000.bmp` 顶屏=明暗层次清楚的迷宫走廊、
+底屏=蓝色战术地图。
+
+**已知偏离**：`POLYGON_ATTR` alpha=0 在 melonDS 里是 **wireframe**（只画边），
+本地按「不透明」处理；fog、toon/highlight、高光与光泽表未实现。

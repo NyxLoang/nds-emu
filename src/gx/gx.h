@@ -137,6 +137,17 @@ typedef struct gx {
     int64_t proj[16];    /* 投影矩阵 */
     int64_t pos[16];     /* 位置矩阵 */
     int64_t tex[16];     /* 纹理矩阵 */
+    /* 21-B9yi(续39)：向量矩阵——`MTX_MODE=2`（位置+向量）时与位置矩阵同步更新，
+       光照用它变换法线（melonDS 的 `VecMatrix`）。 */
+    int64_t vec[16];
+    /* 21-B9yi(续39)：光照状态（melonDS `CalculateLighting` 口径） */
+    int32_t light_dir[4][3];   /* 0x32 LIGHT_VECTOR（已按 VecMatrix 变换） */
+    int32_t light_col[4][3];   /* 0x33 LIGHT_COLOR（5 位通道） */
+    int32_t mat_diff[3];       /* 0x30 漫反射材质 */
+    int32_t mat_amb[3];        /* 0x30 环境光材质 */
+    int32_t mat_spec[3];       /* 0x31 高光材质 */
+    int32_t mat_emi[3];        /* 0x31 自发光材质 */
+    int32_t normal[3];         /* 0x21 NORMAL（10 位有符号） */
     /* 21-B9yi(续35)：矩阵栈按 melonDS 口径分三种——
        投影/纹理矩阵各是**单槽**栈（0/1），位置矩阵是 32 槽（指针 0..63，取 &31）。
        本地此前用一个 32 槽共用栈 + 「只接受正偏移的 POP」，与真机不一致：

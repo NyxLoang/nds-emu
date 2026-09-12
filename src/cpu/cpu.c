@@ -289,10 +289,13 @@ int cpu_step(arm_cpu_t *cpu)
                     }
                 }
             }
-            if (irqlog_state == 1 && !cpu->is_arm7 && irqlog_n < 400000 &&
+            /* 21-B9yi(续19)：两核都记（NDS_IRQLOG=lo-hi，arm7 行用 locirq7 前缀），
+               用来对比「驱动游戏调度节拍的 ARM7 中断率」。 */
+            if (irqlog_state == 1 && irqlog_n < 400000 &&
                 (long)g_dbg_frame >= irqlog_lo && (long)g_dbg_frame <= irqlog_hi) {
                 irqlog_n++;
-                printf("locirq: f=%llu pc=%08X cpsr=%08X lr=%08X if=%08X ie=%08X t=%llu\n",
+                printf("%s: f=%llu pc=%08X cpsr=%08X lr=%08X if=%08X ie=%08X t=%llu\n",
+                       cpu->is_arm7 ? "locirq7" : "locirq",
                        g_dbg_frame, cpu->r[15], cpu->cpsr, cpu->r[14],
                        irq->ifl, irq->ie, (unsigned long long)cpu->cycles);
             }

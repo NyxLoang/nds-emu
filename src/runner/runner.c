@@ -184,7 +184,8 @@ static void runner_keys(runner_t *r)
     } else if (fr >= r->next_press) {
         io_set_keyinput(r->nds->io, (uint16_t)r->key_mask);
         r->key_down = 1;
-        r->key_release_frame = fr + 8;
+        /* 21-B9xv：持续 12 帧（与参考 harness 的 ((frame-1700)%120)<12 对齐） */
+        r->key_release_frame = fr + 12;
         printf("runner: key mask=%04X at frame=%llu\n", r->key_mask,
                (unsigned long long)fr);
     }

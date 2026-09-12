@@ -4318,7 +4318,7 @@ static void test_card_dma(nds_t *nds)
     cart_activate(nds, 0x81u); /* 块字段=1 → 0x200 */
     /* 21-B9zb: 等卡带首字就绪；就绪边沿会让卡带 DMA 自动触发 */
     for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
-        io_advance_cart(nds->io, 0);
+        io_advance_cart(nds->io, 0, 1u);
 
     /* 8 字应从 CARD_DATA 按序搬进 dest */
     for (int i = 0; i < 8; i++) {
@@ -4375,7 +4375,7 @@ static void test_card_dma7(nds_t *nds)
     cart_prepare(nds);
     cart_activate(nds, 0x81u);
     for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
-        io_advance_cart(nds->io, 0);
+        io_advance_cart(nds->io, 0, 1u);
 
     for (int i = 0; i < 4; i++) {
         uint32_t want = (uint32_t)rom[0x8100 + 4 * i]
@@ -4437,7 +4437,7 @@ static void test_card_program(nds_t *nds)
     CHECK_EQ("card prog PC halt", nds->cpu->r[15], base + 0x44);
     /* 21-B9zb: CPU 程序已停在自旋点，硬件侧继续等卡带首字就绪并触发 DMA */
     for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
-        io_advance_cart(nds->io, 0);
+        io_advance_cart(nds->io, 0, 1u);
 
     /* dest 收到 rom[0x8100..0x810F]（4 字） */
     for (int i = 0; i < 4; i++) {

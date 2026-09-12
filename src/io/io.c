@@ -256,6 +256,35 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
     if (cartbus_is_addr(addr)) {
         int was_ready = cartbus_ready(&io->cartbus);
         cartbus_write8(&io->cartbus, addr, val);
+        /* 21-B9yi 诊断：NDS_CARTLOG2=LO-HI → 打印该帧内每次 ROMCTRL 高字节写
+           （含发起者 PC/LR/SP），用于判断「哪段代码发起了被放弃的传输」。 */
+        if (addr == 0x040001A7u) {
+            extern unsigned long long g_dbg_frame;
+            static long lo = -2, hi = -1;
+            static int n_all;
+            if (lo == -2) {
+                const char *e = getenv("NDS_CARTLOG2");
+                lo = 0; hi = -1;
+                if (e != NULL && sscanf(e, "%ld-%ld", &lo, &hi) != 2) { lo = 0; hi = -1; }
+            }
+            {
+                static int all_state;
+                if (all_state == 0) {
+                    const char *e2 = getenv("NDS_CARTLOG");
+                    all_state = (e2 != NULL && e2[0] != '0' && e2[0] != '\0') ? 1 : -1;
+                }
+                if (all_state == 1 && n_all < 20000)
+                    n_all++;
+            }
+            if ((n_all > 0) ||
+                ((long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi))
+                printf("cartlog2: f=%llu WRA7 val=%02X romctrl=%08X pc=%08X"
+                       " lr=%08X sp=%08X\n",
+                       g_dbg_frame, val, io->cartbus.romctrl,
+                       io->bus != NULL ? io->bus->dbg_pc : 0u,
+                       io->bus != NULL ? io->bus->dbg_lr : 0u,
+                       io->bus != NULL ? io->bus->dbg_sp : 0u);
+        }
         /* 命令刚被激活（卡带由 Busy 变 Ready）：置卡带完成中断并触发卡带 DMA */
         if (!was_ready && cartbus_ready(&io->cartbus)) {
             irq_set_card(&io->irq[0]);
@@ -471,12 +500,17 @@ void io_advance_timers(io_t *io, int is_arm7, uint32_t cycles)
             io->irq[idx].ifl |= (uint32_t)(1u << (3 + i));
     }
 }
-void io_advance_cart(io_t *io, int is_arm7)
+void io_advance_cart(io_t *io, int is_arm7, uint32_t cycles)
 {
-    /* 21-B9zb: 卡带时钟只在 ARM9 指令周期推进；数据就绪边沿触发卡带 IRQ/DMA */
+    /* 21-B9zb: 卡带时钟只在 ARM9 指令周期推进；数据就绪边沿触发卡带 IRQ/DMA。
+       21-B9yi：按**本步实际消耗的周期数**推进（此前固定 1/指令，而 ARM9 平均
+       每条指令 ~1.2 个系统单位，导致卡带取数节奏比参考核慢 ~20%，读卡带阶段
+       越拖越远）。 */
     if (is_arm7)
         return;
-    if (cartbus_advance(&io->cartbus, 1u)) {
+    if (cycles == 0)
+        cycles = 1;
+    if (cartbus_advance(&io->cartbus, cycles)) {
         irq_set_card(&io->irq[0]);
         irq_set_card(&io->irq[1]);
         io_card_dma_check(io, 0);

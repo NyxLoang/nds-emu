@@ -163,6 +163,9 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
 
 int cpu_step(arm_cpu_t *cpu)
 {
+    /* 21-B9yi：上一条指令消耗的周期数（本步用于推进卡带时钟，使其与
+       参考核一样按系统时钟节奏取数；见 io_advance_cart 注释） */
+    uint32_t prev_cost = cpu->step_cycles;
     cpu->step_cycles = 1;
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
@@ -214,7 +217,7 @@ int cpu_step(arm_cpu_t *cpu)
         return 1;
     /* 6.5：按本步消耗的周期推进当前核定时器（分频在 timer.c 内处理） */
     io_advance_timers(cpu->nds->io, cpu->is_arm7, cpu->step_cycles);
-    io_advance_cart(cpu->nds->io, cpu->is_arm7);
+    io_advance_cart(cpu->nds->io, cpu->is_arm7, prev_cost);
     /* 12.5：取指前检查 IRQ。条件 = 该核 IF&IE&IME 挂起，且 CPSR 的 I 位未禁止。
        满足则进 IRQ 异常向量（0x18），PC 跳到 handler；被打断指令地址留作返回点。 */
     /* 21-B9m：ARM9 的 CP15 WFI（MCR p15,0,r0,c7,c0,4）等价于 NDS7 的 HALTCNT

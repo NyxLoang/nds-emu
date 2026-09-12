@@ -50,6 +50,28 @@ static void dma_irq_done(const dma_channel_t *dma, struct bus *bus, int ch,
         return;
     if ((dma->cnt_h & DMA_CNT_IRQ) == 0)
         return;
+    /* 21-B9yi(续20) 诊断：NDS_DMAIRQ=LO-HI → 每次「DMA 完成中断」上挂时打印
+       通道/控制字/发起 PC。用于对齐「参考核从不上挂 IF bit11（DMA3），本地约
+       1 次/帧」这一差异。 */
+    {
+        extern unsigned long long g_dbg_frame;
+        static int state;
+        static long lo = -2, hi = -2;
+        if (state == 0) {
+            const char *e = getenv("NDS_DMAIRQ");
+            state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+            lo = 0; hi = -1;
+            if (state == 1 && e != NULL) {
+                long a = 0, b = 0;
+                if (sscanf(e, "%ld-%ld", &a, &b) == 2) { lo = a; hi = b; }
+            }
+        }
+        if (state == 1 && (long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi)
+            printf("dmairq: f=%llu arm%d ch=%d cnt_h=%04X cnt_l=%u sad=%08X dad=%08X pc=%08X\n",
+                   g_dbg_frame, is_arm7 ? 7 : 9, ch, dma->cnt_h, dma->cnt_l,
+                   dma->sad, dma->dad,
+                   bus->dbg_pc);
+    }
     bus->io->irq[is_arm7 ? 1 : 0].ifl |= (uint32_t)(1u << (8 + ch));
 }
 

@@ -1,5 +1,5 @@
 diff --git a/src/GPU3D.cpp b/src/GPU3D.cpp
-index 3272a34..c987cea 100644
+index 3272a34..3516f10 100644
 --- a/src/GPU3D.cpp
 +++ b/src/GPU3D.cpp
 @@ -139,6 +139,14 @@ const u8 CmdNumParams[256] =
@@ -46,7 +46,7 @@ index 3272a34..c987cea 100644
      memcpy(ClipMatrix, ProjMatrix, 16*4);
      MatrixMult4x4(ClipMatrix, PosMatrix);
  }
-@@ -1348,6 +1378,30 @@ void GPU3D::SubmitVertex() noexcept
+@@ -1348,6 +1378,36 @@ void GPU3D::SubmitVertex() noexcept
      vertextrans->Position[2] = (vertex[0]*ClipMatrix[2] + vertex[1]*ClipMatrix[6] + vertex[2]*ClipMatrix[10] + vertex[3]*ClipMatrix[14]) >> 12;
      vertextrans->Position[3] = (vertex[0]*ClipMatrix[3] + vertex[1]*ClipMatrix[7] + vertex[2]*ClipMatrix[11] + vertex[3]*ClipMatrix[15]) >> 12;
  
@@ -62,6 +62,12 @@ index 3272a34..c987cea 100644
 +            if (shown == 0) {
 +                std::printf("refpoly: viewport=%d,%d,%d,%d polyattr=%08X\n",
 +                            Viewport[0], Viewport[3], Viewport[4], Viewport[5], PolygonAttr);
++                std::printf("refpoly: vtxcol=%d,%d,%d texparam=%08X texpal=%04X"
++                            " matdiff=%d,%d,%d matamb=%d,%d,%d\n",
++                            VertexColor[0], VertexColor[1], VertexColor[2],
++                            TexParam, TexPalette,
++                            MatDiffuse[0], MatDiffuse[1], MatDiffuse[2],
++                            MatAmbient[0], MatAmbient[1], MatAmbient[2]);
 +                std::printf("refpoly: proj=%d,%d,%d,%d / %d,%d,%d,%d\n",
 +                            ProjMatrix[0], ProjMatrix[1], ProjMatrix[2], ProjMatrix[3],
 +                            ProjMatrix[12], ProjMatrix[13], ProjMatrix[14], ProjMatrix[15]);
@@ -77,7 +83,7 @@ index 3272a34..c987cea 100644
      // this probably shouldn't be.
      // the way color is handled during clipping needs investigation. TODO
      vertextrans->Color[0] = (VertexColor[0] << 12) + 0xFFF;
-@@ -1735,6 +1789,56 @@ void GPU3D::ExecuteCommand() noexcept
+@@ -1735,6 +1795,56 @@ void GPU3D::ExecuteCommand() noexcept
  {
      CmdFIFOEntry entry = CmdFIFORead();
  
@@ -134,7 +140,7 @@ index 3272a34..c987cea 100644
      //printf("FIFO: processing %02X %08X. Levels: FIFO=%d, PIPE=%d\n", entry.Command, entry.Param, CmdFIFO->Level(), CmdPIPE->Level());
  
      // each FIFO entry takes 1 cycle to be processed
-@@ -2122,6 +2226,28 @@ void GPU3D::ExecuteCommand() noexcept
+@@ -2122,6 +2232,28 @@ void GPU3D::ExecuteCommand() noexcept
  
              if (ExecParamCount >= paramsRequiredCount)
              {
@@ -163,7 +169,7 @@ index 3272a34..c987cea 100644
                  /*printf("[GXS:%08X] 0x%02X,  ", GXStat, entry.Command);
                  for (int k = 0; k < ExecParamCount; k++) printf("0x%08X, ", ExecParams[k]);
                  printf("\n");*/
-@@ -2294,6 +2420,7 @@ void GPU3D::ExecuteCommand() noexcept
+@@ -2294,6 +2426,7 @@ void GPU3D::ExecuteCommand() noexcept
                      }
                      break;
  

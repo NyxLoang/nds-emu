@@ -790,6 +790,12 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                n3, nds->io->gx.gxstat, nds->io->gx.disp3dcnt,
                nds->io->gx.cmd_count, nds->io->gx.tri_count,
                nds->io->gx.fifo_writes, nds->io->gx.port_writes);
+        /* 21-B9yi(续34)：3D 路径计数（判断「几何到底有没有落到屏幕上」） */
+        printf("gxpath: tex=%u flat=%u drawn=%u px=%llu vtx0w=%u"
+               " texparam=%08X pltt=%04X polyattr=%08X\n",
+               nds->io->gx.tri_tex, nds->io->gx.tri_flat, nds->io->gx.tri_drawn,
+               (unsigned long long)nds->io->gx.px_written, nds->io->gx.vtx_zero_w,
+               nds->io->gx.tex_param, nds->io->gx.pltt_base, nds->io->gx.poly_attr);
         /* 21-B9yi(续32)：NDS_GXHIST=1 → 打印 GX 命令直方图 */
         if (getenv("NDS_GXHIST") != NULL)
             gx_cmd_hist_dump();

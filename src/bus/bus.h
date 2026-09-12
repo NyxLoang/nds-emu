@@ -97,7 +97,9 @@ typedef struct bus {
     uint32_t vram_map_aobj[0x10];         /* Engine A OBJ：16KB 槽 → bank 位掩码 */
     uint32_t vram_map_bbg[0x8];           /* Engine B BG：16KB 槽 → bank 位掩码 */
     uint32_t vram_map_bobj[0x8];          /* Engine B OBJ：16KB 槽 → bank 位掩码 */
-    uint32_t vram_map_tex[4];             /* 3D 纹理 512KB 块 → bank 位掩码 */
+uint32_t vram_map_tex[4];             /* 3D 纹理 512KB 块 → bank 位掩码 */
+uint32_t vram_map_texpal[8];          /* 3D 纹理调色板 16KB 槽 → bank 位掩码
+                                         （21-B9yi 续34：E/F/G 的 mode 3） */
     uint32_t vram_map_abg_ext[4];         /* Engine A BG 扩展调色板 8KB 槽 */
     uint32_t vram_map_bbg_ext[4];         /* Engine B BG 扩展调色板 8KB 槽 */
     uint32_t vram_map_aobj_ext;           /* Engine A OBJ 扩展调色板 */
@@ -147,6 +149,12 @@ uint16_t bus_vram_extpal16(const bus_t *bus, int is_sub, int slot,
 
 /* DISPCNT VRAM 显示模式直读物理 bank 的 16 位字（off 为字节偏移）。 */
 uint16_t bus_vram_phys16(const bus_t *bus, int bank, uint32_t off);
+
+/* 21-B9yi(续34)：3D 纹理/纹理调色板的**扁平空间**读取（对齐 melonDS
+   `ReadVRAMFlat_Texture<T>` / `ReadVRAMFlat_TexPal<T>` 的槽位映射：
+   纹理按 128KB 槽、调色板按 16KB 槽，各槽里的 bank 按位掩码 OR 在一起）。 */
+uint8_t bus_vram_tex8(const bus_t *bus, uint32_t addr);
+uint16_t bus_vram_texpal16(const bus_t *bus, uint32_t addr);
 
 /* 按 8 位读写一个字节。
    地址换算规则：把总线地址减去区间基址，得到该数组的下标

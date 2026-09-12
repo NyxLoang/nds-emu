@@ -499,16 +499,21 @@ static void render_obj(const bus_t *bus, comp_t *c, int is_sub)
 
 /* 3D 图层（阶段 19.4 / 21-B9xw 更正）：3D 输出**不**由 DISP3DCNT 使能位控制
     （melonDS 里 DISP3DCNT bit12/13 是写 1 清零位，帧 1900 参考核 bit13=0 时
-    3D 内容照样出现在顶屏）。因此这里直接合成 3D 帧缓冲：0 像素视为无几何，
-    非 0 像素覆盖到主引擎；混合目标位复用 OBJ（bit4/12）。 */
+    3D 内容照样出现在顶屏）。因此这里直接合成 3D 帧缓冲。
+
+    21-B9yi(续34)：透明度按 melonDS `SoftRenderer2D::DrawBG_3D()` 的口径——
+    **看 alpha（本地新增的 alpha 平面），alpha==0 才跳过**；此前按「颜色==0 → 无
+    几何」判，所有涂成黑色（0x0000）的不透明多边形都会被误当成没有几何。
+    混合目标位复用 OBJ（bit4/12）。 */
 static void render_3d(const bus_t *bus, comp_t *c)
 {
     if (bus->io == NULL)
         return;
     const gx_t *g = &bus->io->gx;
     const uint16_t *src = gx_framebuffer(g);
+    const uint8_t *asrc = gx_framebuffer_alpha(g);
     for (int i = 0; i < PX_COUNT; i++) {
-        if (src[i] == 0)
+        if (asrc[i] == 0)
             continue;
         comp_put(c, i, i % RENDER_SCREEN_W, i / RENDER_SCREEN_W, rgb555_to_888(src[i]), 4);
     }
@@ -561,7 +566,8 @@ static void render_engine(const bus_t *bus, uint32_t *fb, int is_sub)
         render_obj(bus, &c, is_sub);
     if (getenv("NDS_BGDBG"))
         printf("bgdbg: stage=obj eng=%d px=%08X\n", is_sub, c.px[100 * 256 + 50]);
-    if (!is_sub)
+    /* 21-B9yi(续34) 诊断：`NDS_NO3D=1` 时不合成 3D 图层（判断某段画面是不是 3D 撑的） */
+    if (!is_sub && getenv("NDS_NO3D") == NULL)
         render_3d(bus, &c);
     if (getenv("NDS_BGDBG"))
         printf("bgdbg: stage=3d eng=%d px=%08X\n", is_sub, c.px[100 * 256 + 50]);

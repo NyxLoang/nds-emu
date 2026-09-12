@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "gx.h"
+#include "bus/bus.h"   /* 21-B9yi(续34)：纹理/纹理调色板从 VRAM 取数 */
 
 /* 阶段 19：NDS 3D 几何引擎最小实现。
    命令流经 GXFIFO（0x04000400）或命令端口（0x04000440+cmd*4）送入，
@@ -325,18 +326,92 @@ static void gx_mat_mul(int64_t *r, const int64_t *a, const int64_t *b)
     memcpy(r, t, sizeof(t));
 }
 
-/* 列主序装载：参数顺序 col0[4] col1[4] ...（ncols=3 时第 4 列固定 [0,0,0,1]）。 */
-static void gx_load_colmajor(int64_t *m, const int32_t *p, int ncols)
+/* ------------------------------------------------------------------
+   21-B9yi(续34)：矩阵语义**逐句对齐 melonDS**（这块此前整体偏离，是 3D 画面
+   画不出来的主因之一）。元素索引约定与 melonDS 相同：i = row*4+col，
+   而命令参数**按原顺序**填入 m[0..n-1]——此前本地按「列主序」做了转置。
+
+   对应关系（melonDS GPU3D.cpp）：
+     MatrixLoad4x4 → 直接 memcpy；MatrixLoad4x3 → 前三列 + [0,0,0,1]
+     MatrixMult4x4 → m = s*m；MatrixMult4x3 → m = s(4x3)*m
+     MatrixMult3x3 → m = s(3x3)*m（只动左上 3x3）
+     MatrixScale   → 每**行**乘以对应分量（m = S*m）
+     MatrixTranslate → m[12..15] += s 经当前 m 变换后的平移
+   ------------------------------------------------------------------ */
+
+static void gx_mat_load4x4(int64_t *m, const int32_t *p)
 {
-    for (int i = 0; i < ncols * 4; i++) {
-        int row = i % 4;
-        int col = i / 4;
-        m[row * 4 + col] = p[i];
-    }
-    if (ncols == 3) {
-        m[3] = m[7] = m[11] = 0;
-        m[15] = GX_FP_ONE;
-    }
+    for (int i = 0; i < 16; i++)
+        m[i] = p[i];
+}
+
+static void gx_mat_load4x3(int64_t *m, const int32_t *p)
+{
+    m[0] = p[0];  m[1] = p[1];  m[2] = p[2];   m[3] = 0;
+    m[4] = p[3];  m[5] = p[4];  m[6] = p[5];   m[7] = 0;
+    m[8] = p[6];  m[9] = p[7];  m[10] = p[8];  m[11] = 0;
+    m[12] = p[9]; m[13] = p[10]; m[14] = p[11]; m[15] = GX_FP_ONE;
+}
+
+/* m = s * m（melonDS MatrixMult4x4 的注释与实际公式都是这个方向） */
+static void gx_mat_mul_left(int64_t *m, const int64_t *s)
+{
+    int64_t t[16];
+    memcpy(t, m, sizeof t);
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++) {
+            int64_t acc = 0;
+            for (int k = 0; k < 4; k++)
+                acc += s[i * 4 + k] * t[k * 4 + j];
+            m[i * 4 + j] = acc >> GX_FP_SHIFT;
+        }
+}
+
+/* m = s(4x3) * m：s 的第四列固定 [0,0,0,1] */
+static void gx_mat_mul4x3_left(int64_t *m, const int64_t *s)
+{
+    int64_t t[16];
+    memcpy(t, m, sizeof t);
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 4; j++) {
+            int64_t acc = 0;
+            for (int k = 0; k < 3; k++)
+                acc += s[i * 4 + k] * t[k * 4 + j];
+            m[i * 4 + j] = acc >> GX_FP_SHIFT;
+        }
+    for (int j = 0; j < 4; j++)
+        m[12 + j] = (s[9] * t[0 + j] + s[10] * t[4 + j] + s[11] * t[8 + j]
+                     + GX_FP_ONE * t[12 + j]) >> GX_FP_SHIFT;
+}
+
+/* m = s(3x3) * m：只更新左上 3x3（melonDS MatrixMult3x3） */
+static void gx_mat_mul3x3_left(int64_t *m, const int64_t *s)
+{
+    int64_t t[16];
+    memcpy(t, m, sizeof t);
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 4; j++) {
+            int64_t acc = 0;
+            for (int k = 0; k < 3; k++)
+                acc += s[i * 4 + k] * t[k * 4 + j];
+            m[i * 4 + j] = acc >> GX_FP_SHIFT;
+        }
+}
+
+/* melonDS MatrixScale：m 的每一**行**乘以对应分量 */
+static void gx_mat_scale(int64_t *m, const int32_t *p)
+{
+    for (int row = 0; row < 4; row++)
+        for (int j = 0; j < 4; j++)
+            m[row * 4 + j] = ((int64_t)p[row] * m[row * 4 + j]) >> GX_FP_SHIFT;
+}
+
+/* melonDS MatrixTranslate：把平移量经当前 m 变换后叠加到第 4 行 */
+static void gx_mat_translate(int64_t *m, const int32_t *p)
+{
+    for (int j = 0; j < 4; j++)
+        m[12 + j] += ((int64_t)p[0] * m[0 + j] + (int64_t)p[1] * m[4 + j]
+                      + (int64_t)p[2] * m[8 + j]) >> GX_FP_SHIFT;
 }
 
 /* 10 位有符号数符号扩展（VTX_10/VTX_DIFF） */
@@ -349,16 +424,33 @@ static int32_t gx_sext10(int32_t v)
 
 void gx_transform_vertex(const gx_t *g, int32_t x, int32_t y, int32_t z, int *sx, int *sy)
 {
+    gx_transform_vertex_ex(g, x, y, z, sx, sy, NULL);
+}
+
+/* 21-B9yi(续34)：带 w 输出的版本（纹理做透视校正插值要 1/w）。 */
+void gx_transform_vertex_ex(const gx_t *g, int32_t x, int32_t y, int32_t z,
+                            int *sx, int *sy, int32_t *out_invw)
+{
+    gx_transform_vertex_z(g, x, y, z, sx, sy, out_invw, NULL);
+}
+
+/* 21-B9yi(续34)：带 24 位深度输出的版本（口径 = melonDS `FinalZ`：
+   `z = (Zc/Wc * 0x4000 + 0x3FFF) * 0x200`，钳在 0..0xFFFFFF，小 = 近）。 */
+void gx_transform_vertex_z(const gx_t *g, int32_t x, int32_t y, int32_t z,
+                           int *sx, int *sy, int32_t *out_invw, int32_t *out_z)
+{
     int64_t clip[16];
     gx_mat_mul(clip, g->pos, g->proj); /* clip = pos × proj */
 
     int64_t w = GX_FP_ONE;
     int64_t cx = (int64_t)x * clip[0] + (int64_t)y * clip[4] + (int64_t)z * clip[8] + w * clip[12];
     int64_t cy = (int64_t)x * clip[1] + (int64_t)y * clip[5] + (int64_t)z * clip[9] + w * clip[13];
+    int64_t cz = (int64_t)x * clip[2] + (int64_t)y * clip[6] + (int64_t)z * clip[10] + w * clip[14];
     int64_t cw = (int64_t)x * clip[3] + (int64_t)y * clip[7] + (int64_t)z * clip[11] + w * clip[15];
 
     int64_t nx = cx >> GX_FP_SHIFT; /* NDC（1.19.12） */
     int64_t ny = cy >> GX_FP_SHIFT;
+    int64_t nz = cz >> GX_FP_SHIFT;
     int64_t nw = cw >> GX_FP_SHIFT;
 
     int64_t px, py;
@@ -369,12 +461,39 @@ void gx_transform_vertex(const gx_t *g, int32_t x, int32_t y, int32_t z, int *sx
         px = nx; /* 退化（w=0）：直接当正交用，避免除零 */
         py = ny;
     }
+    if (out_invw != NULL) {
+        /* 1/w（1.19.12）。w<=0（在相机后方）时退化为 0：这类顶点本来就会被
+           裁剪掉，本地不做裁剪，退化为 0 至少不会把 UV 拉飞。 */
+        *out_invw = (nw > 0) ? (int32_t)((GX_FP_ONE << GX_FP_SHIFT) / nw) : 0;
+    }
+    if (out_z != NULL) {
+        int64_t zb;
+        if (nw != 0)
+            zb = ((nz * 0x4000) / nw) + 0x3FFF;
+        else
+            zb = 0x3FFF;          /* melonDS：W==0 时取 0x7FFE00（最远附近） */
+        zb *= 0x200;
+        if (nw == 0) zb = 0x7FFE00;
+        if (zb < 0) zb = 0;
+        else if (zb > 0xFFFFFF) zb = 0xFFFFFF;
+        *out_z = (int32_t)zb;
+    }
 
-    /* 视口映射：NDC(-1..1) → (vx1..vx2, vy1..vy2)，y 翻转（+1=顶） */
-    int wpx = g->vx2 - g->vx1;
-    int hpx = g->vy2 - g->vy1;
-    *sx = (int)(g->vx1 + ((px + GX_FP_ONE) * (int64_t)wpx) / (2 * GX_FP_ONE));
-    *sy = (int)(g->vy1 + ((GX_FP_ONE - py) * (int64_t)hpx) / (2 * GX_FP_ONE));
+    /* 21-B9yi(续34)：视口映射**按 melonDS 口径**——DS 的 VIEWPORT 参数里
+       y0/y1 是「屏幕坐标、0=底」的（GBATEK：y0<y1，y 轴倒置），所以屏幕行号
+       要用 `191 - y1` 当上边缘、高 `y1-y0+1`；本地此前直接用 y0 当上边缘、
+       高 `y2-y1`，整幅 3D 画面被垂直镜像且少一行。 */
+    int vp_top = (GX_SCREEN_H - 1) - g->vy2;
+    int vp_h = g->vy2 - g->vy1 + 1;
+    int vp_w = g->vx2 - g->vx1 + 1;
+    *sx = (int)(g->vx1 + ((px + GX_FP_ONE) * (int64_t)vp_w) / (2 * GX_FP_ONE));
+    *sy = (int)(vp_top + ((GX_FP_ONE - py) * (int64_t)vp_h) / (2 * GX_FP_ONE));
+    /* 视口右下边界落在「视口外一行/一列」（melonDS 用 &0x1FF/&0xFF 掩码后交给
+       光栅化钳位），这里直接钳到屏幕内，保证输出一定是屏内坐标。 */
+    if (*sx < 0) *sx = 0;
+    else if (*sx >= GX_SCREEN_W) *sx = GX_SCREEN_W - 1;
+    if (*sy < 0) *sy = 0;
+    else if (*sy >= GX_SCREEN_H) *sy = GX_SCREEN_H - 1;
 }
 
 /* 边函数：点 p 在边 a→b 的哪一侧（正=左，负=右，0=线上） */
@@ -409,7 +528,12 @@ void gx_raster_tri(gx_t *g, int x0, int y0, int x1, int y1, int x2, int y2, uint
     for (int yy = miny; yy <= maxy; yy++)
         for (int xx = minx; xx <= maxx; xx++)
             if (gx_point_in_tri(xx, yy, x0, y0, x1, y1, x2, y2))
+            {
                 g->fb[yy * GX_SCREEN_W + xx] = color;
+                /* 21-B9yi(续34)：这个公开入口画出来的是**不透明**几何，
+                   必须同时写 alpha 平面，否则 3D 图层在合成时会被当成透明。 */
+                g->fba[(size_t)yy * GX_SCREEN_W + xx] = 31;
+            }
 }
 
 static void gx_submit_vertex(gx_t *g, int32_t x, int32_t y, int32_t z)
@@ -420,16 +544,259 @@ static void gx_submit_vertex(gx_t *g, int32_t x, int32_t y, int32_t z)
     if (g->vcount >= GX_MAX_VERTS)
         return;
     int sx, sy;
-    gx_transform_vertex(g, x, y, z, &sx, &sy);
+    int32_t invw = 0;
+    int32_t dz = 0xFFFFFF;
+    gx_transform_vertex_z(g, x, y, z, &sx, &sy, &invw, &dz);
     g->verts[g->vcount].sx = sx;
     g->verts[g->vcount].sy = sy;
     g->verts[g->vcount].color = (uint16_t)(g->color & 0xFFFF);
+    g->verts[g->vcount].u = g->tc_s;
+    g->verts[g->vcount].v = g->tc_t;
+    g->verts[g->vcount].invw = invw;
+    g->verts[g->vcount].z = dz;
+    if (invw == 0)
+        g->vtx_zero_w++;      /* 21-B9yi(续34) 诊断 */
     g->vcount++;
 }
 
-static void gx_raster_vert_tri(gx_t *g, const gx_vertex_t *a, const gx_vertex_t *b, const gx_vertex_t *c)
+/* 21-B9yi(续34)：纹理采样（口径对齐 melonDS `SoftRenderer3D::TextureLookup`）。
+   texparam = TEXIMAGE_PARAM，texpal = PLTT_BASE；s/t 为 1.11.4 定点。
+   返回 RGB555 颜色，*alpha 为 0..31（0 = 全透明）。 */
+static uint16_t gx_tex_lookup(const gx_t *g, uint32_t texparam, uint32_t texpal,
+                              int32_t s, int32_t t, uint8_t *alpha)
 {
-    gx_raster_tri(g, a->sx, a->sy, b->sx, b->sy, c->sx, c->sy, a->color);
+    s >>= 4;
+    t >>= 4;
+    int32_t width = 8 << ((texparam >> 20) & 0x7);
+    int32_t height = 8 << ((texparam >> 23) & 0x7);
+
+    /* 环绕/翻转（bit16/18 = S 方向环绕/镜像，bit17/19 = T 方向） */
+    if (texparam & (1u << 16)) {
+        if (texparam & (1u << 18)) {
+            if (s & width) s = (width - 1) - (s & (width - 1));
+            else           s = (s & (width - 1));
+        } else {
+            s &= width - 1;
+        }
+    } else {
+        if (s < 0) s = 0;
+        else if (s >= width) s = width - 1;
+    }
+    if (texparam & (1u << 17)) {
+        if (texparam & (1u << 19)) {
+            if (t & height) t = (height - 1) - (t & (height - 1));
+            else            t = (t & (height - 1));
+        } else {
+            t &= height - 1;
+        }
+    } else {
+        if (t < 0) t = 0;
+        else if (t >= height) t = height - 1;
+    }
+
+    uint32_t vramaddr = (texparam & 0xFFFFu) << 3;
+    uint8_t alpha0 = (texparam & (1u << 29)) ? 0 : 31;
+    uint16_t color = 0;
+    uint8_t a = 31;
+    uint32_t pal;
+
+    switch ((texparam >> 26) & 0x7u) {
+    case 1: /* A3I5：8 位（低 5 位调色板索引 + 3 位 alpha） */
+        vramaddr += (uint32_t)(t * width + s);
+        {
+            uint8_t pixel = bus_vram_tex8(g->bus, vramaddr);
+            pal = (texpal << 4) + ((uint32_t)(pixel & 0x1Fu) << 1);
+            color = bus_vram_texpal16(g->bus, pal);
+            a = (uint8_t)(((pixel >> 3) & 0x1Cu) + (pixel >> 6));
+        }
+        break;
+    case 2: /* 4 色（2bpp） */
+        vramaddr += (uint32_t)((t * width + s) >> 2);
+        {
+            uint8_t pixel = bus_vram_tex8(g->bus, vramaddr);
+            pixel >>= ((s & 0x3) << 1);
+            pixel &= 0x3;
+            color = bus_vram_texpal16(g->bus, (texpal << 3) + ((uint32_t)pixel << 1));
+            a = (pixel == 0) ? alpha0 : 31;
+        }
+        break;
+    case 3: /* 16 色（4bpp） */
+        vramaddr += (uint32_t)((t * width + s) >> 1);
+        {
+            uint8_t pixel = bus_vram_tex8(g->bus, vramaddr);
+            if (s & 1) pixel >>= 4;
+            else       pixel &= 0xF;
+            color = bus_vram_texpal16(g->bus, (texpal << 4) + ((uint32_t)pixel << 1));
+            a = (pixel == 0) ? alpha0 : 31;
+        }
+        break;
+    case 4: /* 256 色（8bpp） */
+        vramaddr += (uint32_t)(t * width + s);
+        {
+            uint8_t pixel = bus_vram_tex8(g->bus, vramaddr);
+            color = bus_vram_texpal16(g->bus, (texpal << 4) + ((uint32_t)pixel << 1));
+            a = (pixel == 0) ? alpha0 : 31;
+        }
+        break;
+    case 5: /* 4x4 压缩（块内 2bpp，调色板信息在槽 1） */
+        vramaddr += (uint32_t)((t & 0x3FC) * (width >> 2)) + (uint32_t)(s & 0x3FC);
+        vramaddr += (uint32_t)(t & 0x3);
+        vramaddr &= 0x7FFFFu;
+        {
+            uint32_t slot1addr = 0x20000u + ((vramaddr & 0x1FFFCu) >> 1);
+            if (vramaddr >= 0x40000u) slot1addr += 0x10000u;
+            uint8_t val;
+            if (vramaddr >= 0x20000u && vramaddr < 0x40000u) val = 0;
+            else {
+                val = bus_vram_tex8(g->bus, vramaddr);
+                val >>= (2 * (s & 0x3));
+            }
+            val &= 0x3;
+            {
+                uint16_t palinfo = (uint16_t)(bus_vram_tex8(g->bus, slot1addr)
+                                   | (uint16_t)(bus_vram_tex8(g->bus, slot1addr + 1u) << 8));
+                uint32_t paloffset = (uint32_t)(palinfo & 0x3FFFu) << 2;
+                uint32_t idx = (uint32_t)((palinfo >> 14) & 0x3u) + (uint32_t)val;
+                color = bus_vram_texpal16(g->bus, (texpal << 4) + paloffset
+                                          + (idx << 1));
+                a = (idx == 0) ? alpha0 : 31;
+            }
+        }
+        break;
+    case 6: /* A5I3：8 位（低 3 位索引 + 5 位 alpha） */
+        vramaddr += (uint32_t)(t * width + s);
+        {
+            uint8_t pixel = bus_vram_tex8(g->bus, vramaddr);
+            color = bus_vram_texpal16(g->bus, (texpal << 3) + ((uint32_t)(pixel & 0x7u) << 1));
+            a = (uint8_t)(pixel >> 3);
+        }
+        break;
+    case 7: /* 直色 16 位 */
+        vramaddr += (uint32_t)((t * width + s) << 1);
+        {
+            uint16_t pixel = (uint16_t)(bus_vram_tex8(g->bus, vramaddr)
+                             | (uint16_t)(bus_vram_tex8(g->bus, vramaddr + 1u) << 8));
+            color = pixel & 0x7FFFu;
+            a = (pixel & 0x8000u) ? 31 : 0;
+        }
+        break;
+    default: /* 0 = 无纹理（由调用方保证不会走到这里） */
+        break;
+    }
+    if (alpha != NULL) *alpha = a;
+    return color;
+}
+
+/* 多边形 alpha（POLYGON_ATTR bits16-20）与纹理 alpha 相乘。 */
+static uint8_t gx_poly_alpha(const gx_t *g)
+{
+    uint8_t pa = (uint8_t)((g->poly_attr >> 16) & 0x1Fu);
+    return (pa == 0) ? 31 : pa;   /* 0 = 不透明（DS 里 0 表示不混合） */
+}
+
+static void gx_raster_vert_tri(gx_t *g, const gx_vertex_t *a, const gx_vertex_t *b,
+                               const gx_vertex_t *c)
+{
+    /* 21-B9yi(续34)：带纹理/透视校正插值的光栅化。
+       纹理映射开启条件与 melonDS 一致：DISP3DCNT bit0（纹理映射使能）
+       且 TEXIMAGE_PARAM 的格式域 ≠ 0。未开启时保持旧的平色行为
+       （`gx_raster_tri`，单元测试依赖这条路径）。 */
+    int use_tex = ((g->disp3dcnt & 1u) != 0)
+                  && (((g->tex_param >> 26) & 0x7u) != 0u)
+                  && (g->bus != NULL);
+    if (!use_tex) {
+        g->tri_flat++;
+        gx_raster_tri(g, a->sx, a->sy, b->sx, b->sy, c->sx, c->sy, a->color);
+        uint8_t pa = gx_poly_alpha(g);
+        int fx0 = a->sx, fy0 = a->sy, fx1 = b->sx, fy1 = b->sy, fx2 = c->sx, fy2 = c->sy;
+        int fminx = fx0 < fx1 ? fx0 : fx1; fminx = fminx < fx2 ? fminx : fx2;
+        int fmaxx = fx0 > fx1 ? fx0 : fx1; fmaxx = fmaxx > fx2 ? fmaxx : fx2;
+        int fminy = fy0 < fy1 ? fy0 : fy1; fminy = fminy < fy2 ? fminy : fy2;
+        int fmaxy = fy0 > fy1 ? fy0 : fy1; fmaxy = fmaxy > fy2 ? fmaxy : fy2;
+        if (fminx < 0) fminx = 0;
+        if (fminy < 0) fminy = 0;
+        if (fmaxx >= GX_SCREEN_W) fmaxx = GX_SCREEN_W - 1;
+        if (fmaxy >= GX_SCREEN_H) fmaxy = GX_SCREEN_H - 1;
+        /* 平色路径也要写 alpha 平面（3D 图层合成看的就是它） */
+        uint32_t drew = 0;
+        for (int yy = fminy; yy <= fmaxy; yy++)
+            for (int xx = fminx; xx <= fmaxx; xx++)
+                if (gx_point_in_tri(xx, yy, fx0, fy0, fx1, fy1, fx2, fy2)) {
+                    g->fba[(size_t)yy * GX_SCREEN_W + xx] = pa;
+                    drew++;
+                }
+        g->px_written += drew;
+        if (drew != 0)
+            g->tri_drawn++;
+        g->tri_count++;
+        return;
+    }
+    g->tri_tex++;
+
+    int x0 = a->sx, y0 = a->sy, x1 = b->sx, y1 = b->sy, x2 = c->sx, y2 = c->sy;
+    int area = gx_edge(x0, y0, x1, y1, x2, y2);
+    if (area == 0) { g->tri_count++; return; }   /* 退化三角形 */
+    int minx = x0 < x1 ? x0 : x1; minx = minx < x2 ? minx : x2;
+    int maxx = x0 > x1 ? x0 : x1; maxx = maxx > x2 ? maxx : x2;
+    int miny = y0 < y1 ? y0 : y1; miny = miny < y2 ? miny : y2;
+    int maxy = y0 > y1 ? y0 : y1; maxy = maxy > y2 ? maxy : y2;
+    if (minx < 0) minx = 0;
+    if (miny < 0) miny = 0;
+    if (maxx >= GX_SCREEN_W) maxx = GX_SCREEN_W - 1;
+    if (maxy >= GX_SCREEN_H) maxy = GX_SCREEN_H - 1;
+
+    uint8_t palpha = gx_poly_alpha(g);
+    uint32_t drew = 0;
+    for (int yy = miny; yy <= maxy; yy++) {
+        for (int xx = minx; xx <= maxx; xx++) {
+            if (!gx_point_in_tri(xx, yy, x0, y0, x1, y1, x2, y2))
+                continue;
+            /* 重心坐标（面积比） */
+            int w0 = gx_edge(x1, y1, x2, y2, xx, yy);
+            int w1 = gx_edge(x2, y2, x0, y0, xx, yy);
+            int w2 = gx_edge(x0, y0, x1, y1, xx, yy);
+            int32_t iw = (int32_t)(((int64_t)w0 * a->invw + (int64_t)w1 * b->invw
+                                    + (int64_t)w2 * c->invw) / area);
+            /* 透视校正：u/w、v/w 线性插值后再除以插值出的 1/w */
+            int64_t uw = ((int64_t)w0 * ((int64_t)a->u * a->invw)
+                          + (int64_t)w1 * ((int64_t)b->u * b->invw)
+                          + (int64_t)w2 * ((int64_t)c->u * c->invw)) / area;
+            int64_t vw = ((int64_t)w0 * ((int64_t)a->v * a->invw)
+                          + (int64_t)w1 * ((int64_t)b->v * b->invw)
+                          + (int64_t)w2 * ((int64_t)c->v * c->invw)) / area;
+            int32_t u = (iw != 0) ? (int32_t)(uw / iw) : (int32_t)(uw >> GX_FP_SHIFT);
+            int32_t v = (iw != 0) ? (int32_t)(vw / iw) : (int32_t)(vw >> GX_FP_SHIFT);
+            /* 深度：Zc/Wc 在屏幕空间线性（透视校正后），直接重心插值 */
+            int32_t pz = (int32_t)(((int64_t)w0 * a->z + (int64_t)w1 * b->z
+                                    + (int64_t)w2 * c->z) / area);
+            if (pz < 0) pz = 0;
+            else if (pz > 0xFFFFFF) pz = 0xFFFFFF;
+            size_t pi = (size_t)yy * GX_SCREEN_W + xx;
+            /* melonDS 深度测试：新片元更近（更小的 z）才通过；bit14 = 相等测试 */
+            if (g->poly_attr & (1u << 14)) {
+                int32_t diff = (int32_t)g->zbuf[pi] - pz;
+                if (!((uint32_t)(diff + 0x200) <= 0x400u))
+                    continue;
+            } else if (pz >= (int32_t)g->zbuf[pi]) {
+                continue;
+            }
+
+            uint8_t talpha = 31;
+            uint16_t col = gx_tex_lookup(g, g->tex_param, g->pltt_base, u, v, &talpha);
+            if (talpha == 0)
+                continue;                    /* 全透明：不写，露出下面图层 */
+            uint8_t aa = (uint8_t)(((unsigned)talpha * (unsigned)palpha) / 31u);
+            if (aa == 0)
+                continue;
+            g->fb[pi] = col;
+            g->fba[pi] = aa;
+            g->zbuf[pi] = (uint32_t)pz;
+            drew++;
+        }
+    }
+    g->px_written += drew;
+    if (drew != 0)
+        g->tri_drawn++;
     g->tri_count++;
 }
 
@@ -527,32 +894,44 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
     case GX_CMD_MTX_RESTORE:
         if (p[0] >= 0 && p[0] < 32) gx_mat_copy(m, g->stack[p[0]]);
         break;
-    case GX_CMD_MTX_LOAD_4x4: gx_load_colmajor(m, p, 4); break;
-    case GX_CMD_MTX_LOAD_4x3: gx_load_colmajor(m, p, 3); break;
-    case GX_CMD_MTX_MULT_4x4: gx_load_colmajor(tmp, p, 4); gx_mat_mul(m, m, tmp); break;
-    case GX_CMD_MTX_MULT_4x3: gx_load_colmajor(tmp, p, 3); gx_mat_mul(m, m, tmp); break;
+    case GX_CMD_MTX_LOAD_4x4: gx_mat_load4x4(m, p); break;
+    case GX_CMD_MTX_LOAD_4x3: gx_mat_load4x3(m, p); break;
+    case GX_CMD_MTX_MULT_4x4:
+        gx_mat_load4x4(tmp, p);
+        gx_mat_mul_left(m, tmp);
+        break;
+    case GX_CMD_MTX_MULT_4x3:
+        gx_mat_load4x3(tmp, p);
+        gx_mat_mul4x3_left(m, tmp);
+        break;
     case GX_CMD_MTX_MULT_3x3:
         gx_mat_identity(tmp);
-        for (int i = 0; i < 3; i++)
-            for (int j = 0; j < 3; j++)
-                tmp[j * 4 + i] = p[i * 3 + j];
-        gx_mat_mul(m, m, tmp);
+        /* melonDS 把 9 个参数按行填入 s[0..8]（第四列固定 [0,0,0,1]） */
+        for (int i = 0; i < 9; i++)
+            tmp[(i / 3) * 4 + (i % 3)] = p[i];
+        gx_mat_mul3x3_left(m, tmp);
         break;
-    case GX_CMD_MTX_SCALE:
-        gx_mat_identity(tmp);
-        tmp[0] = p[0]; tmp[5] = p[1]; tmp[10] = p[2];
-        gx_mat_mul(m, m, tmp);
-        break;
-    case GX_CMD_MTX_TRANS:
-        gx_mat_identity(tmp);
-        tmp[12] = p[0]; tmp[13] = p[1]; tmp[14] = p[2];
-        gx_mat_mul(m, m, tmp);
-        break;
+    case GX_CMD_MTX_SCALE: gx_mat_scale(m, p); break;
+    case GX_CMD_MTX_TRANS: gx_mat_translate(m, p); break;
     case GX_CMD_COLOR: g->color = (uint32_t)(p[0] & 0xFFFF); break;
     case GX_CMD_NORMAL: break; /* 无光照，忽略法线 */
     case GX_CMD_TEXCOORD:
-        g->tc_s = (int32_t)(int16_t)(p[0] & 0xFFFF);
-        g->tc_t = (int32_t)(int16_t)(p[0] >> 16);
+        {
+            int32_t rs = (int32_t)(p[0] & 0xFFFF);
+            int32_t rt = (int32_t)((uint32_t)p[0] >> 16);
+            /* 21-B9yi(续34)：TEXIMAGE_PARAM bit30 = 纹理坐标变换使能
+               （melonDS：TexCoords = RawTexCoords × TexMatrix，1.19.12 → >>12）。
+               游戏实测该位为 1，此前不做变换 ⇒ UV 全错、贴图变成大色带。 */
+            if (((g->tex_param >> 30) & 1u) != 0) {
+                g->tc_s = (int32_t)(((int64_t)rs * g->tex[0] + (int64_t)rt * g->tex[4]
+                                     + g->tex[8] + g->tex[12]) >> GX_FP_SHIFT);
+                g->tc_t = (int32_t)(((int64_t)rs * g->tex[1] + (int64_t)rt * g->tex[5]
+                                     + g->tex[9] + g->tex[13]) >> GX_FP_SHIFT);
+            } else {
+                g->tc_s = rs;
+                g->tc_t = rt;
+            }
+        }
         break;
     case GX_CMD_VTX_16:
         gx_submit_vertex(g,
@@ -589,7 +968,10 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
             g->py + (gx_sext10((p[0] >> 10) & 0x3FF) << 2),
             g->pz + (gx_sext10((p[0] >> 20) & 0x3FF) << 2));
         break;
-    case GX_CMD_POLYGON_ATTR: break; /* 平色简化：忽略属性 */
+    /* 21-B9yi(续34)：POLYGON_ATTR 取 alpha（bits16-20）与纹理开关 */
+    case GX_CMD_POLYGON_ATTR: g->poly_attr = (uint32_t)p[0]; break;
+    case GX_CMD_TEXIMAGE_PARAM: g->tex_param = (uint32_t)p[0]; break;
+    case GX_CMD_PLTT_BASE: g->pltt_base = (uint32_t)p[0] & 0x1FFFu; break;
     case GX_CMD_BEGIN_VTXS:
         g->begin_prim = p[0] & 3;
         g->in_vtxs = 1;
@@ -599,7 +981,12 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
         g->in_vtxs = 0;
         gx_emit_prims(g);
         break;
-    case GX_CMD_SWAP_BUFFERS: break; /* 即时光栅化，无交换缓冲 */
+    /* 21-B9yi(续34)：交换缓冲 → 深度缓冲置最远（见 gx.h 里 zbuf 的说明）。
+       颜色缓冲不清（真机也不清，靠游戏自己画清屏多边形覆盖）。 */
+    case GX_CMD_SWAP_BUFFERS:
+        for (size_t i = 0; i < (size_t)GX_SCREEN_W * GX_SCREEN_H; i++)
+            g->zbuf[i] = 0xFFFFFFu;
+        break;
     case GX_CMD_VIEWPORT:
         g->vx1 = p[0] & 0xFF;
         g->vy1 = (p[0] >> 8) & 0xFF;
@@ -684,6 +1071,8 @@ void gx_write32(gx_t *g, uint32_t addr, uint32_t val)
 void gx_reset(gx_t *g)
 {
     memset(g, 0, sizeof(*g));
+    /* 21-B9yi(续34)：默认 POLYGON_ATTR 的 alpha=0（=不透明，见 gx_poly_alpha） */
+    g->poly_attr = 0;
     /* 21-B9wy：参考核 GPU3D::Read32(0x04000600) 的读数里，
        fifolevel==0 时同时置 bit25（不足半满）与 bit26（空）。游戏常靠 bit25
        判断“还能往 FIFO 塞命令”，缺了它会一直等，显示列表永远发不出去。 */
@@ -696,6 +1085,8 @@ void gx_reset(gx_t *g)
     g->vx2 = GX_SCREEN_W - 1;
     g->vy2 = GX_SCREEN_H - 1;
     g->color = 0x7FFF;
+    for (size_t i = 0; i < (size_t)GX_SCREEN_W * GX_SCREEN_H; i++)
+        g->zbuf[i] = 0xFFFFFFu;      /* 深度缓冲：最远 */
     g_q_head = g_q_len = g_pending = 0;
     g_e_head = g_e_len = g_need = g_chave = 0;
     g_fifo_word = g_fifo_ncmd = g_fifo_pcnt = g_fifo_need = 0;
@@ -704,6 +1095,19 @@ void gx_reset(gx_t *g)
 const uint16_t *gx_framebuffer(const gx_t *g)
 {
     return g->fb;
+}
+
+/* 21-B9yi(续34)：3D 图层 alpha 平面（0=透明），渲染层合成 3D 图层时用。 */
+const uint8_t *gx_framebuffer_alpha(const gx_t *g)
+{
+    return g->fba;
+}
+
+/* 21-B9yi(续34)：装配 bus（纹理/调色板取数）。测试里可不设，此时纹理路径关闭。 */
+void gx_set_bus(gx_t *g, struct bus *bus)
+{
+    if (g != NULL)
+        g->bus = bus;
 }
 
 /* 21-B9yi(续16)：按系统时钟消耗 3D 引擎的工作周期。

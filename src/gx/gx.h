@@ -89,9 +89,17 @@
 typedef struct gx_vertex {
     int sx, sy;          /* 屏幕像素坐标 */
     uint16_t color;      /* RGB555 */
+    /* 21-B9yi(续34)：纹理坐标（1.11.4 定点，与 melonDS `s16 TexCoords` 一致）
+       与透视插值用的 1/w。 */
+    int32_t u, v;
+    int32_t invw;        /* 1/w（1.19.12 定点；w=0 时退化为 0） */
+    int32_t z;           /* 24 位深度值（melonDS `FinalZ` 口径：小 = 近） */
 } gx_vertex_t;
 
+struct bus;              /* 前向声明：纹理/调色板要从 VRAM 取数 */
+
 typedef struct gx {
+    struct bus *bus;     /* 纹理取数用（由 nds_create 装配，测试里可为 NULL） */
     uint32_t disp3dcnt;  /* DISP3DCNT */
     uint32_t gxstat;     /* GXSTAT（FIFO 空/忙状态位） */
     /* 21-B9yi(续16)：3D 引擎「工作周期」余额。melonDS 里每条 GX 命令都会
@@ -131,9 +139,19 @@ typedef struct gx {
 
     /* 当前顶点属性 */
     uint32_t color;      /* 0x20 COLOR */
+    /* 21-B9yi(续34)：纹理相关寄存器 */
+    uint32_t tex_param;  /* 0x2A TEXIMAGE_PARAM */
+    uint32_t pltt_base;  /* 0x2B PLTT_BASE */
+    uint32_t poly_attr;  /* 0x29 POLYGON_ATTR（取 alpha 位） */
     /* 诊断计数（21-B9wu）：命令数 / 光栅化三角形数 / FIFO 与命令端口写入次数 */
     uint32_t cmd_count;
     uint32_t tri_count;
+    /* 21-B9yi(续34) 诊断：三角形走了哪条路径、真正写出的像素数 */
+    uint32_t tri_tex;      /* 走纹理采样的三角形数 */
+    uint32_t tri_flat;     /* 走平色的三角形数 */
+    uint32_t tri_drawn;    /* 至少写出 1 个像素的三角形数 */
+    uint64_t px_written;   /* 3D 光栅化写出的像素总数 */
+    uint32_t vtx_zero_w;   /* 1/w 退化为 0（在相机后方，本地不做裁剪）的顶点数 */
     uint32_t fifo_writes;
     uint32_t port_writes;
     int32_t tc_s, tc_t;  /* 0x22 TEXCOORD（1.3.12） */
@@ -150,6 +168,15 @@ typedef struct gx {
 
     /* 3D 帧缓冲：256×192 RGB555 */
     uint16_t fb[GX_SCREEN_W * GX_SCREEN_H];
+    /* 21-B9yi(续34)：3D 图层 alpha（0=透明）。melonDS 的 `Output3D` 把 alpha
+       放在像素高字节、`DrawBG_3D()` 用「alpha==0 才跳过」判透明；本地用一张
+       并行 alpha 平面表达同一语义，`fb` 保持 RGB555 不变（旧用例与出图口径不变）。 */
+    uint8_t fba[GX_SCREEN_W * GX_SCREEN_H];
+    /* 21-B9yi(续34)：深度缓冲（24 位 Z，0xFFFFFF = 最远）。
+       真机的深度缓冲不由交换缓冲清空（游戏每帧自己画「清屏多边形」把深度顶到最远），
+       本地没有裁剪/清屏多边形的精确语义，改为**每帧交换缓冲时置最远**：
+       视觉等价于游戏清屏之后的状态，且不会让上一帧的深度挡住新一帧。 */
+    uint32_t zbuf[GX_SCREEN_W * GX_SCREEN_H];
 } gx_t;
 
 /* 地址判定：DISP3DCNT + GXSTAT/RAM_COUNT（字节级寄存器，ARM9 侧）。 */
@@ -180,10 +207,20 @@ void gx_state(const gx_t *g, uint32_t *fifo_words, uint32_t *busy,
 
 /* 把 3D 帧缓冲暴露给渲染层（ppu 混合 3D 图层用）。 */
 const uint16_t *gx_framebuffer(const gx_t *g);
+/* 21-B9yi(续34)：3D 图层 alpha 平面（0=透明）。 */
+const uint8_t *gx_framebuffer_alpha(const gx_t *g);
+/* 21-B9yi(续34)：让 GX 能读 VRAM 做纹理采样（由 nds_create 装配）。 */
+void gx_set_bus(gx_t *g, struct bus *bus);
 
 /* 顶点变换：模型坐标 (x,y,z)（1.3.12）经 pos×proj 变换、透视除、视口映射，
    输出屏幕像素坐标 (sx,sy)。供单元测试直接调用。 */
 void gx_transform_vertex(const gx_t *g, int32_t x, int32_t y, int32_t z, int *sx, int *sy);
+/* 21-B9yi(续34)：同上，额外输出 1/w（1.19.12 定点），供纹理透视校正插值。 */
+void gx_transform_vertex_ex(const gx_t *g, int32_t x, int32_t y, int32_t z,
+                            int *sx, int *sy, int32_t *out_invw);
+/* 21-B9yi(续34)：完整版本，额外输出 24 位深度值（小 = 近，0xFFFFFF = 最远）。 */
+void gx_transform_vertex_z(const gx_t *g, int32_t x, int32_t y, int32_t z,
+                           int *sx, int *sy, int32_t *out_invw, int32_t *out_z);
 
 /* 软件光栅化一个平色三角形到帧缓冲（供单元测试直接调用）。 */
 void gx_raster_tri(gx_t *g, int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color);

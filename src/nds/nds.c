@@ -26,6 +26,7 @@ nds_t *nds_create(void)
     }
     nds->bus->io = nds->io;
     nds->io->bus = nds->bus; /* io 需要 bus 反指（DMA 搬运经 bus 访存），与 bus->io 对称 */
+    gx_set_bus(&nds->io->gx, nds->bus); /* 21-B9yi(续34)：3D 纹理采样要读 VRAM */
     /* ARM9 CPU：PC 先用 0 占位，装载镜像后由 main 调 cpu_reset 指到入口 */
     nds->cpu = arm9_create(nds);
     if (nds->cpu == NULL) {

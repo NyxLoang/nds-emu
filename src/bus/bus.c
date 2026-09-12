@@ -25,6 +25,7 @@ void bus_vram_reset_default(bus_t *bus)
         bus->vram_map_bobj[i] = 0;
     }
     for (int i = 0; i < 4; i++) bus->vram_map_tex[i] = 0;
+    for (int i = 0; i < 8; i++) bus->vram_map_texpal[i] = 0;
     for (int i = 0; i < 4; i++) {
         bus->vram_map_abg_ext[i] = 0;
         bus->vram_map_bbg_ext[i] = 0;
@@ -152,6 +153,7 @@ static void vram_clear_bank(bus_t *bus, uint32_t bankmask)
         bus->vram_map_bobj[i] &= ~bankmask;
     }
     for (int i = 0; i < 4; i++) bus->vram_map_tex[i] &= ~bankmask;
+    for (int i = 0; i < 8; i++) bus->vram_map_texpal[i] &= ~bankmask;
     for (int i = 0; i < 4; i++) {
         bus->vram_map_abg_ext[i] &= ~bankmask;
         bus->vram_map_bbg_ext[i] &= ~bankmask;
@@ -221,7 +223,24 @@ void bus_set_vramcnt(bus_t *bus, int bank, uint8_t cnt)
         switch (cnt & 7u) {
         case 1: vram_set_abg(bus, 0, 4, bankmask); break;
         case 2: vram_set_aobj(bus, 0, 4, bankmask); break;
-        default: break; /* LCDC/纹理调色板/扩展调色板：暂不建模 */
+        /* 21-B9yi(续34)：mode 3 = 纹理调色板（melonDS `MAP_RANGE(TexPal,0,4)`
+           —— 64KB 的 bank E 铺满第 0-3 号 16KB 调色板槽）。 */
+        case 3:
+            for (int i = 0; i < 4; i++)
+                bus->vram_map_texpal[i] |= bankmask;
+            break;
+        default: break; /* LCDC/扩展调色板：暂不建模 */
+        }
+    } else if (bank == 5 || bank == 6) { /* F/G：mask 0x9F */
+        unsigned ofs = (cnt >> 3) & 7u;
+        switch (cnt & 7u) {
+        /* 21-B9yi(续34)：mode 3 = 纹理调色板，槽号用 melonDS 的
+           `(ofs & 1) + ((ofs & 2) << 1)`（即 {0,1,4,5}）。FFXII 实测写
+           VRAMCNT_F = 0x83（mode 3 / ofs 0）⇒ 槽 0。 */
+        case 3:
+            bus->vram_map_texpal[(ofs & 1u) + ((ofs & 2u) << 1)] |= bankmask;
+            break;
+        default: break; /* LCDC/ABG/AOBJ/扩展调色板：暂不建模 */
         }
     } else if (bank == 7) { /* H：mask 0x87，当前 FFXII 配置为 B OBJ */
         if ((cnt & 7u) == 2) {
@@ -252,6 +271,45 @@ uint16_t bus_vram_extpal16(const bus_t *bus, int is_sub, int slot,
                + (size_t)color * 2u;
     const uint8_t *p = bus->vram + vram_bank_phys[bank] + off;
     return (uint16_t)(p[0] | (uint16_t)(p[1] << 8));
+}
+
+/* 21-B9yi(续34)：3D 纹理扁平空间读取（地址 0..512KB，128KB 一槽）。
+   与 melonDS `GPU::ReadVRAM_Texture<T>` 同口径：按槽取 bank 位掩码，
+   槽内偏移 `addr & 0x1FFFF` 落到各已映射 bank 的同一偏移上（多 bank 时 OR）。 */
+uint8_t bus_vram_tex8(const bus_t *bus, uint32_t addr)
+{
+    if (bus == NULL)
+        return 0;
+    uint32_t mask = bus->vram_map_tex[(addr >> 17) & 0x3u];
+    uint32_t off = addr & 0x1FFFFu;
+    uint8_t v = 0;
+    for (int b = 0; b < 4; b++)              /* 纹理槽只可能由 A-D（128KB）填充 */
+        if (mask & (1u << b))
+            v |= bus->vram[vram_bank_phys[b] + (off & vram_bank_mask[b])];
+    return v;
+}
+
+/* 21-B9yi(续34)：纹理调色板扁平空间读取（地址 0..128KB，16KB 一槽）。
+   对应 melonDS `GPU::ReadVRAM_TexPal<T>`：槽内的 bank E/F/G 按位掩码 OR。 */
+uint16_t bus_vram_texpal16(const bus_t *bus, uint32_t addr)
+{
+    if (bus == NULL)
+        return 0;
+    uint32_t mask = bus->vram_map_texpal[(addr >> 14) & 0x7u];
+    uint16_t v = 0;
+    if (mask & (1u << 4)) {
+        const uint8_t *p = bus->vram + vram_bank_phys[4] + (addr & 0xFFFFu);
+        v |= (uint16_t)(p[0] | (uint16_t)(p[1] << 8));
+    }
+    if (mask & (1u << 5)) {
+        const uint8_t *p = bus->vram + vram_bank_phys[5] + (addr & 0x3FFFu);
+        v |= (uint16_t)(p[0] | (uint16_t)(p[1] << 8));
+    }
+    if (mask & (1u << 6)) {
+        const uint8_t *p = bus->vram + vram_bank_phys[6] + (addr & 0x3FFFu);
+        v |= (uint16_t)(p[0] | (uint16_t)(p[1] << 8));
+    }
+    return v;
 }
 
 /* DISPCNT VRAM 显示模式（bit16-17=2）按物理 bank 直读，不经逻辑窗口换算。 */

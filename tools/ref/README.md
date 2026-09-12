@@ -41,6 +41,17 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_KEY_FRAME/REF_KEY_MASK/REF_KEY_PERIOD` | 按键注入脚本，与本地 `--key-frame/--key-mask/--key-period` 一致（`(f-KEY_FRAME)%PERIOD<12` 为按下） |
 | `REF_SHOT_EVERY=N` | 每 N 帧把两块 256×192 帧缓冲写成 `%TEMP%\ref_fb_<frame>.bin` |
 | `REF_STOP_IDLE=1` | 恢复旧行为：命中游戏空闲任务（0x02009570-0x02009590）就提前退出 |
+| `REF_GXHIST=1` | 进程结束前打印 GX 命令码直方图（`refgxhist:` 行），与本地 `NDS_GXHIST` 对照 |
+
+## 把参考帧转成图片
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ref\fb2bmp.ps1 `
+           -In "$env:TEMP\ref_fb_4000.bin" -Out build\ref_4000.bmp
+```
+
+（顶屏在上、底屏在下，和本地 `--shot-every` 出的 BMP 版式一致，可直接目视并排比较。
+脚本保持纯 ASCII —— Windows PowerShell 5.1 按 ANSI 读 `.ps1`，中文注释会解析失败。）
 
 ## 已知口径差异（对照时必须记住）
 

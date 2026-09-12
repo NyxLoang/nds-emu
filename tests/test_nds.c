@@ -5016,8 +5016,11 @@ static void test_gx_transform(nds_t *nds)
     CHECK_EQ("gx (-1,1) sy", sy, 0);
 
     gx_transform_vertex(g, 0, 0, 0, &sx, &sy);
-    CHECK_EQ("gx (0,0) sx", sx, 127);
-    CHECK_EQ("gx (0,0) sy", sy, 95);
+    /* 21-B9yi(续34)：视口映射改成 melonDS 口径（视口宽 y1-y0+1、屏幕行号
+       以 191-y1 为上边缘）后，屏幕中心是 (128,96)（此前本地按 (vx2-vx1)/2
+       得到 (127,95)，整幅 3D 画面还额外被垂直镜像）。 */
+    CHECK_EQ("gx (0,0) sx", sx, 128);
+    CHECK_EQ("gx (0,0) sy", sy, 96);
 }
 
 /* ---- 阶段 19.4 用例：三角形软件光栅化（平色） ---- */

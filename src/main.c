@@ -98,6 +98,9 @@ static void dump_state(const nds_t *nds,
         { "vram",       nds->bus->vram,        BUS_VRAM_SIZE },
         { "itcm",       nds->bus->arm9_itcm,   BUS_ARM9_ITCM_SIZE },
         { "dtcm",       nds->bus->arm9_dtcm,   BUS_ARM9_DTCM_SIZE },
+        /* 21-B9y2：调色板 RAM（0x05000000，2KB）也纳入 dump——帧 1900 的
+           "黑+青色条纹"在 VRAM/寄存器都一致后，调色板是下一个待比对象。 */
+        { "palette",    nds->bus->palette,     BUS_PALETTE_SIZE },
     };
     for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) {
         FILE *f = NULL;

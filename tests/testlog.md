@@ -904,3 +904,18 @@
   `arm7 WRAM step_cycles`=1、`arm7 main RAM step_cycles`=1，
   以及 `normal instruction`（指令计数不受影响）；
 - 全量从 **921 项**增至 **926 项检查，0 项失败**。
+
+## 2026-09-12 · 21-B9yi — 卡带真机语义 + 预取 FIFO（929 项）
+
+- `[case 15.2/15.4/15.5]` 全面对齐 melonDS 口径：
+  - **AUXSPICNT 门控**：槽未使能（bit15=0）时写 ROMCTRL bit31 不启动传输
+    （`cart xfer blocked w/o slot`）；
+  - **只读位**：bit31 不再被写入值直接置起（读回仍是硬件状态）；
+  - **0→1 才启动**：新增 `cart_activate()` 辅助（先写 0 清忙、再写目标值），
+    所有卡带用例改用它；上一笔未读完时不会重启，测试里显式把 0x200 块读完
+    128 字再开新传输（`cart block done busy` 应为 0）；
+  - **预取 FIFO**：`cartbus_advance` 把字取进 2 字 FIFO，`cartbus_read32` 从
+    FIFO 取（空时返回残留字），未开始传输时读数据端口仍是 `0xFFFFFFFF`；
+- `[case 21-B9vv]` 增补：主存非顺序取指代价默认 1、`cpu_set_nonseq_cost(3)`
+  时同一分支代价 3（口径可调、单测可验）；
+- 全量从 **926 项**增至 **929 项检查，0 项失败**。

@@ -133,15 +133,32 @@ static int bios_irq_tail9(arm_cpu_t *cpu)
    （ARM9 主存：S16=1 / N16=8，ARM 态顺序 S32=2、非顺序 N32=9）。本地按
    比例缩小成 **顺序 1 / 非顺序 3**（ITCM 与其它区域都 1；ARM7 不额外计费，
    它的代码绝大多数跑在 WRAM，且实测本地 ARM7 指令数本就低于参考核）。 */
+static int s_nonseq_cost = -1; /* -1=未初始化；NDS_ARM9_NOSEQ 可调（默认 1） */
+
+void cpu_set_nonseq_cost(int v)
+{
+    if (v >= 1 && v <= 8)
+        s_nonseq_cost = v;
+}
+
 static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
 {
+    if (s_nonseq_cost < 0) {
+        const char *e = getenv("NDS_ARM9_NOSEQ");
+        s_nonseq_cost = 1;   /* 实测默认值：见 docs/21-rom-bringup.md 的 21-B9yi */
+        if (e != NULL) {
+            int v = atoi(e);
+            if (v >= 1 && v <= 8)
+                s_nonseq_cost = v;
+        }
+    }
     if (cpu->is_arm7)
         return 1u;
     if (pc - BUS_ARM9_ITCM_BASE < BUS_ARM9_ITCM_SIZE)
         return 1u;                           /* ITCM：melonDS 恒 1 */
     if ((pc >> 24) != 0x02u)
         return 1u;                           /* WRAM/IO/VRAM/BIOS 等 */
-    return nonseq ? 3u : 1u;                 /* 主存：非顺序取指更贵 */
+    return nonseq ? (uint32_t)s_nonseq_cost : 1u; /* 主存：非顺序取指更贵 */
 }
 
 int cpu_step(arm_cpu_t *cpu)

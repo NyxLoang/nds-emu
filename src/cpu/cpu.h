@@ -48,6 +48,10 @@ void cpu_direct_boot(arm_cpu_t *cpu, uint32_t entry);
 /* 从 bus 按 PC 取 32 位指令字（3a.3）。 */
 uint32_t cpu_fetch(const arm_cpu_t *cpu);
 
+/* 21-B9yi：ARM9 主存「非顺序取指」的代价（单位：系统时钟周期）。默认 1
+   （与参考核时间线最贴合）；`NDS_ARM9_NOSEQ` 或本函数可改（测试用）。 */
+void cpu_set_nonseq_cost(int v);
+
 /* 从 bus 按 PC 取 16 位 Thumb 指令半字（13.2）。 */
 uint16_t cpu_fetch16(const arm_cpu_t *cpu);
 

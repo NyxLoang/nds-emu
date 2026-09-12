@@ -49,7 +49,19 @@ typedef struct cartbus {
     uint32_t       rom_mask;   /* 21-B9z: 补成 2 的幂后的 ROM 掩码（melonDS B7 使用） */
     uint32_t wait_cycles; /* 21-B9zb: next CARD_DATA ready delay in ARM9 cycles */
     uint32_t xfer_pos;    /* 21-B9zb: bytes transferred in current command */
-    int      wait_phase;  /* 21-B9zb: 0=idle 1=waiting data 2=data ready */
+    int      wait_phase;  /* 0=idle 1=等待取下一字 2=已排结束事件 */
+    /* 21-B9yi：卡带侧预取 FIFO（2 字，对齐 melonDS ROMData[2]）。
+       卡带在后台按周期把数据取进 FIFO 并置 DRQ；CPU/DMA 从 FIFO 取走。
+       这样「CPU 读的时候数据通常已经就绪」，与参考核一致（旧实现是
+       「读一次才取一次」，游戏每个字都要空转等 20 周期，实测读卡带阶段
+       比参考核慢 11%、累计落后 160 帧）。 */
+    uint32_t data[2];     /* FIFO 本体 */
+    int      data_head;   /* 卡带侧写入位置（0/1） */
+    int      data_tail;   /* CPU 侧读出位置（0/1） */
+    int      data_count;  /* FIFO 内字数（0..2） */
+    int      data_late;   /* FIFO 满、还有数据未取（等 CPU 读后再排） */
+    uint32_t xfer_len;    /* 本次传输总长（字节） */
+    int      end_irq;     /* 传输结束且 AUXSPICNT bit14 使能 → 由 io 挂卡带 IRQ */
 } cartbus_t;
 
 /* 清零初始化。 */

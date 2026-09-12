@@ -2593,7 +2593,18 @@ static void test_step_cycles(nds_t *nds)
     cpu_step(cpu);                                 /* 进到 B self（顺序取指） */
     CHECK_EQ("main RAM seq2 step_cycles", cpu->step_cycles, 1u);
     cpu_step(cpu);                                 /* 跳回自身（非顺序取指） */
-    CHECK_EQ("main RAM branch step_cycles", cpu->step_cycles, 3u);
+    CHECK_EQ("main RAM branch step_cycles", cpu->step_cycles, 1u); /* 默认口径 1 */
+
+    /* 21-B9yi：非顺序取指代价可调（NDS_ARM9_NOSEQ / cpu_set_nonseq_cost）。
+       同一段代码在代价=3 时应该贵 3 倍——这也是「主存取指加价」口径的单测。 */
+    cpu_set_nonseq_cost(3);
+    cpu_reset(cpu, base);
+    cpu_step(cpu);                                 /* mov r0,#1（顺序） */
+    cpu_step(cpu);                                 /* B self（顺序取到分支） */
+    cpu_step(cpu);                                 /* 跳回自身：非顺序取指 */
+    CHECK_EQ("main RAM branch cost=3", cpu->step_cycles, 3u);
+    cpu_set_nonseq_cost(1);
+    cpu_reset(cpu, base);
 
     bus_write32(nds->bus, BUS_ARM9_ITCM_BASE, 0xEAFFFFFEu); /* B self（ITCM） */
     cpu_reset(cpu, BUS_ARM9_ITCM_BASE);
@@ -4108,6 +4119,23 @@ static void test_secure_area_load(nds_t *nds)
     free(cart.data);
 }
 
+/* 21-B9yi：真机只在 ROMCTRL bit31 **由 0 变 1** 时启动传输（melonDS
+   `xferstart = (val & ~ROMCnt) & (1<<31)`）。测试统一用这个辅助函数：
+   先写 0 清忙位、再写目标值触发，等价于真机/游戏代码的「等空闲→再启动」。 */
+static void cart_activate(nds_t *nds, uint8_t hi)
+{
+    bus_write8(nds->bus, CART_ROMCTRL + 3, (uint8_t)(hi & 0x7Fu));
+    bus_write8(nds->bus, CART_ROMCTRL + 3, hi);
+}
+
+/* 21-B9yi：让「CPU 程序直接写 ROMCTRL」的用例满足真机前置条件——
+   卡槽使能（AUXSPICNT bit15=1、bit13=0）且 ROMCTRL 忙位先清零。 */
+static void cart_prepare(nds_t *nds)
+{
+    bus_write16(nds->bus, CART_AUXSPICNT, AUXSPICNT_ENABLE);
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x00u);
+}
+
 /* ---- 阶段 15.2 卡带命令读：写命令 + 激活 + 从 CARD_DATA 按序读回 ---- */
 static void test_cartbus_read(nds_t *nds)
 {
@@ -4119,13 +4147,24 @@ static void test_cartbus_read(nds_t *nds)
     /* 未激活命令时读数据端口：无数据 → 0xFFFFFFFF */
     CHECK_EQ("cart data before cmd", bus_read32(nds->bus, BUS_CARD_DATA), 0xFFFFFFFFu);
 
+    /* 21-B9yi：真机/AUXSPICNT 口径——槽未使能（bit15=0）时写 ROMCTRL bit31
+       不应启动传输（melonDS `WriteROMCnt` 的前置检查）。 */
+    bus_write16(nds->bus, CART_AUXSPICNT, 0u);
+    cart_activate(nds, 0x81u);
+    CHECK_EQ("cart xfer blocked w/o slot",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_ACTIVATE, 0u);
+    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x01); /* 清 bit31（保持块字段=1） */
+
+    /* 使能槽（bit15=1，bit13=0 → ROM 模式）；下面照常写命令与激活 */
+    bus_write16(nds->bus, CART_AUXSPICNT, AUXSPICNT_ENABLE);
+
     /* 命令 B7 读地址 0x8100（melonDS 会把 <0x8000 的请求重定向） */
     static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
 
     /* 激活 ROMCTRL（写 bit31，块字段=1 → 0x200，melonDS 口径） */
-    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x81);
+    cart_activate(nds, 0x81u);
 
     /* 21-B9zb: 激活后要等 melonDS 首字延迟 DRQ 才就绪 */
     CHECK_EQ("cart romctrl not yet DRQ",
@@ -4151,8 +4190,17 @@ static void test_cartbus_read(nds_t *nds)
         CHECK_EQ(nm, bus_read32(nds->bus, BUS_CARD_DATA), want);
     }
 
+    /* 21-B9yi：真机口径——上一笔传输读完之前 busy 不会落 0，新的 ROMCTRL
+       写入也不会启动新传输。这里把 0x200 块剩下的 124 字读完，让 busy 清零。 */
+    for (int i = 4; i < 128; i++) {
+        cartbus_advance(&nds->io->cartbus, 100000u);
+        (void)bus_read32(nds->bus, BUS_CARD_DATA);
+    }
+    CHECK_EQ("cart block done busy",
+             bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_ACTIVATE, 0u);
+
     /* 块大小=4（ROMCTRL bit24-26=7）：读完 1 字后 DRQ 与 busy 同时回落 */
-    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x87u);
+    cart_activate(nds, 0x87u);
     cartbus_advance(&nds->io->cartbus, 100000u);
     CHECK_EQ("cart 4B busy",
              bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_ACTIVATE,
@@ -4167,7 +4215,7 @@ static void test_cartbus_read(nds_t *nds)
     static const uint8_t cmd2[8] = {0xB7, 0x00, 0x00, 0x8F, 0xFC, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd2[i]);
-    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x87u); /* 4 字节块，读完即回落 */
+    cart_activate(nds, 0x87u); /* 4 字节块，读完即回落 */
     cartbus_advance(&nds->io->cartbus, 100000u);
     uint32_t w0 = (uint32_t)rom[0x8FFC] | ((uint32_t)rom[0x8FFD] << 8)
                 | ((uint32_t)rom[0x8FFE] << 16) | ((uint32_t)rom[0x8FFF] << 24);
@@ -4180,7 +4228,7 @@ static void test_cartbus_read(nds_t *nds)
     static const uint8_t chipcmd[8] = {0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, chipcmd[i]);
-    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x80u);
+    cart_activate(nds, 0x80u);
     cartbus_advance(&nds->io->cartbus, 100000u);
     CHECK_EQ("cart chipid DRQ",
              bus_read32(nds->bus, CART_ROMCTRL) & CART_ROMCTRL_DRQ,
@@ -4266,7 +4314,8 @@ static void test_card_dma(nds_t *nds)
     static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
-    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x81); /* 块字段=1 → 0x200 */
+    bus_write16(nds->bus, CART_AUXSPICNT, AUXSPICNT_ENABLE);
+    cart_activate(nds, 0x81u); /* 块字段=1 → 0x200 */
     /* 21-B9zb: 等卡带首字就绪；就绪边沿会让卡带 DMA 自动触发 */
     for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
         io_advance_cart(nds->io, 0);
@@ -4323,7 +4372,8 @@ static void test_card_dma7(nds_t *nds)
     static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
-    bus_write8(nds->bus, CART_ROMCTRL + 3, 0x81);
+    cart_prepare(nds);
+    cart_activate(nds, 0x81u);
     for (int spin = 0; spin < 200000 && !cartbus_ready(&nds->io->cartbus); spin++)
         io_advance_cart(nds->io, 0);
 
@@ -4357,6 +4407,7 @@ static void test_card_program(nds_t *nds)
     static const uint8_t cmd[8] = {0xB7, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00, 0x00};
     for (int i = 0; i < 8; i++)
         bus_write8(nds->bus, CART_COMMAND + i, cmd[i]);
+    cart_prepare(nds); /* 21-B9yi：卡槽使能 + 忙位清零（真机前置条件） */
 
     /* 程序：设 DMA0（源=CARD_DATA 固定、目的=RAM、32 位、卡带触发、4 字）
        再写 ROMCTRL 激活 → 卡带就绪 → DMA 搬 4 字到 dest。 */

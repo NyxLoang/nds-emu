@@ -482,4 +482,11 @@ void io_advance_cart(io_t *io, int is_arm7)
         io_card_dma_check(io, 0);
         io_card_dma_check(io, 1);
     }
+    /* 21-B9yi：一次卡带传输在 FIFO 取空后结束——AUXSPICNT bit14 使能时
+       挂两核的卡带完成中断（melonDS `ROMEndTransfer`）。 */
+    if (io->cartbus.end_irq) {
+        io->cartbus.end_irq = 0;
+        irq_set_card(&io->irq[0]);
+        irq_set_card(&io->irq[1]);
+    }
 }

@@ -520,3 +520,13 @@
   匹配改成 melonDS 的**边沿触发**语义（标志已置位不再触发），中断挂给该核。
 - **效果**：本地 `IF9` 的常驻 bit2 消失；`0x04000004` 不再被 ARM7 污染
   （帧 2200 为 `0000000C`，参考核 `0000000A`）。
+
+## 2026-09-12 · 21-B9yi — 卡带传输结束中断 + 预取 FIFO 接线
+
+- `io_advance_cart` 每 ARM9 指令推进卡带时钟：`cartbus_advance` 取到新字时
+  置两核卡带 IRQ（既有的 DRQ 边沿）**并**触发卡带 DMA 检查；
+- 新增「传输结束」路径：`cartbus_end` 在 `AUXSPICNT` bit14（传输完成中断使能）
+  置位时把 `cartbus.end_irq` 立起，由 `io_advance_cart` 转成两核的卡带 IRQ
+  （对应 melonDS `ROMEndTransfer` 里的 `SetIRQ(Num, TransferIRQ)`）；
+- 说明：卡带寄存器本体在 `src/cart/cartbus.c`，本模块只负责「按周期推进 +
+  把就绪/结束事件接到中断与 DMA 触发线上」。

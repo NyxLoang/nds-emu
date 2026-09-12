@@ -1,10 +1,15 @@
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include "cartbus.h"
 
 void cartbus_init(cartbus_t *cb)
 {
     memset(cb, 0, sizeof(*cb));
     save_init(&cb->save);
+    /* 21-B9yi：未开始传输时数据端口读到的应是“空 FIFO”的残留值
+       （真机/测试期望 0xFFFFFFFF） */
+    cb->data[0] = cb->data[1] = 0xFFFFFFFFu;
 }
 
 void cartbus_destroy(cartbus_t *cb)
@@ -58,9 +63,27 @@ static uint32_t rom_le32(const uint8_t *rom, size_t rom_size, uint32_t addr)
 
 /* 锁存 CARD_COMMAND 并开始传输。
    只实现读命令 B7/B8（GetData）；其余命令（芯片 ID / KEY1 激活等）后续阶段补。 */
+static void cartbus_fetch_delay(cartbus_t *cb, int first); /* 前向声明 */
+static void cartbus_end(cartbus_t *cb);
+
 static void cartbus_activate(cartbus_t *cb)
 {
     uint8_t c0 = cb->cmd[0];
+    /* 21-B9yi 诊断：NDS_CARTLOG=1 → 打印每次启动传输的命令/地址/块长
+       （与参考核 cartlog 的命令流对照，定位「START 之后卡死」） */
+    static int g_cartlog_state, g_cartlog_n;
+    if (g_cartlog_state == 0) {
+        const char *e = getenv("NDS_CARTLOG");
+        g_cartlog_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+    }
+    if (g_cartlog_state == 1 && g_cartlog_n < 20000) {
+        g_cartlog_n++;
+        printf("cartlog: #%d cmd=%02X%02X%02X%02X%02X%02X%02X%02X"
+               " addr=%02X%02X%02X%02X romctrl=%08X\n",
+               g_cartlog_n, cb->cmd[0], cb->cmd[1], cb->cmd[2], cb->cmd[3],
+               cb->cmd[4], cb->cmd[5], cb->cmd[6], cb->cmd[7],
+               cb->cmd[1], cb->cmd[2], cb->cmd[3], cb->cmd[4], cb->romctrl);
+    }
 
     /* B8：读芯片 ID（直接返回 ChipID）；B7：读 ROM。
        B7 命令格式：B7 addr[31:24] addr[23:16] addr[15:8] addr[7:0] 00 00 00
@@ -92,35 +115,88 @@ static void cartbus_activate(cartbus_t *cb)
         cb->chip_read = 0;
     }
 
-    /* 瞬时传输模型：命令一锁存，块内数据立即全部就绪（DRQ=1），
-       bit31 保持“传输忙”直到块被读完，最后一块读完才回落 0。
-       FFXII 用 CPU 轮询 ROMCTRL：bit23=1 时读 CARD_DATA，bit31=1 期间循环。 */
+    /* 21-B9yi：按 melonDS 口径——命令锁存后置 bit31，数据由卡带侧按周期
+       **预取进 2 字 FIFO**（见 cartbus_advance），不再“一锁存就全就绪”。 */
+    cb->xfer_len = cb->xfer_remaining;
+    cb->xfer_pos = 0;
+    cb->data_head = 0;
+    cb->data_tail = 0;
+    cb->data_count = 0;
+    cb->data_late = 0;
+    cb->data[0] = cb->data[1] = 0xFFFFFFFFu;
     if (cb->xfer_remaining > 0) {
-        cb->romctrl |= CART_ROMCTRL_DRQ;
         cb->romctrl |= CART_ROMCTRL_ACTIVATE; /* bit31：传输中/忙 */
+        {
+            extern unsigned long long g_dbg_frame;
+            static long lo = -2, hi = -1;
+            if (lo == -2) {
+                const char *e = getenv("NDS_CARTLOG2");
+                lo = 0; hi = -1;
+                if (e != NULL && sscanf(e, "%ld-%ld", &lo, &hi) != 2) { lo = 0; hi = -1; }
+            }
+            if ((long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi)
+                printf("cartlog2: f=%llu START cmd=%02X%02X%02X%02X len=%u romctrl=%08X\n",
+                       g_dbg_frame, cb->cmd[0], cb->cmd[1], cb->cmd[2], cb->cmd[3],
+                       cb->xfer_len, cb->romctrl);
+        }
+        cartbus_fetch_delay(cb, 1);           /* 排第一次取数 */
     } else {
         cb->romctrl &= ~(CART_ROMCTRL_DRQ | CART_ROMCTRL_ACTIVATE);
+        cb->wait_phase = 0;
+        cb->wait_cycles = 0;
     }
 }
 
-/* 21-B9zb: B7/B8 改为按 melonDS 周期时序就绪；覆盖上面的瞬时 DRQ */
-static void cartbus_schedule_delay(cartbus_t *cb)
+/* 21-B9yi：排「取下 N 个字」的事件（对齐 melonDS 的 ScheduleEvent）：
+   首次取数 = xfercycle * (cmddelay + 4)；后续每字 = xfercycle * (4 [+gap2])。 */
+static void cartbus_fetch_delay(cartbus_t *cb, int first)
 {
-    if (cb->xfer_remaining == 0) {
-        cb->wait_phase = 0;
-        cb->wait_cycles = 0;
-        cb->romctrl &= ~CART_ROMCTRL_DRQ;
-        return;
-    }
-    uint32_t blk2 = (cb->romctrl & CART_ROMCTRL_BLOCK_MASK) >> 24;
     uint32_t xfercycle = (cb->romctrl & (1u << 27)) ? 8u : 5u;
-    uint32_t cmddelay = 8u + (cb->romctrl & 0x1FFFu);
-    if (blk2 != 0u)
-        cmddelay += ((cb->romctrl >> 16) & 0x3Fu);
-    cb->romctrl &= ~CART_ROMCTRL_DRQ;
-    cb->wait_cycles = xfercycle * (cmddelay + 4u);
+    uint32_t cycles;
+    if (first) {
+        uint32_t cmddelay = 8u + (cb->romctrl & 0x1FFFu);
+        if (cb->xfer_len != 0u)
+            cmddelay += ((cb->romctrl >> 16) & 0x3Fu);
+        cycles = xfercycle * (cmddelay + 4u);
+    } else {
+        uint32_t delay = 4u;
+        if ((cb->xfer_pos & 0x1FFu) == 0u)
+            delay += ((cb->romctrl >> 16) & 0x3Fu);
+        cycles = xfercycle * delay;
+    }
+    cb->wait_cycles = cycles;
     cb->wait_phase  = 1;
-    cb->xfer_pos    = 0;
+}
+
+/* 传输结束：清忙位/DRQ，并在 AUXSPICNT bit14 使能时挂卡带完成中断。 */
+static void cartbus_end(cartbus_t *cb)
+{
+    int irq_en = (cb->auxspicnt & (1u << 14)) != 0;
+    {
+        /* 21-B9yi 诊断：NDS_CARTLOG2=LO-HI → 该帧区间内打印传输开始/结束/读取 */
+        extern unsigned long long g_dbg_frame;
+        static long lo = -2, hi = -1;
+        if (lo == -2) {
+            const char *e = getenv("NDS_CARTLOG2");
+            lo = 0; hi = -1;
+            if (e != NULL && sscanf(e, "%ld-%ld", &lo, &hi) != 2) { lo = 0; hi = -1; }
+        }
+        if ((long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi)
+            printf("cartlog2: f=%llu END pos=%u len=%u cnt=%d romctrl=%08X\n",
+                   g_dbg_frame, cb->xfer_pos, cb->xfer_len, cb->data_count,
+                   cb->romctrl);
+    }
+    cb->romctrl &= ~(CART_ROMCTRL_DRQ | CART_ROMCTRL_ACTIVATE);
+    cb->wait_phase = 0;
+    cb->wait_cycles = 0;
+    cb->data_count = 0;
+    cb->data_late = 0;
+    cb->xfer_pos = 0;
+    cb->xfer_len = 0;
+    cb->xfer_remaining = 0;
+    cb->chip_read = 0;
+    if (irq_en)
+        cb->end_irq = 1;   /* 由 io_advance_cart 转成两核的卡带 IRQ */
 }
 
 uint8_t cartbus_read8(cartbus_t *cb, uint32_t addr)
@@ -171,11 +247,28 @@ void cartbus_write8(cartbus_t *cb, uint32_t addr, uint8_t val)
     }
     if (addr >= CART_ROMCTRL && addr < CART_ROMCTRL + 4) {
         uint32_t shift = (addr - CART_ROMCTRL) * 8;
-        cb->romctrl = (cb->romctrl & ~(0xFFu << shift)) | ((uint32_t)val << shift);
-        /* 写 bit31（最高字节的最高位）= 启动传输：锁存命令并置 DRQ */
-        if (addr == CART_ROMCTRL + 3 && (val & 0x80u)) {
+        uint32_t old = cb->romctrl;
+        uint32_t wval = (uint32_t)val << shift;
+        /* bit31/bit29/bit23 对软件只读（melonDS 写掩码 0xFF7F7FFF 且
+           `(ROMCnt & (~mask | 0x20800000))` 强制这三位保持旧值）：
+           bit31=传输忙、bit29=KEY2 状态、bit23=DRQ 都由硬件/本模块维护，
+           写 1 只表示「请求启动」，不会把忙位本身写成 1。 */
+        cb->romctrl = ((old & ~(0xFFu << shift)) | (wval & 0x7F7FFFFFu))
+                    | (old & (CART_ROMCTRL_ACTIVATE | (1u << 29)
+                              | CART_ROMCTRL_DRQ));
+        /* 21-B9yi：只有 bit31 **由 0 变 1** 才启动新传输——melonDS
+           `xferstart = (val & ~ROMCnt) & (1<<31)`；并且要求 AUXSPICNT
+           使能（bit15=1）且处于 ROM 模式（bit13=0）。
+           旧实现「写高字节带 bit7 就重启传输」会把上一笔还没读完的传输
+           覆盖掉：游戏在 0x02011C50 循环等 bit31 清零时永远等不到，
+           表现为 START 之后卡在加载画面（2020 帧实测两核都停在 IRQ 模式）。 */
+        int was_busy = (old & CART_ROMCTRL_ACTIVATE) != 0;
+        int xferstart = (wval & CART_ROMCTRL_ACTIVATE) != 0;
+        int slot_ok = (cb->auxspicnt & AUXSPICNT_ENABLE) != 0
+                   && (cb->auxspicnt & AUXSPICNT_SLOTMODE) == 0;
+        if (!was_busy && xferstart && slot_ok) {
             cartbus_activate(cb);
-            cartbus_schedule_delay(cb);
+            cartbus_fetch_delay(cb, 1);
         }
         return;
     }
@@ -188,61 +281,85 @@ void cartbus_write8(cartbus_t *cb, uint32_t addr, uint8_t val)
 /* 21-B9zb: 推进 N 个 ARM9 周期；数据从等待变为就绪时返回 1 */
 int cartbus_advance(cartbus_t *cb, uint32_t cycles)
 {
-    if (cb->wait_phase == 1) {
-        if (cycles >= cb->wait_cycles) {
-            cb->wait_cycles = 0;
-            cb->wait_phase  = 2;
-            cb->romctrl |= CART_ROMCTRL_DRQ;
-            return 1;
-        }
+    if (cb->wait_phase != 1)
+        return 0;
+    if (cycles < cb->wait_cycles) {
         cb->wait_cycles -= cycles;
+        return 0;
     }
-    return 0;
+    cb->wait_cycles = 0;
+    cb->wait_phase  = 0;
+    /* 取一个字进 FIFO（melonDS ROMReceiveData） */
+    {
+        uint32_t v;
+        if (cb->chip_read)
+            v = cb->chip_id;
+        else
+            v = rom_le32(cb->rom, cb->rom_size, cb->xfer_addr);
+        cb->xfer_addr += 4u;
+        cb->data[cb->data_head] = v;
+        cb->data_head ^= 1;
+        cb->data_count++;
+        cb->xfer_pos += 4u;
+        cb->xfer_remaining = (cb->xfer_remaining > 4u)
+                           ? cb->xfer_remaining - 4u : 0u;
+        if (cb->xfer_pos >= cb->xfer_len)
+            cb->chip_read = 0;
+        cb->romctrl |= CART_ROMCTRL_DRQ;   /* 数据就绪（bit23） */
+    }
+    /* FIFO 还有空位且块内还有数据 → 继续预取；否则记 late（等 CPU 读走再排） */
+    if (cb->xfer_pos < cb->xfer_len) {
+        if (cb->data_count < 2)
+            cartbus_fetch_delay(cb, 0);
+        else
+            cb->data_late = 1;
+    }
+    return 1;
 }
 
 uint32_t cartbus_read32(cartbus_t *cb)
 {
+    /* 21-B9yi：按 melonDS `ReadROMData` 的口径——从预取 FIFO 取一字；
+       FIFO 空时返回上一次的字（真机是 FIFO 里残留的数据，不是 0xFFFFFFFF）。 */
+    uint32_t ret = cb->data[cb->data_tail];
+
     if (cb->rom == NULL) {
-        cb->romctrl &= ~CART_ROMCTRL_DRQ;
-        cb->romctrl &= ~CART_ROMCTRL_ACTIVATE;
-        return 0xFFFFFFFFu;
-    }
-    if (cb->xfer_remaining == 0) {
-        cb->romctrl &= ~CART_ROMCTRL_DRQ;
-        cb->romctrl &= ~CART_ROMCTRL_ACTIVATE;
-        return 0xFFFFFFFFu;
-    }
-    if (cb->wait_phase != 2) {
-        /* 21-B9zb: 数据还没就绪时读数据端口不算消费 */
+        cartbus_end(cb);
         return 0xFFFFFFFFu;
     }
 
-    uint32_t v;
-    if (cb->chip_read)
-        v = cb->chip_id;
+    if (cb->data_count > 0) {
+        cb->data_tail ^= 1;
+        cb->data_count--;
+    }
+    if (cb->data_count > 0)
+        cb->romctrl |= CART_ROMCTRL_DRQ;
     else
-        v = rom_le32(cb->rom, cb->rom_size, cb->xfer_addr);
-    cb->xfer_addr += 4;
-    cb->xfer_remaining = (cb->xfer_remaining > 4) ? cb->xfer_remaining - 4 : 0;
-    if (cb->xfer_remaining == 0)
-        cb->chip_read = 0;
-    cb->xfer_pos += 4;
-    if (cb->xfer_remaining > 0) {
-        /* 21-B9zb: 读走一个字后清 DRQ，按逐字/0x200 块边界排下一次就绪 */
         cb->romctrl &= ~CART_ROMCTRL_DRQ;
-        cb->wait_phase = 1;
-        uint32_t xfercycle = (cb->romctrl & (1u << 27)) ? 8u : 5u;
-        uint32_t delay = xfercycle * 4u;
-        if ((cb->xfer_pos & 0x1FFu) == 0u)
-            delay += xfercycle * ((cb->romctrl >> 16) & 0x3Fu);
-        cb->wait_cycles = delay;
-    } else {
-        cb->wait_phase  = 0;
-        cb->wait_cycles = 0;
+
+    {
+        /* 21-B9yi 诊断：NDS_CARTLOG2=LO-HI → 打印本帧的每次数据端口读 */
+        extern unsigned long long g_dbg_frame;
+        static long lo = -2, hi = -1;
+        if (lo == -2) {
+            const char *e = getenv("NDS_CARTLOG2");
+            lo = 0; hi = -1;
+            if (e != NULL && sscanf(e, "%ld-%ld", &lo, &hi) != 2) { lo = 0; hi = -1; }
+        }
+        if ((long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi)
+            printf("cartlog2: f=%llu READ ret=%08X pos=%u len=%u cnt=%d romctrl=%08X\n",
+                   g_dbg_frame, ret, cb->xfer_pos, cb->xfer_len, cb->data_count,
+                   cb->romctrl);
     }
-    if (cb->xfer_remaining == 0) {
-        cb->romctrl &= ~CART_ROMCTRL_DRQ; /* 本块读完，清就绪 */
-        cb->romctrl &= ~CART_ROMCTRL_ACTIVATE; /* 传输结束，bit31 回落 0 */
+
+    if (cb->xfer_pos < cb->xfer_len) {
+        /* FIFO 满时挂起的预取：CPU 读走后继续排 */
+        if (cb->data_late && cb->wait_phase == 0) {
+            cb->data_late = 0;
+            cartbus_fetch_delay(cb, 0);
+        }
+    } else if (cb->data_count == 0) {
+        cartbus_end(cb);   /* 块尾数据取完 → 传输结束，bit31 回落 0 */
     }
-    return v;
+    return ret;
 }

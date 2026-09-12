@@ -61,20 +61,52 @@ static int gx_cmd_nparams(uint8_t cmd)
 
 static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p);
 
-/* 执行队头所有已收集完整参数的命令（0 参数命令入队后即执行）。 */
-static void gx_flush(gx_t *g)
+/* 21-B9yi(续24)：**按命令成本消费队列**（不再「入队即执行」）。
+   melonDS 的 3D 引擎按 `GPU3D::AddCycles()` 记的每命令工作周期推进
+   （矩阵 16-35、顶点 18、交换缓冲 254、其余 3-5 周期），期间 `GXSTAT bit27`
+   保持置位；命令只有等成本走完才真正执行。这样 FIFO 的消费速度由**命令成本**
+   决定（本地此前是标定的「N 周期/字」常数），模式 7 DMA 的完成时机随之自然对齐。
+   `gx_enqueue()`/`gx_feed_param()` 只入队与计字数，执行统一由 `gx_advance()` 驱动。 */
+static void gx_run_due(gx_t *g, uint32_t cycles)
 {
-    while (g_q_len > 0 && g_q[g_q_head].filled >= g_q[g_q_head].nparams) {
-        gx_pend_t c = g_q[g_q_head];
+    uint32_t left = cycles;
+    for (;;) {
+        if (g->busy_cycles > 0) {
+            if (left < g->busy_cycles) {
+                g->busy_cycles -= left;
+                break;
+            }
+            left -= g->busy_cycles;
+            g->busy_cycles = 0;
+        }
+        if (g_q_len == 0)
+            break;
+        gx_pend_t *h = &g_q[g_q_head];
+        if (h->filled < h->nparams)
+            break;                    /* 参数还没收齐：等软件继续写 */
+        gx_pend_t c = *h;
         g_q_head = (g_q_head + 1) % GX_QUEUE_CAP;
         g_q_len--;
-        gx_exec(g, c.cmd, c.params);
+        uint32_t words = 1u + (uint32_t)c.nparams;
+        g->fifo_words = (g->fifo_words >= words) ? (g->fifo_words - words) : 0u;
+        gx_exec(g, c.cmd, c.params);  /* 内部按命令类型累加 busy_cycles */
     }
+    /* 队列空且成本走完 → 3D 引擎空闲（清 bit27）；否则保持忙 */
+    if (g->busy_cycles == 0 && g_q_len == 0 && g_pending == 0)
+        g->gxstat &= ~GXSTAT_BUSY;
+    else
+        g->gxstat |= GXSTAT_BUSY;
 }
 
 static void gx_enqueue(gx_t *g, uint8_t cmd)
 {
     g->cmd_count++;
+    {   /* 21-B9yi(续24) 诊断：NDS_GXDBG=1 → 打印入队/喂参数 */
+        static int dbg = -1;
+        if (dbg < 0) dbg = (getenv("NDS_GXDBG") != NULL) ? 1 : 0;
+        if (dbg) printf("gxdbg: enqueue cmd=%02X nparams=%d qlen=%d pending=%d\n",
+                        cmd, gx_cmd_nparams(cmd), g_q_len, g_pending);
+    }
     int n = gx_cmd_nparams(cmd);
     if (g_q_len >= GX_QUEUE_CAP)
         return; /* 队列满：丢弃（正常流程不会发生） */
@@ -84,19 +116,28 @@ static void gx_enqueue(gx_t *g, uint8_t cmd)
     g_q[idx].filled = 0;
     g_q_len++;
     g_pending += n;
-    gx_flush(g);
+    g->gxstat |= GXSTAT_BUSY;         /* 有新命令排队：引擎忙 */
 }
 
 static void gx_feed_param(gx_t *g, int32_t val)
 {
+    {
+        static int dbg = -1;
+        if (dbg < 0) dbg = (getenv("NDS_GXDBG") != NULL) ? 1 : 0;
+        if (dbg) printf("gxdbg: feed val=%08X qlen=%d pending=%d\n",
+                        (unsigned)val, g_q_len, g_pending);
+    }
     if (g_q_len == 0)
         return;
-    gx_pend_t *p = &g_q[g_q_head];
+    /* 21-B9yi(续24)：参数要喂给**队尾**那条「还没收齐参数」的命令。
+       队列现在会保留已收齐、等待按成本执行的命令（旧实现是入队即执行，
+       队头永远是待填的那条）——继续喂队头会让参数全部丢失、队列卡死。 */
+    gx_pend_t *p = &g_q[(g_q_head + g_q_len - 1) % GX_QUEUE_CAP];
     if (p->filled < p->nparams) {
         p->params[p->filled++] = val;
         g_pending--;
     }
-    gx_flush(g);
+    g->gxstat |= GXSTAT_BUSY;
 }
 
 /* ---- 矩阵运算（行主序 4×4，1.19.12） ---- */
@@ -514,42 +555,8 @@ const uint16_t *gx_framebuffer(const gx_t *g)
    让「等 3D 忙」的轮询循环耗时与参考核同量级。 */
 void gx_advance(gx_t *g, uint32_t cycles)
 {
-    /* 21-B9yi(续22)：3D 引擎按节拍消费 FIFO 里的字（约 4 个系统周期 1 字，
-       与 melonDS 的 3D 命令周期同一量级）。模式 7 DMA 靠这个腾出空位推进。 */
-    if (g->fifo_words != 0) {
-        /* NDS_GXDRAIN=N：校准用（默认 4 周期/字）。改这个值相当于调 3D 引擎
-           消费 FIFO 的速度，直接影响模式 7 DMA 的完成时机与游戏节拍。 */
-        static uint32_t div = 0xFFFFFFFFu;
-        if (div == 0xFFFFFFFFu) {
-            const char *e = getenv("NDS_GXDRAIN");
-            /* 默认 128：实测标定的最优点（见 docs/21 续23）。
-               4/16 太快 ⇒ 本地跑在参考核前面（f=2120 起内容分歧）；
-               128 与 256 都能把「逐帧 100% 一致」保持到 f=2140，256 之后会整体拖慢。 */
-            div = (e != NULL && e[0] != '\0') ? (uint32_t)atoi(e) : 128u;
-            if (div == 0) div = 128u;
-        }
-        uint32_t drain = cycles / div;
-        /* 余数必须累加（ARM9 每步只给 1-2 个周期，`cycles/div` 会恒为 0）。 */
-        g->fifo_drain_acc += cycles;
-        uint32_t drain2 = g->fifo_drain_acc / div;
-        if (drain2 != 0) {
-            g->fifo_drain_acc -= drain2 * div;
-            if (drain2 > g->fifo_words) {
-                drain2 = g->fifo_words;
-                g->fifo_drain_acc = 0;   /* FIFO 已空：余数清零，避免“攒出”一次突发 */
-            }
-            g->fifo_words -= drain2;
-        }
-        (void)drain;
-    }
-    if (g->busy_cycles == 0)
-        return;
-    if (cycles >= g->busy_cycles) {
-        g->busy_cycles = 0;
-        g->gxstat &= ~GXSTAT_BUSY;
-    } else {
-        g->busy_cycles -= cycles;
-    }
+    /* 21-B9yi(续24)：按 3D 引擎的工作周期推进命令队列（成本驱动，见 gx_run_due）。 */
+    gx_run_due(g, cycles);
 }
 
 uint32_t gx_fifo_free_words(const gx_t *g)

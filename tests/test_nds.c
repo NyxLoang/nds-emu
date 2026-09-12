@@ -3302,6 +3302,9 @@ static void test_dma_owner_routing(nds_t *nds)
     nds->bus->active_is_arm7 = 1;
     dma_fire(&nds->io->dma[0], nds->bus, DMA_START_VBLANK, 0);
     CHECK_EQ("dma gx cmds", nds->io->gx.cmd_count - cmds_before, 2u);
+    /* 21-B9yi(续24)：GX 命令改为「按命令成本消费」（不立即执行），
+       测试里显式推进一次引擎时钟。 */
+    gx_advance(&nds->io->gx, 100000u);
     CHECK_EQ("dma gx mt_mode", nds->io->gx.mt_mode, 2u);
     CHECK_EQ("dma restores core flag", nds->bus->active_is_arm7, 1); /* 原样恢复 */
     nds->bus->active_is_arm7 = 0;
@@ -3510,6 +3513,7 @@ static void test_dma_gx_fifo_mode(nds_t *nds)
                 | (DMA_START_GXFIFO << DMA_CNT_MODE_SHIFT) | DMA_CNT_ENABLE);
 
     CHECK_EQ("gxfifo dma cmds", nds->io->gx.cmd_count - before, 2u);
+    gx_advance(&nds->io->gx, 100000u);   /* 21-B9yi(续24)：同上，显式推进引擎 */
     CHECK_EQ("gxfifo dma mt_mode", nds->io->gx.mt_mode, 2u);
     CHECK_EQ("gxfifo dma enable cleared",
              bus_read16(nds->bus, dma0 + 10) & DMA_CNT_ENABLE, 0u);
@@ -5055,6 +5059,8 @@ static void test_gx_fifo(nds_t *nds)
     /* END_VTXS → 光栅化三角形 (127,95)-(255,95)-(127,191) */
     bus_write32(bus, GX_GXFIFO, 0x41);
 
+    /* 21-B9yi(续24)：命令按成本排程执行，测试里显式把引擎时钟推够。 */
+    gx_advance(g, 100000u);
     CHECK_EQ("gx fifo in",   g->fb[120 * GX_SCREEN_W + 200], 0x7C00u);
     CHECK_EQ("gx fifo out1", g->fb[160 * GX_SCREEN_W + 200], 0u);
     CHECK_EQ("gx fifo out2", g->fb[100 * GX_SCREEN_W + 120], 0u);

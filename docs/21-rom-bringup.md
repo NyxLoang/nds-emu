@@ -4478,3 +4478,43 @@ refgxw（f=2140-2145）：**0 条**
 **下一步**：把 f=2130-2150 的**代码路径**对齐——本地在 GX 提交、参考核在
 ITCM 流式加载 ⇒ 先弄清「谁先进入下一阶段」以及是哪一次等待/事件造成的，
 再决定是补 GX 管线节拍还是修流式加载的触发条件。
+
+---
+
+### 21-B9yi（续27，修复）：bit27 只在交换缓冲后置位 + FIFO 按**条目**节流 ⇒ f=2130 的 GX 停摆解除
+
+**改动**（`src/gx/gx.{c,h}`、`src/io/dma.c`、`tests/test_nds.c`）：
+
+1. **bit27（GXSTAT bit27）按 melonDS 口径**：melonDS 全文件只有 `SWAP_BUFFERS`
+   分支置位（`GXStat |= (1<<27)`），`FinishWork()` 排空管线时清位。本地新增
+   `gx_t.swap_busy`，只有交换缓冲后的管线期间才忙（此前「每次入队都置忙」会在
+   游戏写长命令时锁死）。
+2. **GX FIFO 按条目节流**：`gx_fifo_can_accept()` 用 melonDS `CmdPIPE` 的 **112 条
+   条目**口径（不是字数）：队列未满可收；满但仍有命令缺参数也可收（参数属于
+   已有条目）；只有「满且无待填参数」才挡（此时下一个字必然是新命令）。
+3. **模式 7 DMA 每次只推一个字**，由 `dma_gx_resume()` 在引擎消费后继续
+   （对齐 `GPU3D::CheckFIFODMA()`），测试同步改成「泵引擎 + 续跑 DMA」。
+
+**实测（本地侧）**：
+
+```
+修复前 f=2135-2152：ARM9 一直卡在 GXSTAT bit27 忙等（0x020046B8-C0），
+                    gxfifo=71096 q=113 pend=744（队列卡在缺参数的 0x34 上）
+修复后 f=2135-2140：ARM9 在 ITCM 游戏代码里正常推进
+                    （01FFDD30 / 01FFE03C / 01FFD80C / 01FFA9A4 / 01FFE174 / 01FFDDA0）
+                    与参考核 f=2140-2152 的 ctrace 形态一致（同为 ITCM/主存流式代码）
+单测 931 项 0 失败；900 帧三标记（FFFFFFF/1/1）一致
+```
+
+⚠️ **工具链损失与恢复计划**：本轮发现 Windows 的 `%TEMP%` 被系统清理，
+`melonds-ref`（melonDS 参考核源码 + 我们打的全部诊断补丁）与 `ref_fb_*.bin`
+参考帧缓存**都已不存在**，因此「逐像素对照」暂时不可用。恢复步骤：
+
+1. 重新 clone melonDS（BSD-2）到 `%TEMP%\melonds-ref`，用 cmake+ninja 构建 `refhead`；
+2. 以仓库里保留的 `ref_harness.cpp`（旧版基线）为起点，按本文档记录过的
+   `REF_FRAMES`/`REF_CART_TRACE`/`REF_CART_LOG`/`REF_IOLOG`/`REF_WATCH`/`REF_IRQLOG`/
+   `REF_DMALOG`/`REF_GXFIFO`/`REF_NORENDER`/`REF_DUMP_RAM`/`REF_SHOT_EVERY` 逐项补回；
+3. 先跑 f≤2140 的逐帧比对做基线回归，再继续追 f=2150+。
+
+> 教训：参考核工具链与参考帧缓存不应只存在于 `%TEMP%`——恢复后应把 harness
+> 与关键补丁同步进仓库（例如 `tools/ref/`），避免再次丢失。

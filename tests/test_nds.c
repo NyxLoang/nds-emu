@@ -3512,8 +3512,15 @@ static void test_dma_gx_fifo_mode(nds_t *nds)
                 DMA_CNT_32BIT | DMA_CNT_DST_FIX
                 | (DMA_START_GXFIFO << DMA_CNT_MODE_SHIFT) | DMA_CNT_ENABLE);
 
+    /* 21-B9yi(续27)：GX-FIFO DMA 现在**每次只推一个字**（按 melonDS CmdPIPE 112 条
+       条目的容量节流），由引擎消费 FIFO 后经 `dma_gx_resume()` 续推。
+       测试按游戏环境的方式泵：推进引擎 + 续跑 DMA，直到搬运完成。 */
+    for (int spin = 0; spin < 200 &&
+         (bus_read16(nds->bus, dma0 + 10) & DMA_CNT_ENABLE) != 0u; spin++) {
+        gx_advance(&nds->io->gx, 4000u);
+        dma_gx_resume(&nds->io->dma[0], nds->bus, 0);
+    }
     CHECK_EQ("gxfifo dma cmds", nds->io->gx.cmd_count - before, 2u);
-    gx_advance(&nds->io->gx, 100000u);   /* 21-B9yi(续24)：同上，显式推进引擎 */
     CHECK_EQ("gxfifo dma mt_mode", nds->io->gx.mt_mode, 2u);
     CHECK_EQ("gxfifo dma enable cleared",
              bus_read16(nds->bus, dma0 + 10) & DMA_CNT_ENABLE, 0u);

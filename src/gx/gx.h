@@ -98,11 +98,19 @@ typedef struct gx {
        电平位恒为「空」，与参考核不同。 */
     uint32_t fifo_words;
 #define GX_FIFO_CAP_WORDS 224u
+    /* 21-B9yi(续27)：melonDS 的 GX FIFO 是 **112 条命令条目**（`CmdPIPE`），
+       满了就 `GXFIFOStall()` 卡住写入方（CPU/模式 7 DMA）；游戏则用
+       「等 GXSTAT bit27 落 0」来等引擎腾空。本地没有 CPU 停摆机制，
+       改为**用 bit27 表达「FIFO 满」**（游戏本来就在轮询它），
+       参数写入不受影响（参数属于已有条目）。 */
+#define GX_FIFO_CAP_ENTRIES 112u
     /* 21-B9yi(续23)：FIFO 消费的**周期余数累加器**。ARM9 每步只推进 1-2 个周期，
        若直接 `cycles/div` 取整会永远得 0 ⇒ FIFO 永不消费 ⇒ 模式 7 DMA 永远卡住
        （实测 f=2141 起 ARM9 在 0x0202350C 三指令小循环里死等 10+ 帧）。
        与「卡带时钟用满周期预算」是同一类修正。 */
     uint32_t fifo_drain_acc;
+    /* 21-B9yi(续27)：交换缓冲之后的「管线忙」标志（对应 melonDS 的 bit27）。 */
+    int swap_busy;
 
     int mt_mode;         /* 当前矩阵模式 0=投影 1/2=位置 3=纹理 */
     int64_t proj[16];    /* 投影矩阵 */
@@ -150,6 +158,7 @@ void gx_advance(gx_t *g, uint32_t cycles);
 
 /* 21-B9yi(续22)：GX 命令 FIFO 的剩余空间（字）。模式 7 DMA 用它决定一次搬多少。 */
 uint32_t gx_fifo_free_words(const gx_t *g);
+int gx_fifo_can_accept(const gx_t *g);
 
 /* 21-B9yi(续25) 诊断：队列/引擎状态快照（FIFO 字数、工作周期余额、队列长度、
    待收参数数），供 runner 逐帧 trace 打印。 */

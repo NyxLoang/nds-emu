@@ -60,6 +60,7 @@ static int gx_cmd_nparams(uint8_t cmd)
 }
 
 static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p);
+static void gx_update_busy(gx_t *g);   /* 21-B9yi(续27)：前置声明 */
 
 /* 21-B9yi(续24)：**按命令成本消费队列**（不再「入队即执行」）。
    melonDS 的 3D 引擎按 `GPU3D::AddCycles()` 记的每命令工作周期推进
@@ -106,11 +107,12 @@ static void gx_run_due(gx_t *g, uint32_t cycles)
         g->fifo_words = (g->fifo_words >= words) ? (g->fifo_words - words) : 0u;
         gx_exec(g, c.cmd, c.params);  /* 内部按命令类型累加 busy_cycles */
     }
-    /* 队列空且成本走完 → 3D 引擎空闲（清 bit27）；否则保持忙 */
-    if (g->busy_cycles == 0 && g_q_len == 0 && g_pending == 0)
-        g->gxstat &= ~GXSTAT_BUSY;
-    else
-        g->gxstat |= GXSTAT_BUSY;
+    /* 21-B9yi(续27)：bit27 只表达「FIFO 满 / 有未完成工作」（见 gx_update_busy）。
+       —— 不再「每次入队都置忙」：游戏写长命令时是「发命令+第 1 个参数 → 等 bit27
+       落 0 → 再发剩余参数」，按入队置忙会在第 1 个参数后就永久卡住。 */
+    if (g->busy_cycles == 0)
+        g->swap_busy = 0;      /* 管线排空：交换缓冲的忙窗结束 */
+    gx_update_busy(g);
 }
 
 static void gx_enqueue(gx_t *g, uint8_t cmd)
@@ -131,7 +133,7 @@ static void gx_enqueue(gx_t *g, uint8_t cmd)
     g_q[idx].filled = 0;
     g_q_len++;
     g_pending += n;
-    g->gxstat |= GXSTAT_BUSY;         /* 有新命令排队：引擎忙 */
+    gx_update_busy(g);                /* 队列满才置忙（对齐 melonDS GXFIFOStall） */
 }
 
 static void gx_feed_param(gx_t *g, int32_t val)
@@ -152,7 +154,7 @@ static void gx_feed_param(gx_t *g, int32_t val)
         p->params[p->filled++] = val;
         g_pending--;
     }
-    g->gxstat |= GXSTAT_BUSY;
+    gx_update_busy(g);
 }
 
 /* ---- 矩阵运算（行主序 4×4，1.19.12） ---- */
@@ -361,7 +363,12 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
         if (nogx < 0) nogx = (getenv("NDS_NOGXBUSY") != NULL) ? 1 : 0;
         if (!nogx) {
             g->busy_cycles += cost;
-            g->gxstat |= GXSTAT_BUSY;
+            /* 21-B9yi(续27)：只有交换缓冲才进入「管线忙」（melonDS 口径），
+               其余命令只累加工作周期。 */
+            if (cmd == GX_CMD_SWAP_BUFFERS) {
+                g->swap_busy = 1;
+                g->gxstat |= GXSTAT_BUSY;
+            }
         }
     }
     switch (cmd) {
@@ -576,9 +583,35 @@ void gx_advance(gx_t *g, uint32_t cycles)
 
 uint32_t gx_fifo_free_words(const gx_t *g)
 {
-    if (g->fifo_words >= GX_FIFO_CAP_WORDS)
-        return 0;
-    return GX_FIFO_CAP_WORDS - g->fifo_words;
+    /* 21-B9yi(续27)：按 melonDS 的**条目**口径（112 条），不是字数。 */
+    int free_entries = (int)GX_FIFO_CAP_ENTRIES - g_q_len;
+    return (free_entries > 0) ? (uint32_t)free_entries : 0u;
+}
+
+/* 21-B9yi(续27)：FIFO 能否再收一个字。
+   队列未满 → 可以；队列满但仍有命令缺参数 → 也可以（参数属于已有条目，
+   melonDS 一样收）；只有「满且无待填参数」时才挡（此时下一个字是新命令）。 */
+int gx_fifo_can_accept(const gx_t *g)
+{
+    if (g_q_len < (int)GX_FIFO_CAP_ENTRIES)
+        return 1;
+    return (g_pending > 0) ? 1 : 0;
+}
+
+/* 21-B9yi(续27)：用 bit27 表达「FIFO 满 / 有未完成工作」——melonDS 里
+   FIFO 满会 `GXFIFOStall()` 停住写入方，而游戏正是用「等 bit27 落 0」
+   来等引擎腾空；本模型把这两件事合到同一个可观测位上。 */
+static void gx_update_busy(gx_t *g)
+{
+    /* 21-B9yi(续27)：melonDS 全文件只有 `SWAP_BUFFERS` 分支置 bit27
+       （`GXStat |= (1<<27)`），并在 `FinishWork()`（管线排空）时清掉。
+       本地按同一口径：**只有交换缓冲之后的管线期间才忙**。
+       注意若把「FIFO 满」也当成忙，会与游戏「发命令 + 第 1 个参数 → 等 bit27
+       → 再发剩余参数」的写法互相锁死（实测 q 卡在 113、pend 744）。 */
+    if (g->swap_busy && g->busy_cycles > 0)
+        g->gxstat |= GXSTAT_BUSY;
+    else
+        g->gxstat &= ~GXSTAT_BUSY;
 }
 
 /* 21-B9yi(续25) 诊断：把 GX 队列/引擎状态暴露给 runner 的逐帧 trace

@@ -123,12 +123,12 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm
                      == DMA_START_GXFIFO));
     uint32_t to_do = n;
     if (is_gx && bus != NULL && bus->io != NULL) {
-        uint32_t freew = gx_fifo_free_words(&bus->io->gx);
-        uint32_t units_free = is32 ? freew : (freew * 2u);
-        if (units_free == 0)
-            units_free = 0;
-        if (to_do > units_free)
-            to_do = units_free;
+        /* 21-B9yi(续27)：GX-FIFO 的「满」按**条目**算（melonDS CmdPIPE 112 条）；
+           参数属于已有条目。每次只推一个字，由 `dma_gx_resume()` 续推。 */
+        if (!gx_fifo_can_accept(&bus->io->gx))
+            to_do = 0;
+        else if (to_do > 1u)
+            to_do = 1u;
     }
     if (dma->rem == 0)
         dma->rem = n;
@@ -297,7 +297,7 @@ void dma_gx_resume(dma_t *dma, struct bus *bus, int is_arm7)
         unsigned mode = (d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT;
         if (mode != DMA_START_GXFIFO)
             continue;
-        if (gx_fifo_free_words(&bus->io->gx) == 0)
+        if (!gx_fifo_can_accept(&bus->io->gx))
             continue;
         dma_transfer(d, bus, c, is_arm7);
     }

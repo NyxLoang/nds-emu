@@ -566,6 +566,20 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
     /* 卡带数据端口 CARD_DATA（0x04100010）在 IO 区间外，需整体读（读自动推进地址） */
     if (addr == BUS_CARD_DATA)
     {
+        /* 21-B9yi 诊断：NDS_CARTLOG2=LO-HI 时打印每次数据端口读的（帧, CPSR）,
+           用于对照「参考核的块读是否在关中断状态下原子完成」 */
+        {
+            extern unsigned long long g_dbg_frame;
+            static long lo = -2, hi = -1;
+            if (lo == -2) {
+                const char *e = getenv("NDS_CARTLOG2");
+                lo = 0; hi = -1;
+                if (e != NULL && sscanf(e, "%ld-%ld", &lo, &hi) != 2) { lo = 0; hi = -1; }
+            }
+            if ((long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi)
+                printf("cartrd: f=%llu cpsr=%08X pc=%08X\n",
+                       g_dbg_frame, bus->dbg_cpsr, bus->dbg_pc);
+        }
         uint32_t v = bus->io != NULL ? io_card_data_read32(bus->io) : 0xFFFFFFFFu;
         if (bus->diag)
             bus_dbg_watch_read(bus, addr, 4, v);

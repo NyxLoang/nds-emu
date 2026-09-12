@@ -201,6 +201,19 @@ static void cartbus_end(cartbus_t *cb)
 
 uint8_t cartbus_read8(cartbus_t *cb, uint32_t addr)
 {
+    if (addr == CART_ROMCTRL + 3) {
+        /* 21-B9yi 诊断：NDS_CARTLOG3=LO-HI → 游戏读 ROMCTRL 高字节（bit31/23） */
+        extern unsigned long long g_dbg_frame;
+        static long lo = -2, hi = -1;
+        if (lo == -2) {
+            const char *e = getenv("NDS_CARTLOG3");
+            lo = 0; hi = -1;
+            if (e != NULL && sscanf(e, "%ld-%ld", &lo, &hi) != 2) { lo = 0; hi = -1; }
+        }
+        if ((long)g_dbg_frame >= lo && (long)g_dbg_frame <= hi)
+            printf("cartlog3: f=%llu RD hi=%02X full=%08X\n",
+                   g_dbg_frame, (unsigned)(cb->romctrl >> 24), cb->romctrl);
+    }
     if (addr >= CART_AUXSPICNT && addr < CART_AUXSPICNT + 2)
         return (uint8_t)(cb->auxspicnt >> ((addr - CART_AUXSPICNT) * 8));
     if (addr >= CART_AUXSPIDATA && addr < CART_AUXSPIDATA + 2)

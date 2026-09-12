@@ -250,6 +250,21 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         /* 写 CNT_H 且使能=1 时在 dma_write8 内同步触发立即搬运；
            若卡带已就绪且本条是卡带触发源，则在写完后补触发。 */
         dma_write8(&io->dma[is_arm7 ? 1 : 0], addr, val, io->bus, is_arm7);
+        /* 21-B9yi 诊断：NDS_DMALOG=1 → 打印每次 DMA 寄存器写（帧/地址/值/PC） */
+        {
+            extern unsigned long long g_dbg_frame;
+            static int dmallog_state, dmallog_n;
+            if (dmallog_state == 0) {
+                const char *e = getenv("NDS_DMALOG");
+                dmallog_state = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : -1;
+            }
+            if (dmallog_state == 1 && dmallog_n < 400000) {
+                dmallog_n++;
+                printf("dmalog: f=%llu arm%d a=%08X v=%02X pc=%08X\n",
+                       g_dbg_frame, is_arm7 ? 7 : 9, addr, val,
+                       io->bus != NULL ? io->bus->dbg_pc : 0u);
+            }
+        }
         io_card_dma_check(io, is_arm7);
         return;
     }

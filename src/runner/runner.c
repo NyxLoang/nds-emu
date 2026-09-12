@@ -143,9 +143,12 @@ struct runner {
    ARM9 每帧指令数达参考核的 2.25 倍（frame 8：本地 758 万 vs 参考 337 万），
    于是开机时间线整体提前（参考核第 26 帧才开显示，本地第 ~13 帧就开了）。
    默认改为 ÷1；`NDS_ARM9_DIV=2` 可切回旧口径做 A/B。 */
-static int s_arm9_div = 1;
-#define RUNNER_ARM9_DIV (s_arm9_div)
-#define RUNNER_SYS9(c) ((c) / (uint64_t)RUNNER_ARM9_DIV)
+/* 21-B9yi(续64)：**热点修正** —— 原来是 `(c) / s_arm9_div`，除数是**运行时变量**，
+   编译器只能生成 64 位除法指令（~20-40 周期），而它在**每条指令**的调度路径上
+   被调用 3 次（选择 ARM9/ARM7 该走谁、以及推进系统时间）。口径只有 1 或 2 两种，
+   直接换成移位：÷1 = 不移、÷2 = 右移 1 位（无符号除法等价）。 */
+static unsigned s_arm9_shift;             /* 0 = ÷1（默认）、1 = ÷2（旧口径 A/B） */
+#define RUNNER_SYS9(c) ((uint64_t)(c) >> s_arm9_shift)
 
 /* 21-B9wz 诊断：整段运行的 ARM9 累积热点（hot9: 前 16 + 占比 + 总数）。
    和参考核的 ins9/hist9 对照用：两边热点集合一致说明代码路径相同，
@@ -173,8 +176,8 @@ runner_t *runner_create(nds_t *nds)
     if (r == NULL)
         return NULL;
     {   /* 21-B9yg：ARM9 时钟折算口径（默认 1；NDS_ARM9_DIV=2 切回旧口径做 A/B） */
-        const char *e = getenv("NDS_ARM9_DIV");
-        s_arm9_div = (e != NULL && e[0] == '2') ? 2 : 1;
+    const char *e = getenv("NDS_ARM9_DIV");
+    s_arm9_shift = (e != NULL && e[0] == '2') ? 1u : 0u;   /* 见 RUNNER_SYS9 注释 */
     }
     r->nds = nds;
     r->frame_cycles = 560190;
@@ -254,7 +257,8 @@ static int runner_step(runner_t *r)
 
     if (r->a9_wait && RUNNER_WAKE9_IO(nds->io)) {
         r->a9_wait = 0;
-        r->cost9 = r->tm.now * RUNNER_ARM9_DIV;
+        /* 21-B9yi(续64)：与 RUNNER_SYS9 配套 —— 折算口径 1 或 2 用移位表达 */
+        r->cost9 = r->tm.now << s_arm9_shift;
     }
     if (r->a7_wait && RUNNER_WAKE7_IO(nds->io)) {
         r->a7_wait = 0;

@@ -181,14 +181,20 @@ static unsigned long long s_prof_fetch, s_prof_exec;
 /* 21-B9yi(续55)：把 IO 推进再拆成「定时器」与「卡带/GX 时钟」两块
    （两者优化手段完全不同：前者可做事件化，后者可做活动位守卫）。 */
 static unsigned long long s_prof_tmr, s_prof_cart;
+/* 21-B9yi(续63)：**抽样**开关。此前每条指令都插 rdtsc（一进一出共 8 次以上），
+   而每条指令本身才 ~100 个周期 —— 测量开销把「other」桶撑到 50%+，占比失真。
+   改成每 64 条指令只测一条：单条测量误差仍在，但**占比可信**（误差被摊薄 64 倍）。 */
+static unsigned s_prof_seq;
+static int s_prof_meas;
+static unsigned long long s_prof_first_tsc;   /* 首次进入 cpu_step 的 TSC（算占墙钟比例） */
 static int s_prof_on = -1;
 /* 插桩宏：`NDS_PROF_BUILD` 构建里按开关决定是否读时钟；
    默认构建里两个宏都退化成「什么都不做 / 常量 0」，编译器会把整段分支消掉。 */
-#define PROF_T0() ((s_prof_on) ? cpu_rdtsc() : 0ULL)
+#define PROF_T0() ((s_prof_meas) ? cpu_rdtsc() : 0ULL)
 #define PROF_ADD(counter, t0) \
-    do { if (s_prof_on) (counter) += cpu_rdtsc() - (t0); } while (0)
+    do { if (s_prof_meas) (counter) += cpu_rdtsc() - (t0); } while (0)
 #define PROF_STEP_END(t0) \
-    do { if (s_prof_on) { s_prof_steps++; s_prof_all += cpu_rdtsc() - (t0); } } while (0)
+    do { if (s_prof_meas) { s_prof_steps++; s_prof_all += cpu_rdtsc() - (t0); } } while (0)
 #else
 #define PROF_T0() 0ULL
 #define PROF_ADD(counter, t0) do { (void)(t0); } while (0)
@@ -212,15 +218,50 @@ static void cpu_prof_report(void)
 {
     if (s_prof_steps == 0 || s_prof_all == 0)
         return;
-    double io_pct = 100.0 * (double)s_prof_io / (double)s_prof_all;
     double fetch_pct = 100.0 * (double)s_prof_fetch / (double)s_prof_all;
     double exec_pct = 100.0 * (double)s_prof_exec / (double)s_prof_all;
     double tmr_pct = 100.0 * (double)s_prof_tmr / (double)s_prof_all;
     double cart_pct = 100.0 * (double)s_prof_cart / (double)s_prof_all;
-    printf("prof: steps=%llu  timers=%.1f%%  cart/gx=%.1f%%  (io=%.1f%%)  fetch=%.1f%%"
-           "  exec=%.1f%%  other(检查/记账/调用开销)=%.1f%%\n",
-           s_prof_steps, tmr_pct, cart_pct, io_pct, fetch_pct, exec_pct,
-           100.0 - io_pct - fetch_pct - exec_pct);
+    /* 21-B9yi(续63)：**自校准** —— 先量一次「一组 rdtsc 进出」的固有成本，
+       再从每个桶里扣掉，否则测出来的占比会被测量本身撑大（实测能撑到 2.3 倍）。 */
+    unsigned long long cal = 0;
+    for (int i = 0; i < 1000; i++) {
+        unsigned long long a = cpu_rdtsc();
+        unsigned long long b = cpu_rdtsc();
+        cal += b - a;
+    }
+    cal /= 1000;   /* 一组「进出」的固有成本（周期） */
+    double steps = (double)s_prof_steps;
+    double per_tmr  = ((double)s_prof_tmr  / steps) - (double)cal;
+    double per_cart = ((double)s_prof_cart / steps) - (double)cal;
+    double per_fetch= ((double)s_prof_fetch/ steps) - (double)cal;
+    double per_exec = ((double)s_prof_exec / steps) - (double)cal;
+    double per_all  = ((double)s_prof_all  / steps) - (double)cal;
+    if (per_tmr  < 0) per_tmr  = 0;
+    if (per_cart < 0) per_cart = 0;
+    if (per_fetch< 0) per_fetch= 0;
+    if (per_exec < 0) per_exec = 0;
+    double per_other = per_all - per_tmr - per_cart - per_fetch - per_exec;
+    if (per_other < 0) per_other = 0;
+    printf("prof: 抽样 1/64，rdtsc 自校准=%llu 周期/组；每条指令（校正后）：\n"
+           "      定时器 %.1f  卡带/GX %.1f  取指 %.1f  译码执行 %.1f  其余(检查/记账/调用) %.1f"
+           "  合计 %.1f 周期\n"
+           "      占比：定时器 %.1f%%  卡带/GX %.1f%%  取指 %.1f%%  执行 %.1f%%  其余 %.1f%%\n"
+           "      steps=%llu  raw: tmr=%.1f%% cart=%.1f%% fetch=%.1f%% exec=%.1f%%\n",
+           cal, per_tmr, per_cart, per_fetch, per_exec, per_other, per_all,
+           100.0 * per_tmr / per_all, 100.0 * per_cart / per_all,
+           100.0 * per_fetch / per_all, 100.0 * per_exec / per_all,
+           100.0 * per_other / per_all,
+           s_prof_steps, tmr_pct, cart_pct, fetch_pct, exec_pct);
+    /* 21-B9yi(续63)：`cpu_step` 占整个运行墙钟的比例。
+       抽样是 1/64，所以把测到的步时间 ×64 近似成全部步时间。
+       这个数字回答「就算把解释器优化到 0，最多能快多少」。 */
+    if (s_prof_first_tsc != 0) {
+        unsigned long long total = cpu_rdtsc() - s_prof_first_tsc;
+        if (total != 0)
+            printf("prof: cpu_step 占墙钟≈%.1f%%（解释器优化上限）\n",
+                   100.0 * (double)(s_prof_all * 64ull) / (double)total);
+    }
 }
 #endif /* NDS_PROF_BUILD */
 
@@ -280,6 +321,12 @@ int cpu_step(arm_cpu_t *cpu)
 {
     /* 21-B9yi(续52)：诊断开关已在 cpu_diag_init()（cpu_create）里解析完，
        热路径只剩一次普通全局变量读取。 */
+    /* 21-B9yi(续63)：抽样决策（每 64 条指令测一条，见 s_prof_seq 的注释）。 */
+#ifdef NDS_PROF_BUILD
+    if (s_prof_on && s_prof_first_tsc == 0)
+        s_prof_first_tsc = cpu_rdtsc();
+    s_prof_meas = s_prof_on && ((s_prof_seq++ & 63u) == 0u);
+#endif
     unsigned long long prof_t0 = PROF_T0();
     /* 21-B9yi(续53)：把热路径反复用到的两个指针/标志提到局部变量。
        原来每步要写 `cpu->nds->bus->...` / `cpu->nds->io->...` 这类三级链式取址
@@ -346,13 +393,11 @@ int cpu_step(arm_cpu_t *cpu)
        定时器会系统性偏慢；melonDS 定时器是挂在系统时钟上的）。 */
     unsigned long long prof_io_t0 = PROF_T0();
     io_advance_timers(io, cpu->is_arm7, prev_cost ? prev_cost : 1u);
-    PROF_ADD(s_prof_io, prof_io_t0);
     PROF_ADD(s_prof_tmr, prof_io_t0);
     unsigned long long prof_cart_t0 = PROF_T0();
     /* 21-B9yi(续56)：GX/卡带都不忙时整段跳过（门控由 io 模块维护，见 io.h）。 */
     if (io->cart_clock_on)
         io_advance_cart(io, cpu->is_arm7, prev_cost);
-    PROF_ADD(s_prof_io, prof_cart_t0);
     PROF_ADD(s_prof_cart, prof_cart_t0);
     /* 21-B9yi(续53)：IF/IE/IME 在这一步里最多被查 3 次（WFI 唤醒、屏蔽提示、
        受理 IRQ）。这里算一次存起来复用 —— timer/card 的 IF 位在上面两行

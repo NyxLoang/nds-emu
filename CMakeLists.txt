@@ -102,6 +102,16 @@ target_compile_options(ndscore PRIVATE -O2)
 target_compile_options(nds-emu PRIVATE -O2)
 target_compile_options(test_nds PRIVATE -O2)
 
+# 21-B9yi(续54)：**细粒度阶段剖析**编译开关。
+# `NDS_PROF=1` 的取指/译码/IO 分桶要在热路径上每步插 rdtsc，这些分支**默认构建里
+# 也要花钱**（实测会吃掉微优化的收益：续53 的清理本来是正的，但被这几条分支抵掉）。
+# 因此默认关闭；要剖析时单独配置一个构建目录：
+#   cmake -S . -B build-prof2 -DNDS_PROF=ON && cmake --build build-prof2
+option(NDS_PROF "启用细粒度阶段剖析（每步 rdtsc，开发期诊断用）" OFF)
+if(NDS_PROF)
+    target_compile_definitions(ndscore PRIVATE NDS_PROF_BUILD)
+endif()
+
 # 21-B9yi(续41)：**LTO**。解释器每执行一条指令都要跨 TU 调用一批小函数
 # （`timer_advance` / `bus_read*` / `gx_advance` / `cartbus_advance` …），
 # 关掉 LTO 时这些调用无法内联；打开后编译器可以跨文件内联/常量传播。

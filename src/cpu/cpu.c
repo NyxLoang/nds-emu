@@ -161,7 +161,7 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
 }
 
 /* ---------------------------------------------------------------------------
-   21-B9yi(续50) 阶段剖析（诊断设施，`NDS_PROF=1` 才启用）。
+   21-B9yi(续50/续54) 阶段剖析（**编译期**诊断设施，`-DNDS_PROF=ON` 才编进去）。
 
    为什么需要它：本机没有可用的采样 profiler —— gprof 在这套 MinGW 上连
    「hello + 忙循环」都采不到样本（flat profile 恒为空），而 LTO 又让符号消失。
@@ -173,14 +173,31 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
    关闭时只多一次全局 int 判断；开启时每条指令多两次 rdtsc（~30 周期，
    对占比判断影响很小；但**绝对值不能当性能基线**）。
    --------------------------------------------------------------------------- */
+/* 21-B9yi(续54)：只有 `-DNDS_PROF=ON` 的构建才在热路径上插桩（见 CMakeLists 注释）。 */
+#ifdef NDS_PROF_BUILD
 static unsigned long long s_prof_steps, s_prof_io, s_prof_all;
+/* 21-B9yi(续53)：更细的归因（取指 / 译码执行），配合 s_prof_io 决定下一刀砍哪里。 */
+static unsigned long long s_prof_fetch, s_prof_exec;
 static int s_prof_on = -1;
+/* 插桩宏：`NDS_PROF_BUILD` 构建里按开关决定是否读时钟；
+   默认构建里两个宏都退化成「什么都不做 / 常量 0」，编译器会把整段分支消掉。 */
+#define PROF_T0() ((s_prof_on) ? cpu_rdtsc() : 0ULL)
+#define PROF_ADD(counter, t0) \
+    do { if (s_prof_on) (counter) += cpu_rdtsc() - (t0); } while (0)
+#define PROF_STEP_END(t0) \
+    do { if (s_prof_on) { s_prof_steps++; s_prof_all += cpu_rdtsc() - (t0); } } while (0)
+#else
+#define PROF_T0() 0ULL
+#define PROF_ADD(counter, t0) do { (void)(t0); } while (0)
+#define PROF_STEP_END(t0) do { (void)(t0); } while (0)
+#endif
 
 /* 21-B9yi(续52)：`NDS_PCSAMPLE=LO-HI@N` 解析结果（原来在 cpu_step 里惰性解析）。 */
 static int s_ps_on;
 static long s_ps_lo, s_ps_hi;
 static unsigned s_ps_period = 200, s_ps_seen;
 
+#ifdef NDS_PROF_BUILD
 static unsigned long long cpu_rdtsc(void)
 {
     unsigned int lo, hi;
@@ -193,9 +210,14 @@ static void cpu_prof_report(void)
     if (s_prof_steps == 0 || s_prof_all == 0)
         return;
     double io_pct = 100.0 * (double)s_prof_io / (double)s_prof_all;
-    printf("prof: steps=%llu  io-advance=%.1f%%  rest(fetch/exec/mem)=%.1f%%\n",
-           s_prof_steps, io_pct, 100.0 - io_pct);
+    double fetch_pct = 100.0 * (double)s_prof_fetch / (double)s_prof_all;
+    double exec_pct = 100.0 * (double)s_prof_exec / (double)s_prof_all;
+    printf("prof: steps=%llu  io-advance=%.1f%%  fetch=%.1f%%  exec=%.1f%%"
+           "  other(检查/记账/调用开销)=%.1f%%\n",
+           s_prof_steps, io_pct, fetch_pct, exec_pct,
+           100.0 - io_pct - fetch_pct - exec_pct);
 }
+#endif /* NDS_PROF_BUILD */
 
 /* 21-B9yi(续52)：诊断开关的一次性初始化（由 cpu_create 调用，幂等）。
 
@@ -239,38 +261,44 @@ static void cpu_diag_init(void)
         }
     }
 
+#ifdef NDS_PROF_BUILD
     {
         const char *pf = getenv("NDS_PROF");
         s_prof_on = (pf != NULL && pf[0] != '0' && pf[0] != '\0') ? 1 : 0;
         if (s_prof_on)
             atexit(cpu_prof_report);
     }
+#endif
 }
 
 int cpu_step(arm_cpu_t *cpu)
 {
     /* 21-B9yi(续52)：诊断开关已在 cpu_diag_init()（cpu_create）里解析完，
        热路径只剩一次普通全局变量读取。 */
-    unsigned long long prof_t0 = s_prof_on ? cpu_rdtsc() : 0;
+    unsigned long long prof_t0 = PROF_T0();
+    /* 21-B9yi(续53)：把热路径反复用到的两个指针/标志提到局部变量。
+       原来每步要写 `cpu->nds->bus->...` / `cpu->nds->io->...` 这类三级链式取址
+       七八次（每条指令都做），现在只取一次。 */
+    bus_t *bus = cpu->nds->bus;
+    io_t *io = cpu->nds->io;
     /* 21-B9yi：上一条指令消耗的周期数（本步用于推进卡带时钟，使其与
        参考核一样按系统时钟节奏取数；见 io_advance_cart 注释） */
     uint32_t prev_cost = cpu->step_cycles;
     cpu->step_cycles = 1;
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
-    cpu->nds->bus->active_is_arm7 = cpu->is_arm7;
+    bus->active_is_arm7 = cpu->is_arm7;
     /* 21-B9xj：写监视用 PC。取值口径与 melonDS 解释器一致（ARM=当前指令+8、
        Thumb=+4），这样本地与参考 harness 打出来的 pc 可直接对照。
        21-B9yi(续41)：四个字段合并到**一次**条件判断里（原先四次读
        `bus->diag` 的链式指针，编译器无法合并）。 */
-    if (cpu->nds->bus->diag) {
-        bus_t *b = cpu->nds->bus;
-        b->dbg_pc = cpu->r[15] + ((cpu->cpsr & CPSR_T) ? 4u : 8u);
-        b->dbg_lr = cpu->r[14];
-        b->dbg_sp = cpu->r[13];
-        b->dbg_cpsr = cpu->cpsr;
-    }
-    /* 21-B9xs：PC 命中计数（只在开启诊断且有配置时执行） */
-    if (cpu->nds->bus->diag && g_pchit_n > 0) {
+    /* 21-B9yi(续53)：诊断块只判一次 `bus->diag`（原来是两次独立判断），
+       PC 命中计数再在其内部判一次「有没有配置」。 */
+    if (bus->diag) {
+        bus->dbg_pc = cpu->r[15] + ((cpu->cpsr & CPSR_T) ? 4u : 8u);
+        bus->dbg_lr = cpu->r[14];
+        bus->dbg_sp = cpu->r[13];
+        bus->dbg_cpsr = cpu->cpsr;
+      if (g_pchit_n > 0) {
         uint32_t hit_pc = cpu->r[15];
         static unsigned g_pchit_log[16];
         for (int i = 0; i < g_pchit_n; i++) {
@@ -279,29 +307,29 @@ int cpu_step(arm_cpu_t *cpu)
                 g_pchit_hist[cpu->r[0] & 0xFu]++;
                 if (g_pchit_log[i] < 3) {
                     g_pchit_log[i]++;
-                    const bus_t *b = cpu->nds->bus;
                     uint32_t sp = cpu->r[13];
                     printf("pchit-hit: %08X arm%d r0=%08X r7=%08X lr=%08X sp=%08X"
                            " st=%08X/%08X/%08X/%08X\n",
                            hit_pc, cpu->is_arm7 ? 7 : 9, cpu->r[0], cpu->r[7],
                            cpu->r[14], sp,
-                           bus_read32(b, sp), bus_read32(b, sp + 4u),
-                           bus_read32(b, sp + 8u), bus_read32(b, sp + 12u));
+                           bus_read32(bus, sp), bus_read32(bus, sp + 4u),
+                           bus_read32(bus, sp + 8u), bus_read32(bus, sp + 12u));
                 }
             }
         }
+      }
     }
-    irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
+    irq_t *irq = &io->irq[cpu->is_arm7 ? 1 : 0];
     /* 21-B9wt：ARM7 的 HALTCNT 暂停（BIOS SWI 6 Halt / SWI 7 Stop / 游戏
        直接写 0x04000301 都走这里）。唤醒口径与 melonDS HaltInterrupted(1)
        一致：(IF & IE) != 0 即唤醒，不看 IME；唤醒后清请求，让下面的 IRQ
        检查先决定“进 handler”还是“继续执行 BIOS 下一条”。 */
-    if (cpu->is_arm7 && power_halt_pending(&cpu->nds->io->power)) {
+    if (cpu->is_arm7 && power_halt_pending(&io->power)) {
         if (!(irq->ie & irq->ifl)) {
             cpu->step_cycles = 0;
             return 1;
         }
-        power_halt_wake(&cpu->nds->io->power);
+        power_halt_wake(&io->power);
     }
     /* 21-B9yi(续52)：先把 bios_irq_tail9 自己的前置条件写在调用点上，
        绝大多数指令（ARM9 不在 IRQ 模式）因此连函数调用都省了。 */
@@ -311,11 +339,14 @@ int cpu_step(arm_cpu_t *cpu)
     /* 6.5：按本步消耗的周期推进当前核定时器（分频在 timer.c 内处理）。
        21-B9yi：传上一条指令的**实际周期数**（此前固定 1/指令，ARM9 平均 ~1.2，
        定时器会系统性偏慢；melonDS 定时器是挂在系统时钟上的）。 */
-    unsigned long long prof_io_t0 = s_prof_on ? cpu_rdtsc() : 0;
-    io_advance_timers(cpu->nds->io, cpu->is_arm7, prev_cost ? prev_cost : 1u);
-    io_advance_cart(cpu->nds->io, cpu->is_arm7, prev_cost);
-    if (s_prof_on)
-        s_prof_io += cpu_rdtsc() - prof_io_t0;
+    unsigned long long prof_io_t0 = PROF_T0();
+    io_advance_timers(io, cpu->is_arm7, prev_cost ? prev_cost : 1u);
+    io_advance_cart(io, cpu->is_arm7, prev_cost);
+    PROF_ADD(s_prof_io, prof_io_t0);
+    /* 21-B9yi(续53)：IF/IE/IME 在这一步里最多被查 3 次（WFI 唤醒、屏蔽提示、
+       受理 IRQ）。这里算一次存起来复用 —— timer/card 的 IF 位在上面两行
+       （io_advance_*）之后就已经定下来，所以放在这里取是准确的。 */
+    int pend = irq_pending(irq);
     /* 21-B9yi(续12) 诊断：NDS_PCSAMPLE=LO-HI@N → 帧区间内每 N 条 ARM9 指令打印
        一次 PC/lr/cpsr（粗粒度执行轨迹，用来判断「某段等待循环是不是被跳过了」）。
        例：NDS_PCSAMPLE=1903-1905@200 */
@@ -343,10 +374,12 @@ int cpu_step(arm_cpu_t *cpu)
     uint32_t pre_insn = 0;
     int pre_insn_valid = 0;
     if (!cpu->is_arm7 && !(cpu->cpsr & CPSR_T)) {
+        unsigned long long ft0 = PROF_T0();
         pre_insn = cpu_fetch(cpu);
+        PROF_ADD(s_prof_fetch, ft0);
         pre_insn_valid = 1;
         if (pre_insn == 0xEE070F90u) {
-            if (!irq_pending(irq)) {
+            if (!pend) {
                 cpu->step_cycles = 0;
                 return 1;
             }
@@ -358,14 +391,14 @@ int cpu_step(arm_cpu_t *cpu)
         }
     }
     /* 21-B9h：IF&IE 已挂起却被 CPSR.I 屏蔽时只提示一次 */
-    if (irq_pending(irq) && (cpu->cpsr & CPSR_I) && !cpu->irq_mask_logged) {
+    if (pend && (cpu->cpsr & CPSR_I) && !cpu->irq_mask_logged) {
         cpu->irq_mask_logged = 1;
-        if (cpu->nds->bus->diag)
+        if (bus->diag)
             printf("irq: %s IF&IE pending but masked-by-cpsr-I"
                    " cpsr=%08X pc=%08X\n",
                    cpu->is_arm7 ? "arm7" : "arm9", cpu->cpsr, cpu->r[15]);
     }
-    if (irq_pending(irq) && !(cpu->cpsr & CPSR_I)) {
+    if (pend && !(cpu->cpsr & CPSR_I)) {
         cpu->cycles++;
         /* 21-B9yi 诊断：NDS_IRQLOG=1 → 打印每次 IRQ 受理时的
            （帧, 被打断 PC, CPSR, lr），与参考核 `refirq:` 行逐条对照。 */
@@ -475,31 +508,31 @@ int cpu_step(arm_cpu_t *cpu)
     /* 下一条「顺序」指令地址（本条指令长度由执行前的 T 位决定） */
     cpu->next_fetch_pc = ipc + (is_thumb ? 2u : 4u);
     if (is_thumb) {
+        unsigned long long ft0 = PROF_T0();
         uint16_t insn16 = cpu_fetch16(cpu);
+        PROF_ADD(s_prof_fetch, ft0);
         cpu->cycles++;
+        unsigned long long xt0 = PROF_T0();
         int r = thumb_step(cpu, insn16);
+        PROF_ADD(s_prof_exec, xt0);
         /* 21-B9yh：本步取指代价（见 cpu_fetch_cost；step_cycles=0 表示在等待） */
         uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
         if (cpu->step_cycles != 0 && cpu->step_cycles < fc)
             cpu->step_cycles = fc;
-        if (s_prof_on) {
-            s_prof_steps++;
-            s_prof_all += cpu_rdtsc() - prof_t0;
-        }
+        PROF_STEP_END(prof_t0);
         return r;
     }
     /* 21-B9yi(续52)：ARM 态复用上面 WFI 检测时读到的指令字（只读一次指令）。 */
     uint32_t insn = pre_insn_valid ? pre_insn : cpu_fetch(cpu);
     cpu->cycles++;
+    unsigned long long xt0 = PROF_T0();
     int r = exec_step(cpu, insn);
+    PROF_ADD(s_prof_exec, xt0);
     {
         uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
         if (cpu->step_cycles != 0 && cpu->step_cycles < fc)
             cpu->step_cycles = fc;
     }
-    if (s_prof_on) {
-        s_prof_steps++;
-        s_prof_all += cpu_rdtsc() - prof_t0;
-    }
+    PROF_STEP_END(prof_t0);
     return r;
 }

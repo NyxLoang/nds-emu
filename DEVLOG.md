@@ -345,3 +345,4 @@
 | 2026-09-13 | 21-B9yi（续39，代码/取证） | 3D | **纹理/顶点色合成**（melonDS 调制/贴花口径）：本地此前忽略顶点色 ⇒ 颜色偏亮；参考核取证 `vtxcol=(7,8,10)` 证明真机即用暗顶点色调制。并补上光照设施（VecMatrix/DIF_AMB/SPE_EMI/LIGHT_VECTOR/LIGHT_COLOR/NORMAL→CalculateLighting） | [gx](src/gx/gxlog.md) |
 | 2026-09-13 | 21-B9yi（续40，代码/验证） | 3D | **雾效**（FOG_COLOR/FOG_OFFSET/FOG_TABLE 寄存器 + melonDS 逐像素雾化口径）：诊断确认游戏在 f≈2014 开雾，实测作用 341,958 个像素；雾关闭时画面逐值不变 | [gx](src/gx/gxlog.md) |
 | 2026-09-13 | 21-B9yi（续41，性能/负结果+正结果） | 主循环 | 「每指令热点 PC 统计」改为 `NDS_PCHOT=1` 才启用（诊断设施不该跑在热路径）+ `cpu_step` 诊断分支合并 ⇒ 相邻配对 A/B：-21% / -1.9%；另记录 LTO（~1%）与访存监视快速路径（~0%）为**零收益**实验；并记录本机 1.6 倍运行间波动 | [runner](src/runner/runnerlog.md) |
+| 2026-09-13 | 21-B9yi（续42，窗口/缺陷修复） | 主循环/音频 | 新增窗口模式 `--frames N` 冒烟开关；修 **音频子系统未初始化**（窗口模式此前完全没声音：`SDL_OpenAudioDevice` 失败）与 **存档路径中文截断打印**；实测音频 32768Hz/2ch 打开、.sav 按完整文件名写回、自动退出码 0 | [main](src/mainlog.md) |

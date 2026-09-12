@@ -9,6 +9,7 @@
    snd/ 只做纯混音（无 SDL），本模块是「主机侧」设备：打开设备 + 回调取样本。 */
 static nds_t *g_audio_nds = NULL;
 static SDL_AudioDeviceID g_audio_dev = 0;
+static int g_audio_owns_subsystem;   /* 21-B9yi(续42)：音频子系统是否由本模块初始化 */
 #define AUDIO_BUF_FRAMES 1024
 static int16_t g_audio_l[AUDIO_BUF_FRAMES];
 static int16_t g_audio_r[AUDIO_BUF_FRAMES];
@@ -40,6 +41,18 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
 int audio_init(nds_t *nds)
 {
     g_audio_nds = nds;
+    /* 21-B9yi(续42)：**SDL 音频子系统必须先初始化**。窗口模式只 `SDL_Init(VIDEO)`，
+       此前直接 `SDL_OpenAudioDevice` 会失败（"Audio subsystem is not initialized"）
+       ⇒ 窗口模式全程没有声音。这里按需初始化音频子系统（已初始化则跳过），
+       关机时只退出我们自己初始化的那个。 */
+    if (SDL_WasInit(SDL_INIT_AUDIO) == 0) {
+        if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
+            fprintf(stderr, "audio: SDL_InitSubSystem(AUDIO) failed: %s\n",
+                    SDL_GetError());
+            return -1;
+        }
+        g_audio_owns_subsystem = 1;
+    }
     SDL_AudioSpec want, have;
     SDL_zero(want);
     want.freq = (int)SND_MIX_RATE;      /* 32768 Hz */
@@ -69,4 +82,8 @@ void audio_shutdown(void)
     }
     snd_set_host_render_active(0);
     g_audio_nds = NULL;
+    if (g_audio_owns_subsystem) {
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        g_audio_owns_subsystem = 0;
+    }
 }

@@ -22,6 +22,19 @@
 
 /* 小端工具：装载阶段给 0x027FFxxx 直接启动表填 ROM 头信息时用
    （melonDS SetupDirectBoot 口径，阶段 21-B8）。 */
+#ifdef _WIN32
+/* 21-B9yi(续42)：宽路径 → UTF-8 窄字符串（控制台已切 UTF-8，直接 %s 打印），
+   避免 `%ls` 在中文文件名处截断。buf 由调用者提供且往返使用。 */
+static const char *utf8_path(const wchar_t *w)
+{
+    static char buf[1024];
+    if (w == NULL)
+        return "";
+    if (WideCharToMultiByte(CP_UTF8, 0, w, -1, buf, (int)sizeof buf, NULL, NULL) <= 0)
+        buf[0] = '\0';
+    return buf;
+}
+#endif
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
@@ -196,6 +209,8 @@ int main(int argc, char *argv[])
     uint64_t shot_every = 0;
     const char *shot_prefix = NULL;
     uint64_t stats_every = 0;   /* 21-B9yi(续32)：--stats-every N */
+    /* 21-B9yi(续42)：窗口模式自动退出帧数（--frames N，冒烟测试用） */
+    uint64_t g_cli_frames = 0;
 #ifdef _WIN32
     for (int i = 1; i < wargc; i++) {
         if (wcscmp(wargv[i], L"--headless") == 0 && i + 1 < wargc)
@@ -260,6 +275,8 @@ int main(int argc, char *argv[])
             stats_every = _wcstoui64(wargv[i + 1], NULL, 10);
             runner_set_stats_series(stats_every);
         }
+        else if (wcscmp(wargv[i], L"--frames") == 0 && i + 1 < wargc)
+            g_cli_frames = _wcstoui64(wargv[i + 1], NULL, 10);
     }
 #else
     for (int i = 1; i < argc; i++) {
@@ -310,6 +327,8 @@ int main(int argc, char *argv[])
             stats_every = strtoull(argv[i + 1], NULL, 10);
             runner_set_stats_series(stats_every);
         }
+        else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
+            g_cli_frames = strtoull(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--shot-prefix") == 0 && i + 1 < argc) {
             shot_prefix = argv[i + 1];
             runner_set_shot_series(shot_every, shot_prefix);
@@ -439,7 +458,11 @@ int main(int argc, char *argv[])
         save_path = save_make_path_w(rom_path);
         if (save_path != NULL) {
             save_load_file_w(io_get_save(nds->io), save_path);
-            printf("save : loaded %ls (%zu bytes)\n", save_path,
+            /* 21-B9yi(续42)：改成 UTF-8 打印路径。此前 `%ls` 在控制台
+               （已切 UTF-8）遇到中文 ROM 名会在第一个中文处截断，
+               看起来像「路径被吃掉」。 */
+            printf("save : loaded %s (%zu bytes)\n",
+                   utf8_path(save_path),
                    io_get_save(nds->io)->size);
         }
 #else
@@ -536,6 +559,10 @@ int main(int argc, char *argv[])
     int irq_logged = 0;
 
     int quit = 0;
+    /* 21-B9yi(续42)：`--frames N` 跑满 N 帧后自动退出（窗口模式冒烟测试用：
+       验证 SDL 初始化/出图/退出与存档写回，又不用人工关窗口）。 */
+    uint64_t frame_limit = g_cli_frames;
+    uint64_t frames_done = 0;
     while (!quit) {
         int scale = window_get_scale();
 
@@ -620,15 +647,22 @@ int main(int argc, char *argv[])
         menu_render_dropdown(renderer, scale);
 
         SDL_RenderPresent(renderer);
+
+        if (frame_limit != 0 && ++frames_done >= frame_limit) {
+            printf("window: reached --frames %llu, exiting\n",
+                   (unsigned long long)frame_limit);
+            fflush(stdout);
+            quit = 1;
+        }
     }
 
     /* 阶段 16：退出前把存档写回 .sav（须在 nds_destroy 释放存档缓冲之前）。 */
     if (save_path != NULL) {
 #ifdef _WIN32
         if (save_save_file_w(io_get_save(nds->io), save_path) == 0)
-            printf("save : stored %ls\n", save_path);
+            printf("save : stored %s\n", utf8_path(save_path));
         else
-            printf("save : failed to write %ls\n", save_path);
+            printf("save : failed to write %s\n", utf8_path(save_path));
         free(save_path);
 #else
         if (save_save_file(io_get_save(nds->io), save_path) == 0)

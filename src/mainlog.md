@@ -199,3 +199,31 @@
 - VBlank 事件改到 **第 192 扫描线**（`runner_ev_line` 里 `vcount == 192`），
   帧边界改调 `io_frame_boundary()`（VCOUNT 归零 + 清 VBlank 标志）；
   旧的 `--headless` 步进路径同样处理。
+
+### 21-B9yi（续42）— 窗口模式冒烟：`--frames N` + 音频子系统初始化 + 存档路径打印
+
+**背景**：用户实际是在**窗口模式**下玩，但此前没有一条自动化路径能验证「窗口模式
+能不能正常起、出图、放声音、写存档」。本轮补上并发现两处真实缺陷。
+
+**改动**：
+
+1. **`--frames N`**：窗口模式跑满 N 帧后自动退出并打印一行（冒烟测试/自动化用，
+   不必人工关窗口）。
+2. **音频子系统从未初始化**（真实缺陷）：`window_init()` 只 `SDL_Init(SDL_INIT_VIDEO)`，
+   `audio_init()` 直接 `SDL_OpenAudioDevice()` ⇒ 实测报
+   `audio: SDL_OpenAudioDevice failed: Audio subsystem is not initialized`
+   ⇒ **窗口模式全程没有声音**。改为在 `audio_init()` 里按需
+   `SDL_InitSubSystem(SDL_INIT_AUDIO)`（已初始化则跳过），关机时只退出自己初始化的那个。
+3. **存档路径打印截断**（真实缺陷，观感问题）：`printf("%ls")` 在已切 UTF-8 的控制台上
+   遇到中文 ROM 名会在第一个中文处截断，看起来像「路径被吃掉」（实际 .sav 写对了）。
+   改成先转 UTF-8 再 `%s` 打印。
+
+**怎么验证**（窗口模式冒烟，各跑一次）：
+
+```
+--frames 400： save : loaded tools\Z 最终幻想12 …(1024Mb).sav (8192 bytes)
+               audio: device opened 32768 Hz, 2 ch, format=32784      ← 修复前这里是失败
+               window: reached --frames 400, exiting
+               save : stored tools\Z 最终幻想12 …(1024Mb).sav        ← 修复前打印被截断
+退出码 0；tools/ 下的 .sav 用**完整文件名**写回（实测时间戳更新）
+```

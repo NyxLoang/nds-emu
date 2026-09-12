@@ -10,8 +10,8 @@
 
 /* 21-B9xs：PC 命中计数（bring-up 诊断，最多 4 个地址；由 --pchit 配置）。
    用来对照两边"某段代码每帧执行多少次"，例如 ARM7 的消息循环与槽处理。 */
-uint32_t g_pchit_addr[4];
-unsigned long long g_pchit_cnt[4];
+uint32_t g_pchit_addr[16];
+unsigned long long g_pchit_cnt[16];
 int g_pchit_n = 0;
 
 arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc, int is_arm7)
@@ -132,8 +132,9 @@ int cpu_step(arm_cpu_t *cpu)
         cpu->nds->bus->dbg_cpsr = cpu->cpsr;
     /* 21-B9xs：PC 命中计数（只在开启诊断且有配置时执行） */
     if (cpu->nds->bus->diag && g_pchit_n > 0) {
+        uint32_t hit_pc = cpu->r[15];
         for (int i = 0; i < g_pchit_n; i++)
-            if (g_pchit_addr[i] == cpu->r[15])
+            if (g_pchit_addr[i] == hit_pc)
                 g_pchit_cnt[i]++;
     }
     irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];

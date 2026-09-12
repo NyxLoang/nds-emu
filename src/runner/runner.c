@@ -574,8 +574,8 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         }
         {
             /* 21-B9xs：PC 命中计数（--pchit 配置） */
-            extern uint32_t g_pchit_addr[4];
-            extern unsigned long long g_pchit_cnt[4];
+            extern uint32_t g_pchit_addr[16];
+            extern unsigned long long g_pchit_cnt[16];
             extern int g_pchit_n;
             for (int i = 0; i < g_pchit_n; i++)
                 printf("pchit: %08X = %llu\n", g_pchit_addr[i], g_pchit_cnt[i]);

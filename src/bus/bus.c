@@ -580,12 +580,16 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
 {
     /* IPC FIFO SEND（0x04000188）是 32 位寄存器，需整体入队（拆字节会被忽略） */
     if (addr == IO_FIFO_SEND) {
+        if (bus->diag)
+            bus_dbg_watch(bus, addr, 4, val);   /* 21-B9xr：FIFO 发送走特例，需单独挂钩 */
         if (bus->io != NULL)
             io_send32(bus->io, bus->active_is_arm7, val);
         return;
     }
     /* 卡带数据端口 CARD_DATA 写（本阶段占位：读 ROM 用不到） */
     if (addr == BUS_CARD_DATA) {
+        if (bus->diag)
+            bus_dbg_watch(bus, addr, 4, val);
         if (bus->io != NULL)
             io_card_data_write32(bus->io, val);
         return;

@@ -1,6 +1,7 @@
 #include "dma.h"
 #include "bus/bus.h"
 #include "io/io.h"
+#include <stdio.h>
 
 /* 通道内字节偏移（相对本通道基址）：0-3=SAD、4-7=DAD、8-9=CNT_L、10-11=CNT_H */
 static uint32_t ch_off(uint32_t addr)
@@ -63,6 +64,18 @@ static void dma_transfer(dma_channel_t *dma, struct bus *bus, int ch, int is_arm
     uint32_t dst = dma->dad;
     int src_mode = (dma->cnt_h >> 7) & 3u; /* CNT bit23-24 */
     int dst_mode = (dma->cnt_h >> 5) & 3u; /* CNT bit21-22 */
+
+    /* 21-B9xq 诊断：前 40 次 DMA 搬运的通道/属主/源/目的/长度/单位（bring-up 定位用） */
+    {
+        static int dma_log = 0;
+        if (dma_log < 40) {
+            printf("dma: arm%d ch=%d sad=%08X dad=%08X n=%u unit=%d"
+                   " srcmode=%d dstmode=%d cnt=%04X\n",
+                   is_arm7 ? 7 : 9, ch, dma->sad, dma->dad, n, is32 ? 32 : 16,
+                   src_mode, dst_mode, dma->cnt_h);
+            dma_log++;
+        }
+    }
 
     /* 21-B9wu：搬运期间把「当前访问者」切到 DMA 属主核。总线按 active_is_arm7
        分流 IO：0x04000400 在 ARM9 视角是 GX 命令 FIFO、ARM7 视角是音频寄存器；

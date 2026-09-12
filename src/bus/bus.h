@@ -112,6 +112,7 @@ typedef struct bus {
     uint32_t dbg_pc;
     uint32_t dbg_lr;   /* 21-B9xj：写监视打印的 LR（helper 的调用点） */
     uint32_t dbg_sp;   /* 21-B9xj：写监视打印的 SP 与栈上 4 个字（找调用链） */
+    uint32_t dbg_cpsr; /* 21-B9xp：写/读监视打印 CPSR（判断 ARM/Thumb） */
     uint32_t watch_lo[4];
     uint32_t watch_hi[4];
     /* 21-B9xk：读监视（谁在读这个寄存器）。比如看 ARM9 何时从 IPC FIFO 取报文。 */

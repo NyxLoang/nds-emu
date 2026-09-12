@@ -3306,6 +3306,19 @@ static void test_arm7_biosprot_soundbias(nds_t *nds)
     nds->bus->active_is_arm7 = 0;
 }
 
+/* ---- 21-B9xq 用例：GBA 扩展槽空槽读 0xFF（对齐参考核 open-bus）----
+   FFXII 启动用 DMA1 从 0x08000080 取 0x40 字节填 0x02079920-5F；
+   空槽若读 0，签名表会变成 0，进而让 0x027FFC30 与 ARM7 调度器闸门走偏。 */
+static void test_gba_slot_open_bus(nds_t *nds)
+{
+    CHECK_EQ("gba slot read8", bus_read8(nds->bus, 0x08000080u), 0xFFu);
+    CHECK_EQ("gba slot read16", bus_read16(nds->bus, 0x08000080u), 0xFFFFu);
+    CHECK_EQ("gba sram read16", bus_read16(nds->bus, 0x0A000000u), 0xFFFFu);
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("gba slot arm7 read32", bus_read32(nds->bus, 0x0B000000u), 0xFFFFFFFFu);
+    nds->bus->active_is_arm7 = 0;
+}
+
 /* ---- 21-B9xj 用例：DISPSTAT 每核一套（ARM7 不再污染 ARM9）----
    参考核：ARM9IORead16(0x04000004)=DispStat[0]、ARM7IORead16(0x04000004)=
    DispStat[1]；只读位 0-2/6，VCount 比较值 = bit8-15 | (bit7<<8)，
@@ -5657,6 +5670,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_dispstat_per_core(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9xq] GBA 扩展槽空槽读值（0xFF open bus）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_gba_slot_open_bus(nds);
         nds_destroy(nds);
     }
     printf("\n[case 21-B9wy] GXSTAT FIFO 状态位（bit25/26）\n");

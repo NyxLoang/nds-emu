@@ -98,9 +98,10 @@ static void bus_dbg_watch(const bus_t *bus, uint32_t addr, int width,
         if (addr < bus->watch_lo[i] || addr >= bus->watch_hi[i])
             continue;
         printf("watch: arm%d w%d a=%08X v=%08X pc=%08X lr=%08X sp=%08X"
-               " st=%08X/%08X/%08X/%08X f=%llu\n",
+               " cpsr=%08X st=%08X/%08X/%08X/%08X f=%llu\n",
                bus->active_is_arm7 ? 7 : 9, width * 8, addr, val,
                bus->dbg_pc, bus->dbg_lr, bus->dbg_sp,
+               bus->dbg_cpsr,
                bus_read32(bus, bus->dbg_sp), bus_read32(bus, bus->dbg_sp + 4u),
                bus_read32(bus, bus->dbg_sp + 8u),
                bus_read32(bus, bus->dbg_sp + 12u), g_dbg_frame);
@@ -477,6 +478,13 @@ uint8_t bus_read8(const bus_t *bus, uint32_t addr)
 
 static uint8_t bus_read8_core(const bus_t *bus, uint32_t addr)
 {
+    /* 21-B9xq：GBA 扩展槽（0x08000000-0x0BFFFFFF）空槽按参考核返回 0xFF。
+       FFXII 启动时用 DMA1 从 0x08000080 取 0x40 字节填 0x02079920-0x0207995F：
+       空槽 → 全 0xFFFF → 该表尾段 0xFFFF 被拷进 0x027FFC30（见 21-B9xo）。
+       本地此前未映射该区间（读 0），于是填成 0x0000，导致 ARM7 调度器闸门
+       [0x0380BA7C] 不置 1、心跳条数偏多。 */
+    if (addr >= 0x08000000u && addr < 0x0C000000u)
+        return 0xFFu;
     /* IO 区间转发给 io 模块（真实寄存器语义），未挂 io 时读 0 兜底。
        active_is_arm7 让中断/FIFO CNT 等按访问者身份分流。 */
     if (addr >= BUS_IO_BASE && addr - BUS_IO_BASE < BUS_IO_SIZE)

@@ -122,6 +122,8 @@ int cpu_step(arm_cpu_t *cpu)
         cpu->nds->bus->dbg_lr = cpu->r[14];
     if (cpu->nds->bus->diag)
         cpu->nds->bus->dbg_sp = cpu->r[13];
+    if (cpu->nds->bus->diag)
+        cpu->nds->bus->dbg_cpsr = cpu->cpsr;
     irq_t *irq = &cpu->nds->io->irq[cpu->is_arm7 ? 1 : 0];
     /* 21-B9wt：ARM7 的 HALTCNT 暂停（BIOS SWI 6 Halt / SWI 7 Stop / 游戏
        直接写 0x04000301 都走这里）。唤醒口径与 melonDS HaltInterrupted(1)

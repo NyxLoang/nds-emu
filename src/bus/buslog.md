@@ -95,6 +95,23 @@
   新暴露下一个 gap——ARM7 写 `0x04000180/81`（IPCSYNC）被当作未知 IO 忽略，留待 B2。
 - **结果**：✅ 用户验收通过（2026-09-05）。
 
+## 21-B9xq — GBA 扩展槽（slot-2）空槽 open bus = 0xFF
+
+- **证据**：给 `dma_transfer` 加探针后，帧 0 的清单里有
+  `arm9 ch=1 sad=08000080 dad=02079920 n=32 unit=16 cnt=8000`——
+  FFXII 用 DMA1 从 GBA 槽窗口取 64 字节填 `0x02079920-0x0207995F`。
+  参考核的同一笔搬运填出 `0xFFFF`（空槽读 0xFF），本地填出 `0x0000`
+  （该区间未映射、读 0），于是签名表 → `0x027FFC30` → ARM7 调度器闸门
+  `0x0380BA7C` 整条链都跟着偏。
+- **修复**：`bus_read8_core()` 开头对 `0x08000000-0x0BFFFFFF`（slot-2 窗口：
+  GBA ROM/SRAM 及镜像）在无卡时统一返回 `0xFF`（与 melonDS `GBACartSlot`
+  空槽口径一致）。
+- **效果**：`0x02079940/0x02079950` 变 `FFFFFFFF`、`0x027FFC30` 变 `FFFFFFFF`、
+  `0x03808240`（待办位）变 1、`0x0380BA7C`（ARM7 调度器闸门）变 1——
+  与参考核帧 2200 快照逐项一致。
+- **怎么验证**：`test_nds.exe` 907 项检查 0 失败；`--headless-frames 2300 --dump`
+  后与 `ref_f2200_*` 对照上面四个地址。
+
 ## 2026-09-12 · 21-B9ws — ARM7 WRAM 64KB 镜像 + BIOS 可读字节影子
 
 - **ARM7 WRAM 镜像**：参考核 `memregion_WRAM7` 对 ARM7 视角按 64KB 步长镜像

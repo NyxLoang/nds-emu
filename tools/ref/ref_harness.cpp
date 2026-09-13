@@ -22,6 +22,61 @@ namespace melonDS { int RefDbgFrame = -1; }
 static int g_trace_frame = -1;
 static int g_fifo_trace_count = 0;
 
+/* 21-B9yi(续86)：REF_WAV=路径 → 把参考核 SPU 的输出写成 WAV
+   （32768Hz / 16bit / 立体声），与本地 `--snd-wav` 同口径对照「声音」。
+   melonDS 的 RunFrame() 末尾会 SPU.BufferAudio()，所以无音频前端也会产样本。 */
+static std::FILE* g_wav = nullptr;
+static u32 g_wav_data = 0;
+
+static void ref_wav_put16(std::FILE* f, u16 v)
+{
+    u8 b[2] = { (u8)v, (u8)(v >> 8) };
+    std::fwrite(b, 1, 2, f);
+}
+static void ref_wav_put32(std::FILE* f, u32 v)
+{
+    u8 b[4] = { (u8)v, (u8)(v >> 8), (u8)(v >> 16), (u8)(v >> 24) };
+    std::fwrite(b, 1, 4, f);
+}
+static void ref_wav_open(const char* path)
+{
+    g_wav = std::fopen(path, "wb");
+    if (!g_wav) { std::printf("ref-wav: cannot write %s\n", path); return; }
+    g_wav_data = 0;
+    std::fwrite("RIFF", 1, 4, g_wav); ref_wav_put32(g_wav, 0);
+    std::fwrite("WAVE", 1, 4, g_wav);
+    std::fwrite("fmt ", 1, 4, g_wav); ref_wav_put32(g_wav, 16);
+    ref_wav_put16(g_wav, 1); ref_wav_put16(g_wav, 2);
+    ref_wav_put32(g_wav, 32768u); ref_wav_put32(g_wav, 32768u * 4u);
+    ref_wav_put16(g_wav, 4); ref_wav_put16(g_wav, 16);
+    std::fwrite("data", 1, 4, g_wav); ref_wav_put32(g_wav, 0);
+    std::printf("ref-wav: recording to %s (32768Hz/16bit/stereo)\n", path);
+    std::fflush(stdout);
+}
+static void ref_wav_drain(NDS& nds)
+{
+    if (!g_wav) return;
+    static s16 buf[8192];
+    for (;;) {
+        int got = nds.SPU.ReadOutput(buf, 4096);
+        if (got <= 0) break;
+        std::fwrite(buf, 2, (size_t)got * 2u, g_wav);
+        g_wav_data += (u32)got * 4u;
+        if (got < 4096) break;
+    }
+}
+static void ref_wav_close(void)
+{
+    if (!g_wav) return;
+    std::fseek(g_wav, 4, SEEK_SET); ref_wav_put32(g_wav, 36u + g_wav_data);
+    std::fseek(g_wav, 40, SEEK_SET); ref_wav_put32(g_wav, g_wav_data);
+    std::fclose(g_wav);
+    g_wav = nullptr;
+    std::printf("ref-wav: done %u bytes PCM (%.1f s)\n", (unsigned)g_wav_data,
+                (double)g_wav_data / (32768.0 * 4.0));
+    std::fflush(stdout);
+}
+
 namespace melonDS { namespace Platform {
 
 struct FileHandle { std::FILE* f; };
@@ -333,6 +388,12 @@ int main(int argc, char** argv)
     nds->Start();
     std::printf("start done\n"); std::fflush(stdout);
 
+    /* 21-B9yi(续86)：音频输出率对齐本地的 32768Hz，并开始录音 */
+    if (const char* wf = std::getenv("REF_WAV")) {
+        nds->SPU.SetOutputSampleRate(32768.0);
+        ref_wav_open(wf);
+    }
+
     int ref_frames = 6000;
     if (const char* ef = std::getenv("REF_FRAMES"))
         ref_frames = std::atoi(ef);
@@ -359,6 +420,7 @@ int main(int argc, char** argv)
             nds->SetKeyMask((phase < 12) ? (u32)key_mask : 0u);
         }
         nds->RunFrame();
+        ref_wav_drain(*nds);   /* 21-B9yi(续86)：把这一帧的 SPU 样本写入 WAV */
         /* 21-B9yi(续36)：REF_IODUMP_FRAME=N → 打印第 N 帧的 2D 显示寄存器
            （与本地 runner 的 `NDS_IODUMP_FRAME` 同口径对照）。 */
         if (frame == iodump_frame) {
@@ -470,6 +532,7 @@ int main(int argc, char** argv)
 
     std::printf("done arm9=%08X arm7=%08X\n",
         nds->ARM9.R[15], nds->ARM7.R[15]);
+    ref_wav_close();   /* 21-B9yi(续86)：回填 WAV 长度 */
     /* 21-B9yi(续32)：GX 命令直方图（与本地 `NDS_GXHIST=1` 的 gxhist 行对照）。 */
     {
         if (std::getenv("REF_GXHIST") != nullptr) {

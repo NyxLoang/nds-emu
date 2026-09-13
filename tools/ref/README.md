@@ -46,6 +46,17 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_GXDBG_FRAME=N` / `REF_MAT_FRAME=N` | 只 dump 第 N 帧窗口的**矩阵类命令序列** / 打印该帧的 `proj/pos/tex` 关键元素（对应本地 `NDS_GXDBG_FRAME` / `NDS_MAT_FRAME`） |
 | `REF_PROJDBG_FRAME=N` | 在 [N,N+20] 帧内，投影矩阵一变就打印「上一条命令 + 新矩阵」（对应本地 `NDS_PROJDBG`） |
 | `REF_IODUMP_FRAME=N` | 打印第 N 帧的 2D 显示寄存器 + VRAMCNT + 颜色特效寄存器（对应本地 `NDS_IODUMP_FRAME`） |
+| `REF_WAV=路径.wav` | **把参考核 SPU 输出录成 WAV**（32768Hz/16bit/立体声），与本地 `--snd-wav` 同口径对照「声音」（21-B9yi 续86） |
+
+## 运行注意（血泪教训）
+
+* **必须沙箱外运行**：`refhead.exe` 在代码沙箱内启动会被**挂起**（进程存在、CPU 0%、
+  无任何输出），看起来像「程序坏了」。实测在沙箱外运行正常（无参数时按 `main` 立刻
+  返回 1）。诊断口径：`Get-Process refhead | Select-Object CPU` 一直是 0.00 ⇒ 不是慢，
+  是被挂起。
+* 源码树里的**诊断补丁是手写的**（`SPI.cpp` 的 `spiread`、`GPU3D.cpp` 的四个设施），
+  重建时如果报 `NDS::ARM7` 之类的编译错，说明那份补丁与当时的 melonDS 头文件不一致，
+  改成成员访问（`NDS.ARM7.R[15]`）即可 —— 21-B9yi 续86 就是这么修的。
 
 ## melonDS 侧需要的补丁
 

@@ -56,6 +56,10 @@ typedef struct dma_channel {
 /* 4 条通道（阶段 7 只实现 DMA0 一条；阶段 15 补齐全部 4 条）。 */
 typedef struct dma {
     dma_channel_t ch[IO_DMA_COUNT];
+    /* 21-B9yi(续111)：**是否有通道在等 GX FIFO**（模式 7 且使能且 rem>0）。
+       `dma_gx_resume()` 原本每步都要扫 8 个通道（战斗场景 GX 常忙 ⇒ 门控常开），
+       实测是「卡带/GX」桶的主要成分；有这条廉价标志后，空闲时一次 load+test 即返回。 */
+    uint8_t gx_waiting;
 } dma_t;
 
 int dma_is_addr(uint32_t addr);

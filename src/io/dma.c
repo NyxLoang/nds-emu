@@ -194,6 +194,10 @@ void dma_write8(dma_t *dma, uint32_t addr, uint8_t val, struct bus *bus,
             if (mode == DMA_START_IMMED ||
                 (!is_arm7 && mode == DMA_START_GXFIFO))
                 dma_transfer(d, bus, (int)ch_index(addr), is_arm7);
+            /* 21-B9yi(续111)：模式 7 武装后可能被 FIFO 空位卡住 ⇒ 置「等 GX」标志，
+               让 `dma_gx_resume()` 在时钟推进时被调用（否则它会立刻返回）。 */
+            if (!is_arm7 && mode == DMA_START_GXFIFO)
+                dma->gx_waiting = 1;
         }
     }
 }
@@ -286,6 +290,11 @@ void dma_gx_resume(dma_t *dma, struct bus *bus, int is_arm7)
 {
     if (dma == NULL || bus == NULL || is_arm7)
         return;
+    /* 21-B9yi(续111)：快速门控 —— 没有任何通道在等 GX FIFO 时直接返回。
+       战斗场景每步都会走到这里（GX 时钟常开），省下的是「扫 8 个通道」的固定开销。 */
+    if (!dma->gx_waiting)
+        return;
+    int any = 0;
     for (int c = 0; c < IO_DMA_COUNT; c++) {
         dma_channel_t *d = &dma->ch[c];
         if (d->rem == 0)
@@ -297,8 +306,10 @@ void dma_gx_resume(dma_t *dma, struct bus *bus, int is_arm7)
         unsigned mode = (d->cnt_h & DMA_CNT_MODE_MASK) >> DMA_CNT_MODE_SHIFT;
         if (mode != DMA_START_GXFIFO)
             continue;
+        any = 1;              /* 该通道仍在等 GX FIFO（无论本轮是否搬得动） */
         if (!gx_fifo_can_accept(&bus->io->gx))
             continue;
         dma_transfer(d, bus, c, is_arm7);
     }
+    dma->gx_waiting = (uint8_t)any;
 }

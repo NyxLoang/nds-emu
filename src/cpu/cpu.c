@@ -327,6 +327,13 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
 static unsigned long long s_prof_steps, s_prof_io, s_prof_all;
 /* 21-B9yi(续53)：更细的归因（取指 / 译码执行），配合 s_prof_io 决定下一刀砍哪里。 */
 static unsigned long long s_prof_fetch, s_prof_exec;
+/* 21-B9yi(续111)：把「其余」桶再拆开（战斗场景实测它占 56%）。
+   pre   = 步首设置（bus/io 取址、memtim 复位、step_cycles/active_is_arm7）
+   diag  = `if (bus->diag)` 诊断块
+   irq   = irq 指针/ARM7 Halt 检查/ARM9 IRQ 尾部前置判断
+   wfi   = irq_pending + PCSAMPLE + WFI 预取指
+   pref  = 下一条指令的 __builtin_prefetch 判断 */
+static unsigned long long s_prof_pre, s_prof_diag, s_prof_irq, s_prof_wfi, s_prof_pref;
 /* 21-B9yi(续55)：把 IO 推进再拆成「定时器」与「卡带/GX 时钟」两块
    （两者优化手段完全不同：前者可做事件化，后者可做活动位守卫）。 */
 static unsigned long long s_prof_tmr, s_prof_cart;
@@ -385,11 +392,22 @@ static void cpu_prof_report(void)
     double per_cart = ((double)s_prof_cart / steps) - (double)cal;
     double per_fetch= ((double)s_prof_fetch/ steps) - (double)cal;
     double per_exec = ((double)s_prof_exec / steps) - (double)cal;
+    /* 21-B9yi(续111)：把「其余」桶拆开 */
+    double per_pre  = ((double)s_prof_pre  / steps) - (double)cal;
+    double per_diag = ((double)s_prof_diag / steps) - (double)cal;
+    double per_irq  = ((double)s_prof_irq  / steps) - (double)cal;
+    double per_wfi  = ((double)s_prof_wfi  / steps) - (double)cal;
+    double per_pref = ((double)s_prof_pref / steps) - (double)cal;
     double per_all  = ((double)s_prof_all  / steps) - (double)cal;
     if (per_tmr  < 0) per_tmr  = 0;
     if (per_cart < 0) per_cart = 0;
     if (per_fetch< 0) per_fetch= 0;
     if (per_exec < 0) per_exec = 0;
+    if (per_pre  < 0) per_pre  = 0;
+    if (per_diag < 0) per_diag = 0;
+    if (per_irq  < 0) per_irq  = 0;
+    if (per_wfi  < 0) per_wfi  = 0;
+    if (per_pref < 0) per_pref = 0;
     double per_other = per_all - per_tmr - per_cart - per_fetch - per_exec;
     if (per_other < 0) per_other = 0;
     printf("prof: 抽样 1/64，rdtsc 自校准=%llu 周期/组；每条指令（校正后）：\n"
@@ -402,6 +420,10 @@ static void cpu_prof_report(void)
            100.0 * per_fetch / per_all, 100.0 * per_exec / per_all,
            100.0 * per_other / per_all,
            s_prof_steps, tmr_pct, cart_pct, fetch_pct, exec_pct);
+    printf("      「其余」拆解：步首设置 %.1f  诊断块 %.1f  IRQ/Halt 检查 %.1f"
+           "  pending/PCSAMPLE/WFI %.1f  预取判断 %.1f  （未覆盖 %.1f）\n",
+           per_pre, per_diag, per_irq, per_wfi, per_pref,
+           per_other - per_pre - per_diag - per_irq - per_wfi - per_pref);
     /* 21-B9yi(续63)：`cpu_step` 占整个运行墙钟的比例。
        抽样是 1/64，所以把测到的步时间 ×64 近似成全部步时间。
        这个数字回答「就算把解释器优化到 0，最多能快多少」。 */
@@ -477,6 +499,7 @@ int cpu_step(arm_cpu_t *cpu)
     s_prof_meas = s_prof_on && ((s_prof_seq++ & 63u) == 0u);
 #endif
     unsigned long long prof_t0 = PROF_T0();
+    unsigned long long prof_pre_t0 = prof_t0;   /* 21-B9yi(续111)：步首设置段 */
     /* 21-B9yi(续53)：把热路径反复用到的两个指针/标志提到局部变量。
        原来每步要写 `cpu->nds->bus->...` / `cpu->nds->io->...` 这类三级链式取址
        七八次（每条指令都做），现在只取一次。 */
@@ -491,12 +514,14 @@ int cpu_step(arm_cpu_t *cpu)
     cpu->step_cycles = 1;
     /* 8.x：设置当前访问者身份，供 bus 对中断/FIFO 等按 CPU 分流 */
     bus->active_is_arm7 = cpu->is_arm7;
+    PROF_ADD(s_prof_pre, prof_pre_t0);
     /* 21-B9xj：写监视用 PC。取值口径与 melonDS 解释器一致（ARM=当前指令+8、
        Thumb=+4），这样本地与参考 harness 打出来的 pc 可直接对照。
        21-B9yi(续41)：四个字段合并到**一次**条件判断里（原先四次读
        `bus->diag` 的链式指针，编译器无法合并）。 */
     /* 21-B9yi(续53)：诊断块只判一次 `bus->diag`（原来是两次独立判断），
        PC 命中计数再在其内部判一次「有没有配置」。 */
+    unsigned long long prof_diag_t0 = PROF_T0();
     if (bus->diag) {
         bus->dbg_pc = cpu->r[15] + ((cpu->cpsr & CPSR_T) ? 4u : 8u);
         bus->dbg_lr = cpu->r[14];
@@ -523,6 +548,8 @@ int cpu_step(arm_cpu_t *cpu)
         }
       }
     }
+    PROF_ADD(s_prof_diag, prof_diag_t0);
+    unsigned long long prof_irq_t0 = PROF_T0();
     irq_t *irq = &io->irq[cpu->is_arm7 ? 1 : 0];
     /* 21-B9wt：ARM7 的 HALTCNT 暂停（BIOS SWI 6 Halt / SWI 7 Stop / 游戏
        直接写 0x04000301 都走这里）。唤醒口径与 melonDS HaltInterrupted(1)
@@ -542,6 +569,7 @@ int cpu_step(arm_cpu_t *cpu)
         cpu->cycles++;   /* 21-B9yi(续109j)：ARM9 IRQ 尾部同样是「逐条建模」的一步 */
         return 1;
     }
+    PROF_ADD(s_prof_irq, prof_irq_t0);
     /* 6.5：按本步消耗的周期推进当前核定时器（分频在 timer.c 内处理）。
        21-B9yi：传上一条指令的**实际周期数**（此前固定 1/指令，ARM9 平均 ~1.2，
        定时器会系统性偏慢；melonDS 定时器是挂在系统时钟上的）。 */
@@ -556,6 +584,7 @@ int cpu_step(arm_cpu_t *cpu)
     /* 21-B9yi(续53)：IF/IE/IME 在这一步里最多被查 3 次（WFI 唤醒、屏蔽提示、
        受理 IRQ）。这里算一次存起来复用 —— timer/card 的 IF 位在上面两行
        （io_advance_*）之后就已经定下来，所以放在这里取是准确的。 */
+    unsigned long long prof_wfi_t0 = PROF_T0();
     int pend = irq_pending(irq);
     /* 21-B9yi(续12) 诊断：NDS_PCSAMPLE=LO-HI@N → 帧区间内每 N 条 ARM9 指令打印
        一次 PC/lr/cpsr（粗粒度执行轨迹，用来判断「某段等待循环是不是被跳过了」）。
@@ -600,6 +629,7 @@ int cpu_step(arm_cpu_t *cpu)
             pre_insn_valid = 0;   /* PC 已改变，缓存的指令字作废 */
         }
     }
+    PROF_ADD(s_prof_wfi, prof_wfi_t0);
     /* 21-B9h：IF&IE 已挂起却被 CPSR.I 屏蔽时只提示一次 */
     if (pend && (cpu->cpsr & CPSR_I) && !cpu->irq_mask_logged) {
         cpu->irq_mask_logged = 1;
@@ -724,10 +754,11 @@ int cpu_step(arm_cpu_t *cpu)
     int fetch_nonseq = (cpu->next_fetch_pc != ipc); /* 是否非顺序取指（分支/跳转后） */
     /* 下一条「顺序」指令地址（本条指令长度由执行前的 T 位决定） */
     cpu->next_fetch_pc = ipc + (is_thumb ? 2u : 4u);
-    /* 21-B9yi(续65)：定向实验 —— 预取下一批指令所在的缓存行。
-       依据：续64 的结论是「瓶颈在访存（缓存未命中延迟），不在算术」。
-       预取只在两种最常见代码区（ARM9 ITCM / Main RAM）做，其它区域直接跳过。 */
-    {
+   /* 21-B9yi(续65)：定向实验 —— 预取下一批指令所在的缓存行。
+      依据：续64 的结论是「瓶颈在访存（缓存未命中延迟），不在算术」。
+      预取只在两种最常见代码区（ARM9 ITCM / Main RAM）做，其它区域直接跳过。 */
+    unsigned long long prof_pref_t0 = PROF_T0();
+   {
         uint32_t npc = cpu->next_fetch_pc;
         if (!cpu->is_arm7 && bus->arm9_itcm_on &&
             npc - bus->arm9_itcm_base < bus->arm9_itcm_size)
@@ -736,6 +767,7 @@ int cpu_step(arm_cpu_t *cpu)
                  npc - BUS_MAIN_RAM_BASE < BUS_MAIN_RAM_SIZE)
             __builtin_prefetch(&bus->main_ram[npc - BUS_MAIN_RAM_BASE]);
     }
+    PROF_ADD(s_prof_pref, prof_pref_t0);
     if (is_thumb) {
         unsigned long long ft0 = PROF_T0();
         uint16_t insn16 = cpu_fetch16(cpu);

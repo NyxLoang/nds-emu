@@ -2,6 +2,8 @@
 build/
 build-prof/
 build-prof2/
+# 其它对照构建（-march=native / PGO 等）：同样不入库
+build-*/
 
 # Python 辅助脚本的字节码缓存（tools/*.py）
 __pycache__/

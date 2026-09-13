@@ -894,6 +894,48 @@ static void test_wramcnt_regs(nds_t *nds)
 }
 
 /* ---- 阶段 21-B7 用例：WRAMCNT 切分 Shared WRAM（含 ARM7 未持有时的 ARM7 WRAM 别名） ---- */
+/* ---- 阶段 21-B9yi(续87) 用例：三个此前被当「未知 IO」丢掉的寄存器区 ----
+   期望值全部按**参考核 melonDS 口径**（NDS.cpp ARM9IO / SPU.cpp）：
+   MOSAIC 可读写、DMA9Fill 可读写能读回、SNDCAP 的 Cnt/DstAddr 可读回。 */
+static void test_unknown_io_regs(nds_t *nds)
+{
+    /* MOSAIC：引擎 A 0x0400004C / 引擎 B 0x0400104C，16 位、字节可分 */
+    bus_write16(nds->bus, 0x0400004Cu, 0x3322u);
+    CHECK_EQ("mosaic A write16", bus_read16(nds->bus, 0x0400004Cu), 0x3322u);
+    CHECK_EQ("mosaic A byte lo", bus_read8(nds->bus, 0x0400004Cu), 0x22u);
+    CHECK_EQ("mosaic A byte hi", bus_read8(nds->bus, 0x0400004Du), 0x33u);
+    bus_write8(nds->bus, 0x0400104Cu, 0x77u);
+    CHECK_EQ("mosaic B byte lo", bus_read8(nds->bus, 0x0400104Cu), 0x77u);
+    CHECK_EQ("mosaic A 独立", bus_read16(nds->bus, 0x0400004Cu), 0x3322u);
+
+    /* DMA9Fill：0x040000E0-0x040000EF，4×u32；游戏实际只碰 0xE8-0xEB */
+    bus_write8(nds->bus, 0x040000E8u, 0x5Au);
+    bus_write8(nds->bus, 0x040000E9u, 0xA5u);
+    CHECK_EQ("dma9fill E8 读回", bus_read8(nds->bus, 0x040000E8u), 0x5Au);
+    CHECK_EQ("dma9fill E9 读回", bus_read8(nds->bus, 0x040000E9u), 0xA5u);
+    CHECK_EQ("dma9fill 半字读回", bus_read16(nds->bus, 0x040000E8u), 0xA55Au);
+    bus_write16(nds->bus, 0x040000EAu, 0x0011u);   /* 高半字（参考核 DMA9Fill[2] 的高 16 位） */
+    CHECK_EQ("dma9fill 整字读回", bus_read32(nds->bus, 0x040000E8u), 0x0011A55Au);
+    bus_write32(nds->bus, 0x040000E0u, 0xDEADBEEFu);
+    CHECK_EQ("dma9fill 字写读回", bus_read32(nds->bus, 0x040000E0u), 0xDEADBEEFu);
+    CHECK_EQ("dma9fill 相邻字未受影响", bus_read32(nds->bus, 0x040000E8u), 0x0011A55Au);
+
+    /* 声音捕获单元（**ARM7 侧寄存器**：ARM9 视角读 0，这本身也要验）：
+       0x04000508/509 可读写；DstAddr 可读回；Length 只写（读 0）。 */
+    bus_write8(nds->bus, 0x04000508u, 0x83u);
+    CHECK_EQ("sndcap 对 ARM9 不可见", bus_read8(nds->bus, 0x04000508u), 0x00u);
+    nds->bus->active_is_arm7 = 1;
+    bus_write8(nds->bus, 0x04000508u, 0x83u);
+    bus_write8(nds->bus, 0x04000509u, 0x01u);
+    CHECK_EQ("sndcap0 cnt 读回", bus_read8(nds->bus, 0x04000508u), 0x83u);
+    CHECK_EQ("sndcap1 cnt 读回", bus_read8(nds->bus, 0x04000509u), 0x01u);
+    bus_write32(nds->bus, 0x04000510u, 0x027E1234u);
+    CHECK_EQ("sndcap0 dst 读回", bus_read32(nds->bus, 0x04000510u), 0x027E1234u);
+    bus_write16(nds->bus, 0x04000514u, 0x0800u);
+    CHECK_EQ("sndcap0 len 只写（读回 0）", bus_read16(nds->bus, 0x04000514u), 0x0000u);
+    nds->bus->active_is_arm7 = 0;
+}
+
 static void test_wramcnt_split(nds_t *nds)
 {
     /* 默认 3：Shared WRAM 全归 ARM7，ARM9 读 0 / 写忽略 */
@@ -5648,6 +5690,13 @@ int main(void)
         if (nds == NULL) return 1;
         test_wramcnt_regs(nds);
         test_wramcnt_split(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9yi 续87] 未知 IO 补账：MOSAIC / DMA9Fill / SNDCAP 寄存器\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_unknown_io_regs(nds);
         nds_destroy(nds);
     }
     printf("\n[case 8.4] 交错调度 2:1\n");

@@ -45,6 +45,14 @@ uint8_t snd_read8(const snd_t *s, uint32_t addr)
     /* SOUNDBIAS 只有 bit0-9（melonDS：Bias = val & 0x3FF） */
     if (addr == SND_SOUNDBIAS)    return (uint8_t)(s->soundbias & 0xFFu);
     if (addr == SND_SOUNDBIAS + 1) return (uint8_t)((s->soundbias >> 8) & 0x03u);
+    /* 21-B9yi(续87)：捕获单元。参考核能读回的只有 Cnt（0x508/0x509）与
+       DstAddr（0x510-0x513 / 0x518-0x51B）；Length 参考核也读不到（返回 0）。 */
+    if (addr == 0x04000508u) return s->cap_cnt[0];
+    if (addr == 0x04000509u) return s->cap_cnt[1];
+    if (addr >= 0x04000510u && addr < 0x04000514u)
+        return (uint8_t)(s->cap_dst[0] >> ((addr - 0x04000510u) * 8));
+    if (addr >= 0x04000518u && addr < 0x0400051Cu)
+        return (uint8_t)(s->cap_dst[1] >> ((addr - 0x04000518u) * 8));
 
     int ch = snd_channel_of(addr);
     if (ch < 0)
@@ -93,6 +101,31 @@ void snd_write8(snd_t *s, uint32_t addr, uint8_t val)
     }
     if (addr == SND_SOUNDBIAS + 1) {
         s->soundbias = (uint16_t)((s->soundbias & 0x00FFu) | ((uint16_t)(val & 0x03u) << 8));
+        return;
+    }
+    /* 21-B9yi(续87)：捕获单元寄存器（0x04000508-0x0400051F）。
+       参考核语义：0x508/509 写 Cnt；0x510/518 写 DstAddr；0x514/51C 写 Length（低 16 位）。
+       真正的「把混音写进内存」不在本轮范围（游戏只读了 Cnt，没有启动捕获）。 */
+    if (addr == 0x04000508u) { s->cap_cnt[0] = val; return; }
+    if (addr == 0x04000509u) { s->cap_cnt[1] = val; return; }
+    if (addr >= 0x04000510u && addr < 0x04000514u) {
+        unsigned sh = (unsigned)(addr - 0x04000510u) * 8;
+        s->cap_dst[0] = (s->cap_dst[0] & ~(0xFFu << sh)) | ((uint32_t)val << sh);
+        return;
+    }
+    if (addr >= 0x04000518u && addr < 0x0400051Cu) {
+        unsigned sh = (unsigned)(addr - 0x04000518u) * 8;
+        s->cap_dst[1] = (s->cap_dst[1] & ~(0xFFu << sh)) | ((uint32_t)val << sh);
+        return;
+    }
+    if (addr == 0x04000514u || addr == 0x04000515u) {
+        unsigned sh = (unsigned)(addr - 0x04000514u) * 8;
+        s->cap_len[0] = (uint16_t)((s->cap_len[0] & ~(0xFFu << sh)) | ((uint16_t)val << sh));
+        return;
+    }
+    if (addr == 0x0400051Cu || addr == 0x0400051Du) {
+        unsigned sh = (unsigned)(addr - 0x0400051Cu) * 8;
+        s->cap_len[1] = (uint16_t)((s->cap_len[1] & ~(0xFFu << sh)) | ((uint16_t)val << sh));
         return;
     }
 

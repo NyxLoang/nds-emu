@@ -13,7 +13,7 @@
 #define SND_CH_STRIDE  0x10u
 #define SND_SOUNDCNT   0x04000500u
 #define SND_SOUNDBIAS  0x04000504u
-#define SND_END        0x04000506u   /* 主控区上界（不含）；capture 0x508 起本阶段不实现 */
+#define SND_END        0x04000520u   /* 主控区上界（不含）；21-B9yi(续87) 起含 capture 0x508-0x51F */
 
 /* SOUNDxCNT 位定义 */
 #define SNDCNT_VOL_MUL_MASK  0x7Fu
@@ -69,6 +69,14 @@ typedef struct snd {
     snd_channel_t ch[SND_CHANNEL_COUNT];
     uint16_t soundcnt;    /* SOUNDCNT */
     uint16_t soundbias;   /* SOUNDBIAS（bit0-9） */
+    /* 21-B9yi(续87)：声音捕获单元（此前 0x04000508 起整段未实现，被记成「未知 IO」）。
+       参考核口径：0x04000508 是 SNDCAP0CNT、0x04000509 是 SNDCAP1CNT（都可读写）；
+       0x04000510/0x04000518 = 两个单元的 DstAddr（可读写）；
+       0x04000514/0x0400051C = Length（只写；参考核读它也是未实现）。
+       本轮只做**寄存器语义**（游戏只读了 0x04000508），不真的把混音搬进内存。 */
+    uint8_t  cap_cnt[2];   /* SNDCAP0CNT / SNDCAP1CNT */
+    uint32_t cap_dst[2];   /* SNDCAP0DAD / SNDCAP1DAD */
+    uint16_t cap_len[2];   /* SNDCAP0LEN / SNDCAP1LEN（只写） */
 } snd_t;
 
 int snd_is_addr(uint32_t addr);

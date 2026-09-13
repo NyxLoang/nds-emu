@@ -1354,6 +1354,9 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
            bus_read32(nds->bus, 0x04001000u),
         nds->cpu->irq_count, nds->cpu7->irq_count);
     runner_savechip_report(nds);   /* 21-B9yi(续77)：存档芯片是否被写过 */
+    /* 21-B9yi(续87)：`NDS_UNKIOSUM=1` → 列出全部未知 IO 地址（与参考核核账用） */
+    if (getenv("NDS_UNKIOSUM") != NULL)
+        io_unknown_report();
     if (shot_path != NULL) {
         uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
                                               * RENDER_SCREEN_H);

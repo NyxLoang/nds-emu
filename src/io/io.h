@@ -55,6 +55,13 @@ typedef struct io {
     snd_t snd;                        /* 音频（阶段 18：16 通道 + SOUNDCNT/SOUNDBIAS） */
     gx_t gx;                          /* 3D 几何引擎（阶段 19：DISP3DCNT/GXSTAT/GXFIFO） */
     uint16_t vcount;                  /* VCOUNT（0x04000006 只读扫描线，runner 每帧推进） */
+    /* 21-B9yi(续87)：两个此前落在「未知 IO」的寄存器区（按参考核 melonDS 口径补齐）。
+       mosaic[0]=引擎A(0x0400004C)、mosaic[1]=引擎B(0x0400104C)：16 位马赛克尺寸寄存器。
+       本游戏只在开机写 0x0000（禁用），所以这里只做寄存器语义，不实现马赛克渲染。
+       dma9fill[4] = 0x040000E0-0x040000EF（参考核 NDS.cpp 里的 DMA9Fill，普通可读写）；
+       本游戏在 0xE8-0xEB 读写它——「写进去读回来」正是我们此前做不到的。 */
+    uint16_t mosaic[2];
+    uint32_t dma9fill[4];
     cartbus_t cartbus;                /* 卡带总线（阶段 15：ROMCTRL/命令/数据端口） */
     struct bus *bus;                  /* bus 反指：DMA 搬运需经 bus 访存 */
 } io_t;
@@ -115,5 +122,9 @@ void io_advance_timers(io_t *io, int is_arm7, uint32_t cycles);
 
 /* 21-B9zb: 一个 ARM9 周期过去时推进卡带数据就绪时钟（cpu_step 调用） */
 void io_advance_cart(io_t *io, int is_arm7, uint32_t cycles);
+
+/* 21-B9yi(续87)：跑完后一次性列出**全部**被访问过的未知 IO 地址
+   （`addr` 后跟 r/w 标记哪个方向被访问过）。用来跟参考核寄存器表逐个核账。 */
+void io_unknown_report(void);
 
 #endif /* NDS_EMU_IO_H */

@@ -86,6 +86,7 @@ NDS_NOSYNC=1 build/nds-emu.exe "<ROM>" --frames 600 --fps-every 300
 | `NDS_NOFAST=1` | 关闭访存快路径（A/B 对照） |
 | `NDS_NORENDER=1` / `NDS_NOAUDIO=1` | 窗口模式跳过宿主渲染 / 不打开声卡 |
 | `NDS_NOSYNC=1` | 关闭帧节奏（全速运行，用于压测；默认按真机 59.83 Hz 限速） |
+| `NDS_UNKIOSUM=1` | 无头跑完打印**全部未知 IO 地址**（含读写方向），用于跟参考核寄存器表核账 |
 | `NDS_SNDSTAT=1` | 按秒打印混音输出非静音样本数与峰值 |
 | `NDS_GXHIST` / `NDS_BGDBG` / `NDS_MAT_FRAME` / `NDS_POLYDBG` / `NDS_IODUMP_FRAME` … | GX/2D/IO 诊断（细节见 `docs/21-rom-bringup.md`） |
 

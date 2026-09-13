@@ -89,6 +89,35 @@ static void io_card_dma_check(io_t *io, int is_arm7)
    每次最多 256 次比较。改成按地址偏移的位图（0x04000000-0x04001FFF = 8KB），O(1)。 */
 static uint8_t io_seen_map[0x2000];
 
+/* 21-B9yi(续87)：把「未知 IO」按 读/写 分别记下来（bit0=读过、bit1=写过），
+   供 `io_unknown_report()` 在跑完后一次性列出**全部**未知地址 ——
+   这样才能拿这份清单去跟参考核的寄存器表逐个核账（此前只统计过「多少种」）。 */
+static void io_mark_seen(uint32_t addr, int is_write)
+{
+    uint32_t off = addr - 0x04000000u;
+    if (off >= sizeof(io_seen_map))
+        return;
+    io_seen_map[off] |= (uint8_t)(is_write ? 2u : 1u);
+}
+
+void io_unknown_report(void)
+{
+    unsigned n = 0;
+    for (uint32_t off = 0; off < sizeof(io_seen_map); off++)
+        if (io_seen_map[off] != 0)
+            n++;
+    printf("unknownio: n=%u", n);
+    for (uint32_t off = 0; off < sizeof(io_seen_map); off++) {
+        if (io_seen_map[off] == 0)
+            continue;
+        printf(" %05X%c%c", 0x04000000u + off,
+               (io_seen_map[off] & 1u) ? 'r' : '-',
+               (io_seen_map[off] & 2u) ? 'w' : '-');
+    }
+    printf("\n");
+    fflush(stdout);
+}
+
 static int io_addr_first_seen(uint32_t addr)
 {
     uint32_t off = addr - 0x04000000u;
@@ -162,6 +191,22 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
         return disp_read8(&io->disp, addr, is_arm7);
     if (touch_is_addr(addr))
         return touch_read8((touch_t *)&io->touch, addr);
+    /* 21-B9yi(续87)：MOSAIC（引擎 A 0x0400004C / 引擎 B 0x0400104C，16 位）。
+       参考核把 0x04000000-0x0400006C 整块交给 GPU，本地此前这些地址落进「未知 IO」。
+       实测本游戏只在开机写 0x0000（禁用）⇒ 只做寄存器语义。 */
+    if (!is_arm7 && ((addr >= 0x0400004Cu && addr < 0x04000050u) ||
+                     (addr >= 0x0400104Cu && addr < 0x04001050u))) {
+        unsigned off = addr & 3u;
+        if (off >= 2u)
+            return 0;   /* 16 位寄存器的多余字节：参考核同样不实现（读 0） */
+        return (uint8_t)(io->mosaic[(addr >= 0x04001000u) ? 1 : 0] >> (off * 8));
+    }
+    /* 21-B9yi(续87)：DMA9Fill（0x040000E0-0x040000EF，4×u32 可读写；
+       参考核 NDS.cpp 的 ARM9IO 读/写都按普通寄存器处理）。 */
+    if (!is_arm7 && addr >= 0x040000E0u && addr < 0x040000F0u) {
+        unsigned off = (unsigned)(addr - 0x040000E0u);
+        return (uint8_t)(io->dma9fill[off >> 2] >> ((off & 3u) * 8));
+    }
     if (gx_is_addr(addr) && !is_arm7)
         return gx_read8(&io->gx, addr);
     if (snd_is_addr(addr) && is_arm7)
@@ -176,6 +221,7 @@ uint8_t io_read8(const io_t *io, uint32_t addr, int is_arm7)
        该区间归 GPU3D、只有 ARM9 看得到。本地此前落到未映射返回 0。 */
     if (!is_arm7 && addr >= 0x04000320u && addr < 0x04000324u)
         return (addr == 0x04000320u) ? 0x2Eu : 0x00u;
+    io_mark_seen(addr, 0);
     if (io->bus != NULL && io->bus->diag && io_addr_first_seen(addr))
         printf("io: read  unknown addr=%08X (arm7=%d)\n", addr, is_arm7);
     return 0;
@@ -370,6 +416,26 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         io_gx_fifo_irq_sync(io);
         return;
     }
+    /* 21-B9yi(续87)：MOSAIC（两引擎各 16 位）与 DMA9Fill（4×u32）——
+       按参考核口径改成「可读写、能读回」，不再当未知 IO 丢掉。 */
+    if (!is_arm7 && ((addr >= 0x0400004Cu && addr < 0x04000050u) ||
+                     (addr >= 0x0400104Cu && addr < 0x04001050u))) {
+        unsigned off = addr & 3u;
+        if (off < 2u) {
+            int eng = (addr >= 0x04001000u) ? 1 : 0;
+            unsigned sh = off * 8;
+            io->mosaic[eng] = (uint16_t)((io->mosaic[eng] & ~(0xFFu << sh)) |
+                                         ((uint16_t)val << sh));
+        }
+        return;
+    }
+    if (!is_arm7 && addr >= 0x040000E0u && addr < 0x040000F0u) {
+        unsigned off = (unsigned)(addr - 0x040000E0u);
+        unsigned sh = (off & 3u) * 8;
+        io->dma9fill[off >> 2] =
+            (io->dma9fill[off >> 2] & ~(0xFFu << sh)) | ((uint32_t)val << sh);
+        return;
+    }
     if (snd_is_addr(addr) && is_arm7) {
         if (addr == SND_SOUNDBIAS || addr == SND_SOUNDBIAS + 1u) {
             g_snd_bias_writes++;
@@ -383,6 +449,7 @@ void io_write8(io_t *io, uint32_t addr, uint8_t val, int is_arm7)
         return;
     }
     /* 其余 IO 地址：写忽略（沿用阶段 2 的桩语义） */
+    io_mark_seen(addr, 1);
     if (io->bus != NULL && io->bus->diag && io_addr_first_seen(addr))
         printf("io: write unknown addr=%08X val=%02X (arm7=%d)\n", addr, val, is_arm7);
 }

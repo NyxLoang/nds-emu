@@ -48,6 +48,59 @@ static void twatch_check(const arm_cpu_t *cpu, uint32_t pc, uint32_t insn, int w
     }
 }
 
+/* 21-B9yi(续109h)：PC 入口定点钩子（`NDS_PCWATCH=ADDR[,ADDR...]`，16 进制，最多 8 个）。
+   用途：查「控制流是从哪儿跳进来的」——当 PC 命中被监视地址时，打印**上一条执行过的
+   指令**（地址 + 指令字）与当前寄存器/LR/SP。分支目标算错、返回地址不对、跳转表偏
+   这几类问题，一眼就能看出是谁把它丢过去的。默认关闭（只在解析到地址时多一次比较）。 */
+static uint32_t s_pcwatch[8];
+static int s_pcwatch_n = -1;
+static uint32_t s_pcwatch_last_pc;
+static uint32_t s_pcwatch_last_insn;
+
+static void pcwatch_init(void)
+{
+    const char *e = getenv("NDS_PCWATCH");
+    s_pcwatch_n = 0;
+    if (e == NULL)
+        return;
+    const char *p = e;
+    while (*p != '\0' && s_pcwatch_n < 8) {
+        char *end = NULL;
+        unsigned long v = strtoul(p, &end, 16);
+        if (end == p)
+            break;
+        s_pcwatch[s_pcwatch_n++] = (uint32_t)v;
+        p = end;
+        while (*p == ',' || *p == ' ' || *p == ';')
+            p++;
+    }
+}
+
+static void pcwatch_check(const arm_cpu_t *cpu, uint32_t pc)
+{
+    if (s_pcwatch_n < 0)
+        pcwatch_init();
+    if (s_pcwatch_n == 0)
+        return;
+    for (int i = 0; i < s_pcwatch_n; i++) {
+        if (pc == s_pcwatch[i]) {
+            extern unsigned long long g_dbg_frame;
+            printf("pcwatch: %s f=%llu entered=%08X from=%08X insn=%08X cpsr=%08X"
+                   " r0=%08X r1=%08X r2=%08X r3=%08X r4=%08X r5=%08X lr=%08X sp=%08X\n",
+                   cpu->is_arm7 ? "arm7" : "arm9", g_dbg_frame, pc, s_pcwatch_last_pc,
+                   s_pcwatch_last_insn, cpu->cpsr, cpu->r[0], cpu->r[1], cpu->r[2],
+                   cpu->r[3], cpu->r[4], cpu->r[5], cpu->r[14], cpu->r[13]);
+            break;
+        }
+    }
+}
+
+static void pcwatch_record(uint32_t pc, uint32_t insn)
+{
+    s_pcwatch_last_pc = pc;
+    s_pcwatch_last_insn = insn;
+}
+
 arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc, int is_arm7)
 {
     arm_cpu_t *cpu = calloc(1, sizeof(arm_cpu_t));
@@ -642,6 +695,7 @@ int cpu_step(arm_cpu_t *cpu)
     /* 13.2：按 CPSR.T 位分发——Thumb 取 16 位半字，ARM 取 32 位字。 */
     uint32_t ipc = cpu->r[15];   /* 本步指令地址（取指区域计费用） */
     int is_thumb = (cpu->cpsr & CPSR_T) != 0;
+    pcwatch_check(cpu, ipc);     /* 21-B9yi(续109h)：命中监视地址则打印「从哪来」 */
     int fetch_nonseq = (cpu->next_fetch_pc != ipc); /* 是否非顺序取指（分支/跳转后） */
     /* 下一条「顺序」指令地址（本条指令长度由执行前的 T 位决定） */
     cpu->next_fetch_pc = ipc + (is_thumb ? 2u : 4u);
@@ -662,6 +716,7 @@ int cpu_step(arm_cpu_t *cpu)
         uint16_t insn16 = cpu_fetch16(cpu);
         PROF_ADD(s_prof_fetch, ft0);
         cpu->cycles++;
+        pcwatch_record(ipc, insn16);   /* 21-B9yi(续109h)：记录「上一条执行过的指令」 */
         unsigned long long xt0 = PROF_T0();
         int r = thumb_step(cpu, insn16);
         PROF_ADD(s_prof_exec, xt0);
@@ -686,6 +741,7 @@ int cpu_step(arm_cpu_t *cpu)
     /* 21-B9yi(续52)：ARM 态复用上面 WFI 检测时读到的指令字（只读一次指令）。 */
     uint32_t insn = pre_insn_valid ? pre_insn : cpu_fetch(cpu);
     cpu->cycles++;
+    pcwatch_record(ipc, insn);     /* 21-B9yi(续109h）：记录「上一条执行过的指令」 */
     unsigned long long xt0 = PROF_T0();
     int r = exec_step(cpu, insn);
     PROF_ADD(s_prof_exec, xt0);

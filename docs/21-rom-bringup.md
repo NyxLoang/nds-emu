@@ -5724,3 +5724,45 @@ build/nds-emu.exe "<ROM>" --headless-frames 2000 --stats-every 500 --shot build\
 
 **结果**：✅ 保留（默认开启）。`--fps-every` 在默认限速下显示 ~59.8 是预期值；
 凡是要测「性能」的场合一律 `NDS_NOSYNC=1`。
+
+---
+
+### 21-B9yi（续83）：窗口退出摘要 + 跨路径一致性 —— 人工验收有了客观判据
+
+**问题**：剩下的两项开放项（①战斗内拖拽下令 ②游戏内存档菜单保存）只能人工试玩，
+但「人工」不该等于「凭感觉」：需要一个**不读代码就能判定**的输出。
+
+**做法**（把已有 headless 诊断设施开放给窗口路径）：
+
+1. `runner_print_savechip` → **`runner_savechip_report()`**（公开）：与无头**同一口径**
+   打印存档芯片 `type/size/nonzero(vs 0xFF)/hash`；
+2. 新增 **`runner_save_screenshot()`**：用**同一个** `save_bmp` 把双屏写成 BMP（顶屏在上），
+   窗口模式 `--shot` 因此也生效；
+3. 主循环退出（写回 `.sav` 之前）打印摘要：
+
+```
+window: summary frames=300 elapsed=1367 ms avg=219.5 fps（含帧节奏等待）
+savechip: type=2 size=8192 nonzero(vs 0xFF)=24 hash=3A361368EF684AD7
+window: screenshot saved to build\win_exit.bmp
+save : stored …\Z 最终幻想12…(1024Mb).sav
+```
+
+**判定口径（人工验收用）**：
+
+* **游戏内存档**：`savechip:` 的 `nonzero(vs 0xFF)` **从 24 明显变大**（例如 8192 里几百/上千字节）
+  ⇒ 游戏真的把存档写进了芯片；
+* **战斗内拖拽下令**：看画面/指令是否变化（可配 `--shot` 或 `--screen-hash-every` 留证）。
+
+**顺带得到的强结论：窗口与无头逐字节一致且都是确定性的**（同脚本
+`--key-frame 1 --key-mask 0x3FF --key-period 120`）：
+
+```
+f=300 ： window 1B688CEF4FC8B8923C41CCDB41ADF6AC27D94FAD96A06309E17481A437B07460
+         headless 1B688CEF4FC8B8923C41CCDB41ADF6AC27D94FAD96A06309E17481A437B07460   ✓
+f=2000： window A72E11A2292D3203AE4C81677BDE2D76B54BC651C34234F38070034A697CC513
+         = 续51 起的 headless 文档锚点                                            ✓
+```
+
+⇒ ①窗口路径与无头路径**共享同一 runner/渲染口径**（续69 的修复有效，不存在
+「窗口看到的」和「自动化测量用的」不是一回事）；②**窗口模式也可复现**——即使音频回调
+按真实时间推进 SPU，也不污染模拟状态。

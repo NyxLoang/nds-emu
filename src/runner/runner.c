@@ -308,8 +308,10 @@ uint64_t runner_now(const runner_t *r)
 
 /* 21-B9yi(续77)：打印**存档芯片状态** —— 判断「游戏有没有在运行中真的写过存档」。
    打印类型/大小/非 0xFF 字节数（擦除态=0xFF）与内容哈希；与初始态不同即说明写过。
-   （此前这一项只能靠人工进菜单存档确认。）两个 headless 汇总路径都会调用。 */
-static void runner_print_savechip(const nds_t *nds)
+   （此前这一项只能靠人工进菜单存档确认。）
+   21-B9yi(续83)：改为公开接口，两个 headless 汇总路径 + **窗口退出摘要**都调用它，
+   这样「人工在游戏里存一次档」的验收有客观输出（nonzero 会从 24 明显增大）。 */
+void runner_savechip_report(const struct nds *nds)
 {
     save_t *sv = io_get_save(nds->io);
     if (sv == NULL || sv->data == NULL || sv->size == 0)
@@ -323,6 +325,29 @@ static void runner_print_savechip(const nds_t *nds)
     }
     printf("savechip: type=%d size=%zu nonzero(vs 0xFF)=%zu hash=%016llX\n",
            (int)sv->type, sv->size, nz, (unsigned long long)h);
+}
+
+/* 21-B9yi(续83)：把当前双屏帧缓冲写成 BMP（顶屏在上）——与无头 `--shot` 同口径。
+   供窗口模式在退出时用，人工验收可以顺手留一张「我看到的最后一屏」。
+   soft 渲染：不依赖 SDL，窗口已关也能用。返回 0 = 成功。 */
+int runner_save_screenshot(const struct nds *nds, const char *path)
+{
+    if (nds == NULL || path == NULL)
+        return -1;
+    uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
+                                          * RENDER_SCREEN_H);
+    uint32_t *fb_bot = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
+                                          * RENDER_SCREEN_H);
+    if (fb_top == NULL || fb_bot == NULL) {
+        free(fb_top);
+        free(fb_bot);
+        return -1;
+    }
+    render_frame(nds->bus, fb_top, fb_bot);
+    int rc = save_bmp(path, fb_top, fb_bot);
+    free(fb_top);
+    free(fb_bot);
+    return rc;
 }
 
 /* 帧号到达脚本时刻时注入按键，保持 8 帧后释放（游戏按帧轮询）。 */
@@ -657,7 +682,7 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
            bus_read32(nds->bus, 0x04000000u),
            bus_read32(nds->bus, 0x04001000u),
         nds->cpu->irq_count, nds->cpu7->irq_count);
-    runner_print_savechip(nds);
+    runner_savechip_report(nds);
     if (shot_path != NULL) {
         /* 21-B9y4：打印截图时刻的 DISPCNT，用于与 main 的 dump 时刻对照 */
         printf("shot: t=frame-end DISPCNT=%08X DISPCNT_SUB=%08X\n",
@@ -1219,7 +1244,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
            bus_read32(nds->bus, 0x04000000u),
            bus_read32(nds->bus, 0x04001000u),
         nds->cpu->irq_count, nds->cpu7->irq_count);
-    runner_print_savechip(nds);   /* 21-B9yi(续77)：存档芯片是否被写过 */
+    runner_savechip_report(nds);   /* 21-B9yi(续77)：存档芯片是否被写过 */
     if (shot_path != NULL) {
         uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
                                               * RENDER_SCREEN_H);

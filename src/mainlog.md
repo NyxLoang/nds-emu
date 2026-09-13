@@ -466,3 +466,24 @@
   （此前文档只记结论没记命令，无法复现；今后 A/B 一律用这一条）。
 - **结果**：✅ 保留（默认开启）。**注意**：`--fps-every` 在默认限速下会显示 ~59.8，
   这是预期值；要测性能必须 `NDS_NOSYNC=1`。
+
+## 2026-09-13 · 21-B9yi（续83）：窗口退出摘要 —— 让「人工验收」有客观判据
+
+- **为什么做**：剩下的两项开放项（①战斗内拖拽下令 ②游戏内存档菜单保存）只能人工试玩，
+  但人工不该等于「凭感觉」。要给出**不读代码就能判定**的输出。
+- **做了什么**（`src/main.c` 主循环退出后、写回 `.sav` 之前）：
+  ```
+  window: summary frames=300 elapsed=1367 ms avg=219.5 fps（含帧节奏等待）
+  savechip: type=2 size=8192 nonzero(vs 0xFF)=24 hash=3A361368EF684AD7
+  window: screenshot saved to build\win_exit.bmp        ← 给了 --shot 才有
+  save : stored …sav
+  ```
+  ①`runner_savechip_report()` 从 runner 公开出来（与无头同一口径）：**人工存过档后
+  `nonzero` 会从 24 明显变大**；②`runner_save_screenshot()` 用**同一个** `save_bmp`
+  写双屏 BMP（顶屏在上），窗口模式 `--shot` 因此也生效；③摘要给出帧数与平均帧率。
+- **怎么验证**：窗口 300 帧 `--shot` ⇒ 三行都按预期出现、BMP 成功落盘；
+  **跨路径一致性**：窗口与无头同脚本（`--key-frame 1 --key-mask 0x3FF --key-period 120`）
+  跑到 f=300 **截图 SHA-256 完全相同**（`1B688CEF…7460`）、跑到 f=2000 时窗口侧
+  得到 `A72E11A2…CC513`，与续51 起的 headless 文档锚点**同一值**
+  ⇒ 窗口与无头同口径、窗口也是确定性的（音频回调按真实时间走不影响模拟状态）。
+- **结果**：✅ 保留。默认限速下 `avg≈59.8` 是预期（含节奏等待），测性能用 `NDS_NOSYNC=1`。

@@ -689,6 +689,8 @@ int main(int argc, char *argv[])
        验证 SDL 初始化/出图/退出与存档写回，又不用人工关窗口）。 */
     uint64_t frame_limit = g_cli_frames;
     uint64_t frames_done = 0;
+    /* 21-B9yi(续83)：窗口退出摘要用（平均帧率）。 */
+    uint64_t win_start_ms = SDL_GetTicks64();
     /* 21-B9yi(续61)：分段 fps 统计（--fps-every N）。 */
     uint64_t fps_frames = 0, fps_mark_ms = SDL_GetTicks64();
     /* 21-B9yi(续68)：宿主渲染开销诊断 `NDS_NORENDER=1` —— 跳过清屏/菜单/双屏合成
@@ -928,6 +930,27 @@ int main(int argc, char *argv[])
             if (pace_next < now)
                 pace_next = now + pace_ticks;
         }
+    }
+
+    /* 21-B9yi(续83)：窗口退出摘要 —— 人工验收的客观判据。
+       背景：「战斗内拖拽下令」与「游戏内存档」两项只能人工试玩确认，但**不需要看代码**
+       就能判定成败：前者看画面/指令是否变化（配合按 F12 或 `--shot` 留图），后者看下面
+       这一行 `savechip:` 的非 0xFF 字节数——**只要从 24 明显变大，就说明游戏真的写过存档**。
+       `--shot 路径.bmp` 在窗口模式同样生效（退出时把双屏存成 BMP，顶屏在上）。 */
+    if (nds != NULL) {
+        uint64_t el = SDL_GetTicks64() - win_start_ms;
+        printf("window: summary frames=%llu elapsed=%llu ms avg=%.1f fps"
+               "（含帧节奏等待）\n",
+               (unsigned long long)frames_done, (unsigned long long)el,
+               el ? 1000.0 * (double)frames_done / (double)el : 0.0);
+        runner_savechip_report(nds);
+        if (headless_shot != NULL) {
+            if (runner_save_screenshot(nds, headless_shot) == 0)
+                printf("window: screenshot saved to %s\n", headless_shot);
+            else
+                printf("window: screenshot FAILED (%s)\n", headless_shot);
+        }
+        fflush(stdout);
     }
 
     /* 阶段 16：退出前把存档写回 .sav（须在 nds_destroy 释放存档缓冲之前）。 */

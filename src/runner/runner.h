@@ -65,4 +65,12 @@ void runner_set_shot_series(uint64_t every, const char *prefix);
 /* 21-B9yi(续32)：每 every 帧打印一次双屏画面统计（非黑比例/均值 RGB）。 */
 void runner_set_stats_series(uint64_t every);
 
+/* 21-B9yi(续83)：窗口模式退出时用的两个「人工验收判据」接口。
+   savechip_report：打印存档芯片状态（类型/大小/非 0xFF 字节数/哈希）——
+   与无头同一口径，人工在游戏里存过档后 nonzero 会明显大于 24。
+   save_screenshot：把当前双屏帧缓冲写成 24 位 BMP（顶屏在上），
+   与无头 `--shot` 完全同口径，便于人工留存证据/对照。 */
+void runner_savechip_report(const struct nds *nds);
+int runner_save_screenshot(const struct nds *nds, const char *path);
+
 #endif /* NDS_EMU_RUNNER_H */

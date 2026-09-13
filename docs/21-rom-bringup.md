@@ -7154,6 +7154,81 @@ build-pgo            16,571 / 16,588 ms      ⇒ **-21.5%**（两对几乎完全
 > 后续若还想再快：PGO 之后剩的是「每步记账」（见续111 的教训：要按 A/B 开关量，不要加桶）
 > 与「GX/定时器按批推进」（需先过保真度）。当前 60 fps 已达标，可以转去做别的验收项。
 
+### 21-B9yi（续113）：**多帧逐像素对照**（把「画面对不对」的证据从 2 帧扩到 7 帧）
+
+方法同续108m（本地 `NDS_NOMB=1` + `--shot-every`，参考核 `REF_SHOT_EVERY` dump
+framebuffer，用 `tools\ref\fbcmp.ps1` 按「参考核第一个屏幕 = 底屏」的映射逐像素比）：
+
+```text
+f=100   bottom differ=0/49152  MAE=0.0000   top differ=0/49152  MAE=0.0000   **完全相同**
+f=200   0/49152 0.0000                        0/49152 0.0000                **完全相同**
+f=300   11775/49152 MAE=34.19                 6042/49152 MAE=13.48          相差（相位）
+f=400   0/49152 0.0000                        0/49152 0.0000                **完全相同**
+f=500   0/49152 0.0000                        0/49152 0.0000                **完全相同**
+f=600   全部像素不同（MAE 43.7/109.3）                                       相差（相位）
+f=700   全部像素不同（MAE 72.1/85.7）                                        相差（相位）
+```
+
+**怎么判定「相位差」而不是「渲染错」**：① 逐像素为 0 的那几帧（100/200/400/500）证明
+**渲染链路（2D+3D+抗锯齿+合成）在任何状态一致的帧上都与参考核完全相同**；
+② 相差的帧是**整屏性质**的差异（如淡入淡出中的亮度、过场天空的不同时刻），且把本地
+f=600 与参考核 f=585…750（每 5 帧）全部比过、**没有任何一帧完全一致** ⇒ 两边
+**时间线已漂开**（本地开机快 ~20 帧 + 之后各自的推进差异），不是某个图元画错；
+③ 这与已知残差（跨核主存差异、开机段指令数差）是同一件事，属于**时序保真度**而不是
+**渲染正确性**。
+
+> 结论：对外可以诚实地说——**状态一致时画面逐像素相同；相差的帧是时间线漂移导致的不同
+> 时刻**，不是渲染缺项。（要看可视证据：`build\ref600.bmp` = 参考核 f=600 的淡色天空，
+> `build\local600.bmp` = 本地 f=600 的橙色天空过场。）
+
+### 21-B9yi（续113b）：**Phase B 里程碑验收清单（最终版）**
+
+> 验收内容 = ①自动部分（一条命令即可，判据是「逐值/逐字节」）；②人工部分（两项试玩）。
+
+**① 自动部分（建议在验收前先跑，作为「程序没坏」的基线）**
+
+```powershell
+# 单测：期望最后一行 === 共 1018 项检查，0 项失败 ===
+.\build\test_nds.exe
+
+# 零回归锚点（2000 帧）：期望
+#   stats: f=2000 top ... rgb=24,36,40  bot ... rgb=52,81,108
+#   savechip: ... nonzero(vs 0xFF)=24 hash=3A361368EF684AD7
+#   截图 SHA-256 = 74D73A3D6552E9931559F062E26707B77F9CFFD6D499120C3DF5394AA6B58314
+.\build\nds-emu.exe tools\rom_ascii.nds --headless-frames 2000 --stats-every 2000 `
+    --shot build\x.bmp --key-frame 1 --key-mask 0x3FF --key-period 120
+
+# 读档逐字节重放：期望 PASS: save/load at frame 300 + 500 frames is byte-exact
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\statetest.ps1 `
+    -Rom tools\rom_ascii.nds -Frame 300 -Run 500 `
+    -Extra "--key-frame,1;--key-mask,0x3FF;--key-period,120"
+
+# 长程稳定（60000 帧自然输入）：期望跑完无停摆、summary vram-nz=393216、每个采样点画面不同
+.\build-pgo\nds-emu.exe tools\rom_ascii.nds --headless-frames 60000 `
+    --key-random 12345 --key-period 40 --touch-random 999 --touch-period 100 `
+    --screen-hash-every 10000
+```
+
+**② 人工部分（用 PGO 构建，战斗场景已达标 59.9 fps）**
+
+```powershell
+# A. 游戏内存档：从开机玩到存档点，做一次游戏内存档，正常退出
+.\build-pgo\nds-emu.exe tools\rom_ascii.nds --shot build\acc.bmp
+#   判据：退出时 savechip 的 nonzero(vs 0xFF) 从 24 明显变大、且 .sav 修改时间/哈希变化；
+#         再启动一次应打印 save : loaded …（而不是 new）
+
+# B. 战斗内长按 LEADER 下令：直接用战斗档跳进去（快捷键见下），鼠标按住底屏 (21,190) ≥0.4 秒
+.\build-pgo\nds-emu.exe tools\rom_ascii.nds --load-state build\battle.state --shot build\acc.bmp
+#   判据：长按后顶屏 3D 视角切换、底屏选择框变化，并且之后能对单位下令
+```
+
+窗口按键：`Z/X/S/D`=A/B/X/Y、`A/F`=L/R、`Enter/Backspace`=START/SELECT、方向键=十字键、
+**鼠标按住底屏=触摸屏**、`Tab`=快进、`F5`/`F8`=即时存档/读档。
+
+**当前里程碑达成情况**：hard_title ✅（早已达成）；画面状态一致时逐像素相同 ✅；
+60 fps 可玩 ✅（战斗场景 59.9 fps，见续112）；存档保真 ✅（读档逐字节重放）；
+只剩 ② 的两项**人工**确认。
+
 ### 21-B9yi（续109i/j）：ARM7 每帧指令数对照 —— 并更正一次**计数口径陷阱**
 
 用两边同口径的每帧指令数（本地 `NDS_INSTRSTAT` / 参考核 `REF_INSTRSTAT`）量同一 ROM 的

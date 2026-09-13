@@ -75,13 +75,23 @@ void cpu_direct_boot(arm_cpu_t *cpu, uint32_t entry)
 /* 3a.3 取指：按 PC 从总线读 32 位指令字（小端拼拆已在 bus_read32 内完成）。 */
 uint32_t cpu_fetch(const arm_cpu_t *cpu)
 {
-    return bus_read32(cpu->nds->bus, cpu->r[15]);
+    bus_t *bus = cpu->nds->bus;
+    int prev = bus->in_code_fetch;
+    bus->in_code_fetch = 1;            /* 21-B9yi(续108g)：取指不计数据代价 */
+    uint32_t v = bus_read32(bus, cpu->r[15]);
+    bus->in_code_fetch = prev;
+    return v;
 }
 
 /* 13.2 Thumb 取指：按 PC 从总线读 16 位半字指令。 */
 uint16_t cpu_fetch16(const arm_cpu_t *cpu)
 {
-    return bus_read16(cpu->nds->bus, cpu->r[15]);
+    bus_t *bus = cpu->nds->bus;
+    int prev = bus->in_code_fetch;
+    bus->in_code_fetch = 1;
+    uint16_t v = bus_read16(bus, cpu->r[15]);
+    bus->in_code_fetch = prev;
+    return v;
 }
 
 /* 21-B9wa（实验）：ARM9 FreeBIOS IRQ 尾部。
@@ -141,6 +151,37 @@ static int bios_irq_tail9(arm_cpu_t *cpu)
    它的代码绝大多数跑在 WRAM，且实测本地 ARM7 指令数本就低于参考核）。 */
 static int s_nonseq_cost = -1; /* -1=未初始化；NDS_ARM9_NOSEQ 可调（默认 1） */
 
+/* 21-B9yi(续108g)：**ARM9 访存代价模型**（`NDS_MEMTIM=1`，默认关）。
+
+   为什么：跨核对账量出「CPU 密集相（开机/装载/重场景）本地 ARM9 的指令吞吐是参考核的
+   ~1.45 倍」——本机对每条指令只计 1 个系统单位（=2 个 ARM9 周期）且**完全不建模数据
+   访问代价**，而参考核 melonDS 按 `MemTimings` 给「取指 + 数据访问」按区域计费。
+
+   本模型按 melonDS 的表折算成 **ARM9 周期**（runner 侧用 ÷2 折成系统单位，见
+   `s_arm9_shift`）：
+
+     取指：**2 周期**（ITCM/DTCM、以及被 I-cache 命中的主存代码；
+           未命中时才贵——melonDS 主存非顺序取指 N32=9 ⇒ 18 周期）。
+     数据：由 bus 侧按访问地址累加（`bus_data_cost_add`）：**1 周期/次**
+           （melonDS 的 CP15 缓存命中路径就是 `DataCycles = 1`）。
+
+   本步合计 = max(取指, 数据, 取指+数据-6)（melonDS 的 AddCycles_CDI 公式，
+   「取指与数据部分流水重叠」）。
+   注：真实 ARM9 有 I/D cache（melonDS 用 CP15 的 ICacheLookup 建模）；本模拟器
+   不建 cache，于是**用「命中口径的常数代价」近似**，再用
+   `REF_INSTRSTAT` 的每帧指令数校准（见 docs/21-rom-bringup.md 续108g）。
+   仅 ARM9；ARM7 保持 1 单位/条（其代码大多在 WRAM，且实测本机 ARM7 指令数本就偏低）。 */
+static int s_memtim = -1;
+
+int cpu_memtim_enabled(void)
+{
+    if (s_memtim < 0) {
+        const char *e = getenv("NDS_MEMTIM");
+        s_memtim = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
+    }
+    return s_memtim;
+}
+
 void cpu_set_nonseq_cost(int v)
 {
     if (v >= 1 && v <= 8)
@@ -153,6 +194,14 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
        这里直接读全局值，热路径不再有「是否初始化过」的判断。 */
     if (cpu->is_arm7)
         return 1u;
+    if (cpu_memtim_enabled()) {
+        /* 21-B9yi(续108g)：取指按「cache 命中」口径计 2 个 ARM9 周期（=1 系统单位）。
+           未命中/冷启动的 18 周期惩罚**不在这里**建模（实测直接按 18 计会把吞吐压到
+           参考核的 0.47 倍——因为本模拟器没有 I-cache，命中率恒为「冷」）。
+           这个常数的合理性由 `REF_INSTRSTAT` 的每帧指令数校准。 */
+        (void)nonseq;
+        return 2u;
+    }
     if (pc - BUS_ARM9_ITCM_BASE < BUS_ARM9_ITCM_SIZE)
         return 1u;                           /* ITCM：melonDS 恒 1 */
     if ((pc >> 24) != 0x02u)
@@ -333,6 +382,9 @@ int cpu_step(arm_cpu_t *cpu)
        七八次（每条指令都做），现在只取一次。 */
     bus_t *bus = cpu->nds->bus;
     io_t *io = cpu->nds->io;
+    /* 21-B9yi(续108g)：访存代价模型开启时，本步的数据访问代价从这里重新累加。 */
+    if (s_memtim == 1 || (s_memtim < 0 && cpu_memtim_enabled()))
+        bus_data_cost_reset();
     /* 21-B9yi：上一条指令消耗的周期数（本步用于推进卡带时钟，使其与
        参考核一样按系统时钟节奏取数；见 io_advance_cart 注释） */
     uint32_t prev_cost = cpu->step_cycles;
@@ -584,8 +636,18 @@ int cpu_step(arm_cpu_t *cpu)
         PROF_ADD(s_prof_exec, xt0);
         /* 21-B9yh：本步取指代价（见 cpu_fetch_cost；step_cycles=0 表示在等待） */
         uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
-        if (cpu->step_cycles != 0 && cpu->step_cycles < fc)
+        if (cpu_memtim_enabled() && !cpu->is_arm7) {
+            /* 21-B9yi(续108g)：取指 + 数据（melonDS 的 AddCycles_CDI 口径：
+               取指与数据部分流水重叠 ⇒ max(code, data, code+data-6)） */
+            uint32_t dc = bus_data_cost_take();
+            uint32_t total = (fc > dc) ? fc : dc;
+            if (fc + dc > 6u && fc + dc - 6u > total)
+                total = fc + dc - 6u;
+            if (cpu->step_cycles != 0)
+                cpu->step_cycles = total;
+        } else if (cpu->step_cycles != 0 && cpu->step_cycles < fc) {
             cpu->step_cycles = fc;
+        }
         PROF_STEP_END(prof_t0);
         return r;
     }
@@ -597,8 +659,16 @@ int cpu_step(arm_cpu_t *cpu)
     PROF_ADD(s_prof_exec, xt0);
     {
         uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
-        if (cpu->step_cycles != 0 && cpu->step_cycles < fc)
+        if (cpu_memtim_enabled() && !cpu->is_arm7) {
+            uint32_t dc = bus_data_cost_take();
+            uint32_t total = (fc > dc) ? fc : dc;
+            if (fc + dc > 6u && fc + dc - 6u > total)
+                total = fc + dc - 6u;
+            if (cpu->step_cycles != 0)
+                cpu->step_cycles = total;
+        } else if (cpu->step_cycles != 0 && cpu->step_cycles < fc) {
             cpu->step_cycles = fc;
+        }
     }
     PROF_STEP_END(prof_t0);
     return r;

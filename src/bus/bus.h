@@ -109,6 +109,9 @@ uint32_t vram_map_texpal[8];          /* 3D 纹理调色板 16KB 槽 → bank �
     uint32_t arm9_dtcm_base;              /* ARM9 DTCM 基址（未使能为 0xFFFFFFFF） */
     uint32_t arm9_dtcm_size;              /* ARM9 DTCM 大小 */
     int active_is_arm7;                   /* 当前访问者身份：0=ARM9, 1=ARM7 */
+    /* 21-B9yi(续108g)：本次访问是「取指」还是「数据访问」——访存代价模型只给数据
+       访问计费（取指代价由 CPU 侧按行计），由 cpu_fetch/cpu_fetch16 置位。 */
+    int in_code_fetch;
     int diag;                             /* 诊断开关：只打印异常事件（未知 SWI/未实现指令/未知 IO），供 bring-up 定位卡点 */
     /* 21-B9xj：写监视（把写入者的 PC 打出来，用于“谁改了这个寄存器”这类定位）。
        addr ∈ [watch_lo[i], watch_hi[i]) 时打印；dbg_pc 由 cpu_step 维护。 */
@@ -125,6 +128,11 @@ uint32_t watch_r_hi[4];
    `bus_dbg_watch*` 调用（此前每次访存都要调一次，函数内部才发现无事可做）。 */
 int watch_on;
 } bus_t;
+
+/* 21-B9yi(续108g)：ARM9 访存代价模型的辅助接口（见 cpu.c 顶部说明）。 */
+int bus_memtim_on(void);
+void bus_data_cost_reset(void);
+uint32_t bus_data_cost_take(void);
 
 bus_t *bus_create(void);
 void bus_destroy(bus_t *bus);

@@ -311,9 +311,15 @@ runner_t *runner_create(nds_t *nds)
     runner_t *r = (runner_t *)calloc(1, sizeof(runner_t));
     if (r == NULL)
         return NULL;
-    {   /* 21-B9yg：ARM9 时钟折算口径（默认 1；NDS_ARM9_DIV=2 切回旧口径做 A/B） */
+    {   /* 21-B9yg：ARM9 时钟折算口径（默认 1；NDS_ARM9_DIV=2 切回旧口径做 A/B）
+           21-B9yi(续108g)：打开 `NDS_MEMTIM=1`（ARM9 按 melonDS 的访存代价表计费，
+           单位变成 **ARM9 周期**）时，默认改用 ÷2 折算成系统单位；显式给
+           `NDS_ARM9_DIV` 时以显式值为准（便于 A/B）。 */
     const char *e = getenv("NDS_ARM9_DIV");
-    s_arm9_shift = (e != NULL && e[0] == '2') ? 1u : 0u;   /* 见 RUNNER_SYS9 注释 */
+    if (e != NULL)
+        s_arm9_shift = (e[0] == '2') ? 1u : 0u;
+    else
+        s_arm9_shift = cpu_memtim_enabled() ? 1u : 0u;
     }
     r->nds = nds;
     s_timer_all = timer_all_enabled();   /* 21-B9yi(续98)：定时器计费口径（A/B 开关） */

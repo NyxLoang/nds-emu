@@ -15,6 +15,55 @@ bus_t *bus_create(void)
     return bus;
 }
 
+/* 21-B9yi(续108g)：**ARM9 数据访问代价累加**（单位 = ARM9 周期）。
+   取指由 CPU 侧按行计费（`cpu_fetch_cost`），这里只累加数据访问：
+   ITCM/DTCM 1 周期（对应 melonDS 的 DataCycles=1），主存 2 周期（D-cache 命中口径），
+   其它区域 2 周期。模型关闭时本文件里所有调用点都不做任何事（默认路径零开销）。 */
+static uint32_t s_data_cost;
+static int s_memtim = -1;
+
+int bus_memtim_on(void)
+{
+    if (s_memtim < 0) {
+        const char *e = getenv("NDS_MEMTIM");
+        s_memtim = (e != NULL && e[0] != '0' && e[0] != '\0') ? 1 : 0;
+    }
+    return s_memtim;
+}
+
+void bus_data_cost_reset(void)
+{
+    s_data_cost = 0;
+}
+
+uint32_t bus_data_cost_take(void)
+{
+    uint32_t v = s_data_cost;
+    s_data_cost = 0;
+    return v;
+}
+
+/* 按访问地址给一次数据访问定价（ARM9 周期）。
+   取「**cache 命中**口径」1 周期：melonDS 的 CP15.cpp 在缓存命中路径上正是
+   `DataCycles = 1`（未命中/未缓存区域才有 18/8 周期的大罚，本模拟器不建 cache，
+   若直接按未命中计会把吞吐压到参考核的 0.47 倍——实测过，见 docs/21 续108g）。
+   代价常数最终由 `REF_INSTRSTAT` 的每帧指令数校准。 */
+static uint32_t bus_data_price(const bus_t *bus, uint32_t addr)
+{
+    (void)bus;
+    (void)addr;
+    return 1u;
+}
+
+static void bus_data_cost_add(const bus_t *bus, uint32_t addr)
+{
+    if (s_memtim == 0 || bus->in_code_fetch)
+        return;
+    if (s_memtim < 0 && !bus_memtim_on())
+        return;
+    s_data_cost += bus_data_price(bus, addr);
+}
+
 void bus_vram_reset_default(bus_t *bus)
 {
     if (bus == NULL)
@@ -672,6 +721,7 @@ uint8_t bus_read8(const bus_t *bus, uint32_t addr)
 
 static uint8_t bus_read8_core(const bus_t *bus, uint32_t addr)
 {
+    bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g)：字节级读 = 数据访问入口 */
     /* 21-B9xq：GBA 扩展槽（0x08000000-0x0BFFFFFF）空槽按参考核返回 0xFF。
        FFXII 启动时用 DMA1 从 0x08000080 取 0x40 字节填 0x02079920-0x0207995F：
        空槽 → 全 0xFFFF → 该表尾段 0xFFFF 被拷进 0x027FFC30（见 21-B9xo）。
@@ -716,6 +766,7 @@ static uint8_t bus_read8_core(const bus_t *bus, uint32_t addr)
 
 void bus_write8(bus_t *bus, uint32_t addr, uint8_t val)
 {
+    bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g)：字节级写 = 数据访问入口 */
     if (bus->diag && !g_wide_write)
         bus_dbg_watch(bus, addr, 1, val);
     /* IO 区间转发给 io 模块（含未实现寄存器写忽略的桩语义） */
@@ -744,6 +795,7 @@ uint16_t bus_read16(const bus_t *bus, uint32_t addr)
         if (!s_no_fast &&
             bus_resolve_mem(bus, addr, &region, &off, &avail) && avail >= 2) {
             uint16_t v = (uint16_t)(region[off] | ((uint16_t)region[off + 1] << 8));
+            bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g)：快路径也要计数据代价 */
             if (bus->diag && bus->watch_on)
                 bus_dbg_watch_read(bus, addr, 2, v);
             return v;
@@ -769,6 +821,7 @@ void bus_write16(bus_t *bus, uint32_t addr, uint16_t val)
             bus_fast_init();
         if (!s_no_fast &&
             bus_resolve_mem(bus, addr, &region, &off, &avail) && avail >= 2) {
+            bus_data_cost_add(bus, addr);
             if (bus->diag && bus->watch_on)
                 bus_dbg_watch(bus, addr, 2, val);
             ((uint8_t *)region)[off] = (uint8_t)(val & 0xFF);
@@ -790,6 +843,7 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
     /* IPC FIFO RECV（0x04100000）在 IO 区间外，需整体读（拆字节会破坏队列） */
     if (addr == BUS_IPC_FIFO_RECV) {
         uint32_t v = bus->io != NULL ? io_recv32(bus->io, bus->active_is_arm7) : 0;
+        bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g) */
         if (bus->diag && bus->watch_on)
             bus_dbg_watch_read(bus, addr, 4, v);
         return v;
@@ -816,6 +870,7 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
             }
         }
         uint32_t v = bus->io != NULL ? io_card_data_read32(bus->io) : 0xFFFFFFFFu;
+        bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g) */
         if (bus->diag && bus->watch_on)
             bus_dbg_watch_read(bus, addr, 4, v);
         return v;
@@ -832,6 +887,7 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
                        | ((uint32_t)region[off + 1] << 8)
                        | ((uint32_t)region[off + 2] << 16)
                        | ((uint32_t)region[off + 3] << 24);
+            bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g) */
             if (bus->diag && bus->watch_on)
                 bus_dbg_watch_read(bus, addr, 4, v);
             return v;
@@ -853,6 +909,7 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
 {
     /* IPC FIFO SEND（0x04000188）是 32 位寄存器，需整体入队（拆字节会被忽略） */
     if (addr == IO_FIFO_SEND) {
+        bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g) */
         if (bus->diag && bus->watch_on)
             bus_dbg_watch(bus, addr, 4, val);   /* 21-B9xr：FIFO 发送走特例，需单独挂钩 */
         if (bus->io != NULL)
@@ -861,6 +918,7 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
     }
     /* 卡带数据端口 CARD_DATA 写（本阶段占位：读 ROM 用不到） */
     if (addr == BUS_CARD_DATA) {
+        bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g) */
         if (bus->diag && bus->watch_on)
             bus_dbg_watch(bus, addr, 4, val);
         if (bus->io != NULL)
@@ -870,6 +928,7 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
     /* 几何命令区（0x04000400..0x040005FF）：ARM9 视角整体转发给 gx，
        拆字节会破坏「命令字 + 参数字」的 40 位命令语义。ARM7 视角仍走音频。 */
     if (addr >= GX_GXFIFO && addr < GX_CMD_PORT_END && !bus->active_is_arm7) {
+        bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g) */
         if (bus->io != NULL)
             io_gx_write32(bus->io, addr, val);
         return;
@@ -882,6 +941,7 @@ void bus_write32(bus_t *bus, uint32_t addr, uint32_t val)
             bus_fast_init();
         if (!s_no_fast &&
             bus_resolve_mem(bus, addr, &region, &off, &avail) && avail >= 4) {
+            bus_data_cost_add(bus, addr);   /* 21-B9yi(续108g) */
             if (bus->diag && bus->watch_on)
                 bus_dbg_watch(bus, addr, 4, val);
             ((uint8_t *)region)[off]     = (uint8_t)(val & 0xFF);

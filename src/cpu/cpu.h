@@ -52,6 +52,11 @@ uint32_t cpu_fetch(const arm_cpu_t *cpu);
    （与参考核时间线最贴合）；`NDS_ARM9_NOSEQ` 或本函数可改（测试用）。 */
 void cpu_set_nonseq_cost(int v);
 
+/* 21-B9yi(续108g)：ARM9 访存代价模型开关（`NDS_MEMTIM=1`）。开启后 ARM9 的
+   `step_cycles` 单位是 **ARM9 周期**（67MHz），runner 侧用 ÷2 折算成系统单位；
+   取指/数据代价按 region 查表（见 cpu.c 顶部注释）。 */
+int cpu_memtim_enabled(void);
+
 /* 从 bus 按 PC 取 16 位 Thumb 指令半字（13.2）。 */
 uint16_t cpu_fetch16(const arm_cpu_t *cpu);
 

@@ -37,9 +37,22 @@ build/nds-emu.exe "tools/Z 最终幻想12 亡灵之翼 6.5全剧情修正版(简
 
 ```sh
 build/nds-emu.exe "<ROM>" --frames 20000 --key-frame 1 --key-mask 0x3FF --key-period 120 --fps-every 2000
-#   fps: frames=0..2000  28018 ms  71.4 fps
-#        phases: events=7 ms  emulation=25114 ms  other=6763 ms
-#        render: ppu=4055 ms  sdl(clear/menu/present)=2708 ms
+#   fps: frames=0..600  3363 ms  59.5 fps      ← 默认：帧节奏把每帧对齐真机 59.83 fps
+#        phases: events=1 ms  emulation=623 ms  other=2739 ms
+#        render: ppu=231 ms  sdl(clear/menu/present)=68 ms
+```
+
+**帧节奏（frame pacing）**：默认把窗口帧率对齐 NDS 真机 **59.8261 Hz**（16.715 ms/帧）。
+原因：轻场景下模拟器能跑到 150–265 fps，**快于真机**，而音频回调是按真实时间驱动 SPU
+⇒ 声音会与画面脱节；对齐后音画同步（`fps:` 显示 ~59.8，多出来的时间是 `other` 里的
+节奏等待，不是卡顿）。
+
+```sh
+# 测「不设上限」的真实性能（自动化压测同样用这个）：
+NDS_NOSYNC=1 build/nds-emu.exe "<ROM>" --frames 600 --fps-every 300
+#   fps: frames=0..300  1130 ms  265.5 fps
+#   fps: frames=300..600  1742 ms  172.2 fps
+# 快进：--speed 2（上限 119.65 fps；场景太重时跑不满属正常）
 ```
 
 ## 命令行开关（常用）
@@ -47,6 +60,7 @@ build/nds-emu.exe "<ROM>" --frames 20000 --key-frame 1 --key-mask 0x3FF --key-pe
 | 开关 | 说明 |
 |------|------|
 | `--frames N` | 窗口模式跑满 N 帧自动退出（冒烟测试），退出时写回 `.sav` |
+| `--speed N` | 帧节奏倍速：`1`=真机速度（默认）、`2`=2 倍速快进、`0`=不限速（等同 `NDS_NOSYNC=1`） |
 | `--headless-frames N` | 无头模式跑 N 帧（不开窗口/音频），用于长跑、对照、批量验证 |
 | `--headless N` / `--headless-cycles N` | 按步数/周期跑（bring-up 诊断用） |
 | `--shot 文件.bmp` | 结束时把双屏截图写成 BMP（顶屏在上） |
@@ -70,6 +84,7 @@ build/nds-emu.exe "<ROM>" --frames 20000 --key-frame 1 --key-mask 0x3FF --key-pe
 | `NDS_NORAST=1` | 只跳过像素级光栅化（行为无关，用于量化光栅化占比） |
 | `NDS_NOFAST=1` | 关闭访存快路径（A/B 对照） |
 | `NDS_NORENDER=1` / `NDS_NOAUDIO=1` | 窗口模式跳过宿主渲染 / 不打开声卡 |
+| `NDS_NOSYNC=1` | 关闭帧节奏（全速运行，用于压测；默认按真机 59.83 Hz 限速） |
 | `NDS_SNDSTAT=1` | 按秒打印混音输出非静音样本数与峰值 |
 | `NDS_GXHIST` / `NDS_BGDBG` / `NDS_MAT_FRAME` / `NDS_POLYDBG` / `NDS_IODUMP_FRAME` … | GX/2D/IO 诊断（细节见 `docs/21-rom-bringup.md`） |
 
@@ -90,7 +105,7 @@ ctest --test-dir build          # 或直接 ./build/test_nds.exe
 
 | 维度 | 状态 |
 |------|------|
-| 画面 | 窗口模式 70–91 fps（12000 帧平均 80）；渲染改动**逐像素零回归**（截图 SHA-256 不变） |
+| 画面 | 默认帧节奏输出真机 59.83 fps（音画同步）；**满速能力 70–265 fps**（重场景/轻场景，`NDS_NOSYNC=1` 可看）；渲染改动**逐像素零回归**（截图 SHA-256 不变） |
 | 键盘 | 全部按键可用（多轮长跑） |
 | 触摸 | **四层闭环**：ARM7 按 ~24 次/帧轮询 SPI → 位置不同读数不同且与手算吻合 → 自然输入下改变游戏进程 → UI 层可见反应（画面指纹分叉 + 像素差） |
 | 音频 | SDL 回调按真实时钟推进；活跃段混音非静音 |

@@ -217,6 +217,11 @@ int main(int argc, char *argv[])
        动机：此前只有「整段平均帧率」，看不出**哪一段**卡；游戏不同场景
        （地牢/对话/战斗指挥界面）负载差别很大，需要分段数据。 */
     uint64_t g_cli_fps_every = 0;
+    /* 21-B9yi(续82)：帧节奏倍速（--speed N）。
+       -1 = 未指定（默认 1.0 倍速，即 NDS 真机帧频）；
+        0 = 不限速（等同 NDS_NOSYNC=1，自动化压测用）；
+        N>0 = N 倍速快进。见主循环末尾的 frame pacing 注释。 */
+    double g_cli_speed = -1.0;
     /* 21-B9yi(续46)：触摸注入脚本（--touch-frame/-x/-y/-period） */
     uint64_t touch_frame = 0, touch_period = 0;
     int touch_x = 128, touch_y = 96;
@@ -299,6 +304,8 @@ int main(int argc, char *argv[])
             g_cli_frames = _wcstoui64(wargv[i + 1], NULL, 10);
         else if (wcscmp(wargv[i], L"--fps-every") == 0 && i + 1 < wargc)
             g_cli_fps_every = _wcstoui64(wargv[i + 1], NULL, 10);
+        else if (wcscmp(wargv[i], L"--speed") == 0 && i + 1 < wargc)
+            g_cli_speed = wcstod(wargv[i + 1], NULL);
         else if (wcscmp(wargv[i], L"--touch-frame") == 0 && i + 1 < wargc)
             touch_frame = _wcstoui64(wargv[i + 1], NULL, 0);
         else if (wcscmp(wargv[i], L"--touch-x") == 0 && i + 1 < wargc)
@@ -381,6 +388,8 @@ int main(int argc, char *argv[])
             g_cli_frames = strtoull(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--fps-every") == 0 && i + 1 < argc)
             g_cli_fps_every = strtoull(argv[i + 1], NULL, 10);
+        else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc)
+            g_cli_speed = strtod(argv[i + 1], NULL);
         else if (strcmp(argv[i], "--touch-frame") == 0 && i + 1 < argc)
             touch_frame = strtoull(argv[i + 1], NULL, 0);
         else if (strcmp(argv[i], "--touch-x") == 0 && i + 1 < argc)
@@ -698,6 +707,41 @@ int main(int argc, char *argv[])
        「SDL 事件泵」与「runner_run_frame（模拟）」两块。 */
     uint64_t t_evt = 0, t_run = 0, freq = SDL_GetPerformanceFrequency();
     uint64_t t_ppu = 0, t_sdl = 0;   /* 21-B9yi(续70)：宿主渲染再拆分 */
+    /* 21-B9yi(续82)：帧节奏（frame pacing）初始化。
+       为什么需要：轻场景下模拟器能跑到 150–265 fps，**快于真机**。而音频回调
+       是按真实时间驱动 SPU 的 ⇒ 声音与画面脱节（真机不存在这种状态）。
+       默认把每帧对齐 NDS 真机帧频（59.8261 Hz ⇒ 16.715 ms/帧）。
+       开关：NDS_NOSYNC=1 或 --speed 0 关闭（自动化压测要保持原速度）；
+             --speed N 以 N 倍速快进。 */
+    const double nds_frame_hz = 59.8261;
+    int pace_on = 1;
+    double pace_speed = 1.0;
+    {
+        const char *e = getenv("NDS_NOSYNC");
+        if (e != NULL && e[0] != '0') {
+            pace_on = 0;
+            printf("window: NDS_NOSYNC=1（关闭帧节奏，全速运行）\n");
+        }
+        if (g_cli_speed < 0.0) {
+            /* 未指定：保持默认限速 */
+        } else if (g_cli_speed == 0.0) {
+            pace_on = 0;
+            printf("window: --speed 0（关闭帧节奏，全速运行）\n");
+        } else {
+            pace_speed = g_cli_speed;
+            pace_on = 1;
+        }
+    }
+    uint64_t pace_freq = SDL_GetPerformanceFrequency();
+    double pace_ticks = 0.0, pace_next = 0.0;
+    if (pace_on && pace_freq != 0) {
+        pace_ticks = (double)pace_freq / (nds_frame_hz * pace_speed);
+        pace_next = (double)SDL_GetPerformanceCounter() + pace_ticks;
+        printf("window: 帧节奏开启 目标 %.2f fps（真机 %.2f fps x%.2f）"
+               "；NDS_NOSYNC=1 或 --speed 0 关闭，--speed N 倍速\n",
+               nds_frame_hz * pace_speed, nds_frame_hz, pace_speed);
+        fflush(stdout);
+    }
     /* 21-B9yi(续47)：鼠标 → 触摸屏（底屏）。布局（逻辑坐标）：
        菜单栏 [0,28)、顶屏 [28,220)、底屏 [220,412)。
        触摸 ADC 换算与 runner `--touch-*` 同口径（固件默认校准，每像素 16 单位）。 */
@@ -862,6 +906,27 @@ int main(int argc, char *argv[])
                    (unsigned long long)frame_limit);
             fflush(stdout);
             quit = 1;
+        }
+
+        /* 21-B9yi(续82)：帧节奏等待 —— 把这一帧对齐到「下一帧截止时刻」。
+           做法：SDL_Delay 睡掉大部分时间，最后 <1.5 ms 忙等（SDL_Delay 只有
+           毫秒粒度，单靠它会带来 ~1 ms 抖动，让 fps 在 55–65 之间晃）。
+           若已经落后（拖动窗口、命中断点、或场景比真机还慢），把截止时刻
+           重置到「现在 + 一帧」，避免连续追赶式狂跑。 */
+        if (pace_ticks > 0.0) {
+            double now = (double)SDL_GetPerformanceCounter();
+            if (now < pace_next) {
+                double wait_ms = (pace_next - now) * 1000.0 / (double)pace_freq;
+                if (wait_ms > 1.5)
+                    SDL_Delay((uint32_t)(wait_ms - 1.0));
+                while ((double)SDL_GetPerformanceCounter() < pace_next) {
+                    /* 忙等收尾（<1.5 ms） */
+                }
+            }
+            pace_next += pace_ticks;
+            now = (double)SDL_GetPerformanceCounter();
+            if (pace_next < now)
+                pace_next = now + pace_ticks;
         }
     }
 

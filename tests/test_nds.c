@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "state/state.h"   /* 21-B9yi(续96)：即时存档/读档 */
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -897,6 +898,67 @@ static void test_wramcnt_regs(nds_t *nds)
 /* ---- 阶段 21-B9yi(续87) 用例：三个此前被当「未知 IO」丢掉的寄存器区 ----
    期望值全部按**参考核 melonDS 口径**（NDS.cpp ARM9IO / SPU.cpp）：
    MOSAIC 可读写、DMA9Fill 可读写能读回、SNDCAP 的 Cnt/DstAddr 可读回。 */
+static long GetFileSizeOf(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (f == NULL)
+        return -1;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fclose(f);
+    return n;
+}
+
+/* ---- 阶段 21-B9yi(续96) 用例：即时存档 / 读档（往返一致 + 指针不被破坏） ---- */
+static void test_save_state(nds_t *nds)
+{
+    const char *path = "state_test.bin";
+
+    bus_write32(nds->bus, BUS_MAIN_RAM_BASE + 0x1234u, 0xA1B2C3D4u);
+    bus_write32(nds->bus, BUS_VRAM_BASE + 0x40u, 0x11223344u);
+    bus_write32(nds->bus, BUS_ARM7_WRAM_BASE + 0x88u, 0x55667788u);
+    nds->cpu->r[0] = 0xDEADBEEFu;
+    nds->cpu->r[15] = 0x02000800u;
+    nds->cpu7->r[3] = 0x12345678u;
+    nds->cpu->cycles = 123456u;
+    nds->io->cartbus.save.data[16] = 0x5Au;
+
+    CHECK_EQ("state save", (uint32_t)state_save(nds, 777u, path), 0u);
+    long sz = GetFileSizeOf(path);
+    CHECK_EQ("state 文件非空", (uint32_t)(sz > 0), 1u);
+
+    bus_write32(nds->bus, BUS_MAIN_RAM_BASE + 0x1234u, 0u);
+    bus_write32(nds->bus, BUS_VRAM_BASE + 0x40u, 0u);
+    bus_write32(nds->bus, BUS_ARM7_WRAM_BASE + 0x88u, 0u);
+    nds->cpu->r[0] = 0;
+    nds->cpu->r[15] = 0;
+    nds->cpu7->r[3] = 0;
+    nds->cpu->cycles = 0;
+    nds->io->cartbus.save.data[16] = 0x00;
+
+    CHECK_EQ("state load", (uint32_t)state_load(nds, path), 0u);
+    CHECK_EQ("state 主存还原", bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x1234u),
+             0xA1B2C3D4u);
+    CHECK_EQ("state VRAM 还原", bus_read32(nds->bus, BUS_VRAM_BASE + 0x40u), 0x11223344u);
+    CHECK_EQ("state ARM7WRAM 还原", bus_read32(nds->bus, BUS_ARM7_WRAM_BASE + 0x88u),
+             0x55667788u);
+    CHECK_EQ("state cpu9 r0 还原", nds->cpu->r[0], 0xDEADBEEFu);
+    CHECK_EQ("state cpu9 pc 还原", nds->cpu->r[15], 0x02000800u);
+    CHECK_EQ("state cpu7 r3 还原", nds->cpu7->r[3], 0x12345678u);
+    CHECK_EQ("state cycles 还原", (uint32_t)nds->cpu->cycles, 123456u);
+    CHECK_EQ("state 存档芯片还原", (uint32_t)nds->io->cartbus.save.data[16], 0x5Au);
+    CHECK_EQ("state 帧号", (uint32_t)state_last_frame(), 777u);
+
+    /* 指针必须完好：读档后还能正常访存 */
+    bus_write32(nds->bus, BUS_MAIN_RAM_BASE + 0x2000u, 0x0BADF00Du);
+    CHECK_EQ("state 指针完好(可继续访存)",
+             bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x2000u), 0x0BADF00Du);
+    CHECK_EQ("state io 反指完好", (uint32_t)(nds->io->bus == nds->bus), 1u);
+    CHECK_EQ("state cpu 反指完好", (uint32_t)(nds->cpu->nds == nds), 1u);
+
+    remove(path);
+}
+
 static void test_unknown_io_regs(nds_t *nds)
 {
     /* MOSAIC：引擎 A 0x0400004C / 引擎 B 0x0400104C，16 位、字节可分 */
@@ -5757,6 +5819,14 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_unknown_io_regs(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9yi 续96] 即时存档 / 读档（内存+CPU+IO+存档芯片往返）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        io_attach_save(nds->io, SAVE_EEPROM_8K);   /* 只为让存档芯片有缓冲可存 */
+        test_save_state(nds);
         nds_destroy(nds);
     }
     printf("\n[case 8.4] 交错调度 2:1\n");

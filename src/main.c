@@ -21,6 +21,7 @@
 #include "audio/audio.h"
 #include "demo/demo.h"
 #include "runner/runner.h"
+#include "state/state.h"   /* 21-B9yi(续96)：即时存档/读档 */
 
 /* 小端工具：装载阶段给 0x027FFxxx 直接启动表填 ROM 头信息时用
    （melonDS SetupDirectBoot 口径，阶段 21-B8）。 */
@@ -217,6 +218,11 @@ int main(int argc, char *argv[])
        动机：此前只有「整段平均帧率」，看不出**哪一段**卡；游戏不同场景
        （地牢/对话/战斗指挥界面）负载差别很大，需要分段数据。 */
     uint64_t g_cli_fps_every = 0;
+    /* 21-B9yi(续96)：即时存档（`--load-state` / `--save-state` [+ `--state-save-frame N`]）。
+       两个路径缓冲区是 static，方便把宽路径转成 UTF-8 后长期持有。 */
+    static char g_cli_state_buf1[512], g_cli_state_buf2[512];
+    const char *g_cli_state_load = NULL, *g_cli_state_save = NULL;
+    uint64_t g_cli_state_frame = 0;
     /* 21-B9yi(续82)：帧节奏倍速（--speed N）。
        -1 = 未指定（默认 1.0 倍速，即 NDS 真机帧频）；
         0 = 不限速（等同 NDS_NOSYNC=1，自动化压测用）；
@@ -304,6 +310,19 @@ int main(int argc, char *argv[])
             g_cli_frames = _wcstoui64(wargv[i + 1], NULL, 10);
         else if (wcscmp(wargv[i], L"--fps-every") == 0 && i + 1 < wargc)
             g_cli_fps_every = _wcstoui64(wargv[i + 1], NULL, 10);
+        /* 21-B9yi(续96)：即时存档开关（宽路径 → UTF-8 窄路径，参数解析完再统一下发） */
+        else if (wcscmp(wargv[i], L"--load-state") == 0 && i + 1 < wargc) {
+            g_cli_state_load = g_cli_state_buf1;
+            WideCharToMultiByte(CP_UTF8, 0, wargv[i + 1], -1, g_cli_state_buf1,
+                                (int)sizeof g_cli_state_buf1, NULL, NULL);
+        }
+        else if (wcscmp(wargv[i], L"--save-state") == 0 && i + 1 < wargc) {
+            g_cli_state_save = g_cli_state_buf2;
+            WideCharToMultiByte(CP_UTF8, 0, wargv[i + 1], -1, g_cli_state_buf2,
+                                (int)sizeof g_cli_state_buf2, NULL, NULL);
+        }
+        else if (wcscmp(wargv[i], L"--state-save-frame") == 0 && i + 1 < wargc)
+            g_cli_state_frame = _wcstoui64(wargv[i + 1], NULL, 10);
         else if (wcscmp(wargv[i], L"--speed") == 0 && i + 1 < wargc)
             g_cli_speed = wcstod(wargv[i + 1], NULL);
         else if (wcscmp(wargv[i], L"--snd-wav") == 0 && i + 1 < wargc) {
@@ -395,6 +414,12 @@ int main(int argc, char *argv[])
             g_cli_frames = strtoull(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--fps-every") == 0 && i + 1 < argc)
             g_cli_fps_every = strtoull(argv[i + 1], NULL, 10);
+        else if (strcmp(argv[i], "--load-state") == 0 && i + 1 < argc)
+            g_cli_state_load = argv[i + 1];
+        else if (strcmp(argv[i], "--save-state") == 0 && i + 1 < argc)
+            g_cli_state_save = argv[i + 1];
+        else if (strcmp(argv[i], "--state-save-frame") == 0 && i + 1 < argc)
+            g_cli_state_frame = strtoull(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc)
             g_cli_speed = strtod(argv[i + 1], NULL);
         else if (strcmp(argv[i], "--snd-wav") == 0 && i + 1 < argc)
@@ -432,6 +457,13 @@ int main(int argc, char *argv[])
 #endif
 
     char err[256];
+
+    /* 21-B9yi(续96)：把命令行里的即时存档配置下发给 state 模块
+       （放在解析循环之后，避免 `--state-save-frame` 与 `--save-state` 的先后顺序影响结果）。 */
+    if (g_cli_state_load != NULL)
+        state_cli_set_load(g_cli_state_load);
+    if (g_cli_state_save != NULL)
+        state_cli_set_save(g_cli_state_save, g_cli_state_frame);
 
     /* 21-B9yi(续46)：把触摸注入脚本交给 runner（headless 帧驱动会套用）。 */
     if (drag_on)
@@ -589,6 +621,13 @@ int main(int argc, char *argv[])
     LocalFree(wargv);
 #endif
 
+    /* 21-B9yi(续96)：`--load-state` 在读档点之前把整机状态覆盖掉
+       （在 ROM/存档装载之后、开跑之前），并让 runner 把时间轴拉到存档时刻。 */
+    if (state_cli_load_now(nds) < 0) {
+        fprintf(stderr, "state: 读档失败，退出\n");
+        return 1;
+    }
+
     /* 阶段 21 bring-up：headless 模式下跑完 N 步即退出，不开窗口/音频 */
     if (headless_steps > 0 || headless_frames > 0) {
         if (headless_frames > 0)
@@ -669,6 +708,9 @@ int main(int argc, char *argv[])
 
     /* 21-B9wq：持久化帧驱动调度器（与 headless 共用事件/周期成本模型） */
     runner_t *frame_runner = runner_create(nds);
+    /* 21-B9yi(续96)：窗口模式同样要在读档后把时间轴拉齐。 */
+    if (frame_runner != NULL && state_take_pending_load())
+        runner_resync_time(frame_runner);
     /* 21-B9yi(续69)：**窗口模式也套用键盘脚本**（`--key-frame/-mask/-period`）。
        此前这些参数只在无头路径生效 ⇒ 所有「窗口带按键」的测量其实都是**无输入**状态，
        而游戏的输入状态会让工作量差 2.6 倍（见 docs/21 续68）⇒ 之前的窗口帧率
@@ -868,6 +910,34 @@ int main(int argc, char *argv[])
                            ff_hold ? "音频静音、SPU 跟随模拟时间" : "恢复实时音频");
                     fflush(stdout);
                 }
+                /* 21-B9yi(续96)：F5 = 存即时存档、F8 = 读即时存档。
+                   路径默认取 `--save-state/--load-state` 给的；没给就用 `<ROM>.state0`。
+                   读档后会重同步调度时间轴（见 runner_resync_time）。 */
+                if (down && (e.key.keysym.sym == SDLK_F5 || e.key.keysym.sym == SDLK_F8)) {
+                    const char *sp = g_cli_state_save != NULL ? g_cli_state_save
+                                                              : "nds_quick.state0";
+                    const char *lp = g_cli_state_load != NULL ? g_cli_state_load
+                                                              : sp;
+                    if (e.key.keysym.sym == SDLK_F5) {
+                        /* 注：窗口模式在帧边界上保存，读档方会用「帧号 × 一帧周期」
+                           还原时间轴（无需额外时间戳）；无头路径则会带上 runner 的时间戳。 */
+                        if (state_save(nds, frames_done, sp) == 0)
+                            printf("state: 已保存 %s（帧 %llu）——按 F8 可读回\n", sp,
+                                   (unsigned long long)frames_done);
+                        else
+                            printf("state: 保存失败 %s\n", sp);
+                    } else {
+                        if (state_load(nds, lp) == 0) {
+                            if (frame_runner != NULL)
+                                runner_resync_time(frame_runner);
+                            printf("state: 已读档 %s（回到帧 %llu）\n", lp,
+                                   (unsigned long long)state_last_frame());
+                        } else {
+                            printf("state: 读档失败 %s\n", lp);
+                        }
+                    }
+                    fflush(stdout);
+                }
                 if (bit != 0) {
                     if (down) keys_pressed |= bit;
                     else      keys_pressed &= (uint16_t)~bit;
@@ -1060,6 +1130,7 @@ int main(int argc, char *argv[])
                (unsigned long long)frames_done, (unsigned long long)el,
                el ? 1000.0 * (double)frames_done / (double)el : 0.0);
         runner_savechip_report(nds);
+        state_cli_save_at_exit(nds, frames_done);   /* 21-B9yi(续96)：--save-state 在退出时落盘 */
         if (headless_shot != NULL) {
             if (runner_save_screenshot(nds, headless_shot) == 0)
                 printf("window: screenshot saved to %s\n", headless_shot);

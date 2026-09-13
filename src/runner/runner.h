@@ -65,6 +65,13 @@ void runner_set_shot_series(uint64_t every, const char *prefix);
 /* 21-B9yi(续32)：每 every 帧打印一次双屏画面统计（非黑比例/均值 RGB）。 */
 void runner_set_stats_series(uint64_t every);
 
+/* 21-B9yi(续96)：**读档后重同步时间轴**。
+   状态文件里存了 CPU 的周期计数，而 runner 自己的调度状态（tm.now / 各 CPU 的
+   周期预算 / 上次补音频·RTC 的位置）必须跟着一起跳到同一时刻，
+   否则读档后第一帧会把「几百帧的差额」一次性补掉（表现为卡一下或音频爆音）。 */
+void runner_resync_time(runner_t *r);
+
+
 /* 21-B9yi(续83)：窗口模式退出时用的两个「人工验收判据」接口。
    savechip_report：打印存档芯片状态（类型/大小/非 0xFF 字节数/哈希）——
    与无头同一口径，人工在游戏里存过档后 nonzero 会明显大于 24。

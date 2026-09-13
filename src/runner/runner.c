@@ -125,8 +125,12 @@ static void runner_apply_watch(nds_t *nds)
 #include "io/rtc.h"       /* rtc_advance_seconds（21-B9wx） */
 #include "bios/bios7_low.h" /* bios7_low_dump_hist（21-B9ye） */
 #include "bios/bios.h"      /* bios_mem_report（21-B9yi 续94：CpuSet/CpuFastSet 统计） */
+#include "state/state.h"    /* 21-B9yi(续96)：读档后重同步时间轴 / 指定帧保存 */
 #include "runner.h"
 #include "timing/timing.h"
+
+/* 21-B9yi(续96)：读档后复原输入脚本相位时要用的换算（定义在文件后半） */
+static uint16_t runner_touch_adc(int px, int base_px, int units);
 
 /* 事件目标 headless：把扫描线/VBlank 挂到 timing 事件表上。 */
 typedef struct runner_ev_ctx {
@@ -257,6 +261,110 @@ runner_t *runner_create(nds_t *nds)
 void runner_destroy(runner_t *r)
 {
     free(r);
+}
+
+/* 21-B9yi(续96)：读档后把调度时间轴拉到存档时刻（见 runner.h 的说明）。
+   以「两颗 CPU 的周期计数」为准：`tm.now` 取 ARM9 的周期数（RUNNER_SYS9 口径），
+   各 CPU 的预算、音频样本计数、RTC 秒数都按比例重算，避免读档后一次性补差额。 */
+void runner_resync_time(runner_t *r)
+{
+    if (r == NULL || r->nds == NULL || r->nds->cpu == NULL)
+        return;
+    /* 优先用存档里的**宿主时间戳**（runner 自己的 tm.now/cost）；没有就退回
+       「帧号 × 一帧周期」（存档是在帧边界上做的，所以这也精确）。 */
+    uint64_t now = 0, cost9 = 0, cost7 = 0;
+    if (state_get_host_time(&now, &cost9, &cost7)) {
+        /* 用存档里的值 */
+    } else {
+        now = state_last_frame() * r->frame_cycles;
+        cost9 = RUNNER_SYS9(r->nds->cpu->cycles);
+        cost7 = r->nds->cpu7 != NULL ? r->nds->cpu7->cycles : 0;
+    }
+    r->tm.now = now;
+    r->last_now = now;
+    uint64_t fc = r->frame_cycles;
+    r->ctx.next_line = (now / (fc / 263) + 1) * (fc / 263);
+    r->ctx.next_frame = (now / fc + 1) * fc;
+    timing_arm(&r->tm, 0, r->ctx.next_line, runner_ev_line, &r->ctx);
+    timing_arm(&r->tm, 1, r->ctx.next_frame, runner_ev_frame, &r->ctx);
+    r->cost9 = cost9;
+    r->cost7 = cost7;
+    /* 21-B9yi(续96)：**等待标志必须按 CPU 的真实状态复原**。
+       runner 只在「该核处于等待（halt）」时才推进它那一侧的定时器
+       （`was9/was7` 门控，见 runner_step）。如果读档后把两个标志都清 0，
+       定时器就**再也不走**了——实测读档后 IRQ 完全停掉（每帧少 5 次），
+       游戏虽然还能跑但定时器驱动的逻辑全停。判据与 runner_step 一致：
+       `step_cycles == 0` 表示该核在等待。 */
+    r->a9_wait = (r->nds->cpu->step_cycles == 0);
+    r->a7_wait = (r->nds->cpu7 != NULL && r->nds->cpu7->step_cycles == 0);
+    r->snd_done = now / 1024ull;
+    r->rtc_done = now / 33513982ull;
+    if (getenv("NDS_STATEDBG") != NULL)
+        printf("runnerdbg[resync]: now=%llu cost9=%llu cost7=%llu wait9=%d wait7=%d"
+               " next_line=%llu next_frame=%llu\n",
+               (unsigned long long)r->tm.now, (unsigned long long)r->cost9,
+               (unsigned long long)r->cost7, r->a9_wait, r->a7_wait,
+               (unsigned long long)r->ctx.next_line,
+               (unsigned long long)r->ctx.next_frame);
+
+    /* 21-B9yi(续96)：**输入脚本的相位也要跟着读档对齐**。
+       否则读档后 `next_press` 还停在脚本起点（帧 1 之类），第一帧就会立刻重按一次键，
+       和存档时那条时间线对不上（实测这样会让 200 帧后的 IRQ 计数差 300+、画面完全不同）。
+       这里按「当前帧号」反推脚本应处的状态：
+         * 按键脚本（固定掩码）：`(fr - key_frame) % period` 落在 [0,12) 内 = 按住中；
+         * 随机按键：按同样规则replay 种子 LCG 到当前帧；
+         * 固定触摸脚本：与按键同规则。 */
+    uint64_t fr = now / r->frame_cycles;
+    if (r->key_random) {
+        if (r->key_period > 0 && fr >= r->key_frame) {
+            uint64_t steps = (fr - r->key_frame) / r->key_period;
+            uint64_t phase = (fr - r->key_frame) % r->key_period;
+            uint32_t seed = r->key_seed;
+            for (uint64_t i = 0; i < steps; i++)
+                seed = seed * 1664525u + 1013904223u;
+            r->key_seed = seed;
+            if (phase < 12u) {
+                r->key_seed = seed * 1664525u + 1013904223u;
+                uint16_t m = (uint16_t)((r->key_seed >> 8) & 0xFFFu);
+                if (m == 0)
+                    m = 0x001u;
+                r->key_mask = m;
+                r->key_down = 1;
+                r->key_release_frame = fr + (12u - phase);
+                io_set_keyinput(r->nds->io, m);
+            } else {
+                r->key_down = 0;
+                r->next_press = fr + (r->key_period - phase);
+                io_set_keyinput(r->nds->io, 0);
+            }
+        }
+    } else if (r->key_mask != 0 && r->key_period > 0 && fr >= r->key_frame) {
+        uint64_t phase = (fr - r->key_frame) % r->key_period;
+        if (phase < 12u) {
+            r->key_down = 1;
+            r->key_release_frame = fr + (12u - phase);
+            io_set_keyinput(r->nds->io, (uint16_t)r->key_mask);
+        } else {
+            r->key_down = 0;
+            r->next_press = fr + (r->key_period - phase);
+            io_set_keyinput(r->nds->io, 0);
+        }
+    }
+    if (r->touch_enabled && !r->touch_random && !r->drag_on &&
+        r->touch_period > 0 && fr >= r->touch_frame) {
+        uint64_t phase = (fr - r->touch_frame) % r->touch_period;
+        if (phase < 12u) {
+            io_set_touch(r->nds->io,
+                         runner_touch_adc(r->touch_x, 33, 16),
+                         runner_touch_adc(r->touch_y, 33, 16), 1);
+            r->touch_down = 1;
+            r->touch_release_frame = fr + (12u - phase);
+        } else {
+            r->touch_down = 0;
+            r->next_touch = fr + (r->touch_period - phase);
+            io_set_touch(r->nds->io, 0, 0xFFFu, 0);
+        }
+    }
 }
 
 void runner_set_keys(runner_t *r, uint64_t frame, uint32_t mask,
@@ -508,6 +616,7 @@ static void runner_keys(runner_t *r)
 
 /* 一次调度迭代：返回 0 表示没有后续硬件事件，无法继续推进。 */
 static void runner_touch(runner_t *r);   /* 21-B9yi(续46)：触摸注入（定义在下方） */
+static uint16_t runner_touch_adc(int px, int base_px, int units);   /* 21-B9yi(续96)：读档相位复原要用 */
 static int runner_step(runner_t *r)
 {
     nds_t *nds = r->nds;
@@ -1011,6 +1120,10 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         printf("headless-frames: runner_create failed\n");
         return;
     }
+    /* 21-B9yi(续96)：若刚读过档，把调度时间轴拉到存档时刻
+       （否则读档后的第一帧会把「几百帧的差额」一次性补掉）。 */
+    if (state_take_pending_load())
+        runner_resync_time(r);
     h9_enabled();   /* 21-B9yi(续41)：初始化热点 PC 统计开关（默认关） */
     /* 21-B9yi(续71)：随机按键浸泡优先于固定按键脚本 */
     if (s_keyrandom_on)
@@ -1031,6 +1144,16 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         if (!runner_run_frame(r))
             break;
         uint64_t fr = runner_frame_index(r);
+        /* 21-B9yi(续96)：`--state-save-frame N` → 跑到第 N 帧时存一份（然后继续跑）。
+           用途：做「存档 → 读档 → 后续输出逐字节一致」的端到端验证。 */
+        state_set_host_time(r->tm.now, r->cost9, r->cost7);
+        if (getenv("NDS_STATEDBG") != NULL)
+            printf("runnerdbg[save]: fr=%llu now=%llu cost9=%llu cost7=%llu"
+                   " wait9=%d wait7=%d\n",
+                   (unsigned long long)fr, (unsigned long long)r->tm.now,
+                   (unsigned long long)r->cost9, (unsigned long long)r->cost7,
+                   r->a9_wait, r->a7_wait);
+        state_cli_save_at_frame(nds, fr);
         g_dbg_frame = fr;
         /* 21-B9yi(续32)：画面统计（每 N 帧一行，与参考核 harness 同口径） */
         /* 21-B9yi(续35)：NDS_MAT_FRAME=N → 第 N 帧结束时打印 3D 矩阵快照
@@ -1389,6 +1512,9 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     }
     bios7_low_dump_hist("end"); /* 21-B9ye：低地址取指直方图（与参考核 hist7 对照） */
     bios_mem_report();          /* 21-B9yi(续94)：大块 HLE 拷贝的规模统计 */
+    /* 21-B9yi(续96)：退出时存档（若配置）——同样带上宿主时间戳 */
+    state_set_host_time(r->tm.now, r->cost9, r->cost7);
+    state_cli_save_at_exit(nds, runner_frame_index(r));
     runner_wav_close();   /* 21-B9yi(续85)：收尾回填 WAV 头（在此之前文件是流式写的） */
     runner_destroy(r);
     fflush(stdout);

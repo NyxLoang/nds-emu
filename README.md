@@ -166,3 +166,14 @@ develop ───────── 日常开发主线（默认分支）
 
 > `--fps-every` 打开时，单帧超过 25 ms 会另打 `heavy: f=… tot=… evt=… emu=… render=…`，
 > 用来区分「模拟太重」还是「宿主渲染太重」（实测 9000 帧里只有 4 个这样的帧，都是模拟占用）。
+
+## 即时存档 / 读档（21-B9yi 续96）
+
+* 窗口里 **F5 存**、**F8 读**（默认文件 `nds_quick.state0`，也可用 CLI 指定）。
+* CLI：`--save-state 文件.state`（跑完保存）、`--state-save-frame N`（跑到第 N 帧保存）、
+  `--load-state 文件.state`（启动读入）。
+* 内容：内存（主存/ITCM/DTCM/ARM7 WRAM/Shared WRAM/VRAM/调色板/OAM）、双核 CPU 全部寄存器与周期、
+  IO 全区、存档芯片、宿主调度时间戳；ROM 与宿主窗口状态不存。
+* **已知限制**：读档后**能正常继续玩**，但不是**逐字节重放**——读档后最初若干帧画面完全一致，
+  随后 ARM7 的时序预算会累积出差异，约百帧后可能走到不同场景（详见 `src/state/statelog.md`）。
+* 诊断：`NDS_STATEDBG=1` 会在存档/读档时打印关键的 CPU 与中断状态，便于对比两侧。

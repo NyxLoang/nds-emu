@@ -726,6 +726,11 @@ int main(int argc, char *argv[])
        又不会发出错乱的音频。松开 Tab 全部还原。 */
     int ff_hold = 0;
     double ff_mul = 4.0;
+    /* 21-B9yi(续93b)：帧节奏误差统计（每帧超出目标截止时刻多少毫秒）——
+       用来定位「1× 下重场景只有 58.3 fps、目标 59.83」到底是哪一段吃掉了时间。 */
+    double pace_late_sum = 0.0, pace_late_max = 0.0;
+    uint64_t pace_late_n = 0;
+    uint64_t pace_resync_n = 0;   /* 超时超过一整帧 ⇒ 必须丢弃欠账的帧数（不可追回） */
     {
         const char *e = getenv("NDS_FF_MUL");
         if (e != NULL && atof(e) > 0.0)
@@ -943,12 +948,27 @@ int main(int argc, char *argv[])
                 printf("     render: ppu=%.0f ms  sdl(clear/menu/present)=%.0f ms\n",
                        1000.0 * (double)t_ppu / (double)freq,
                        1000.0 * (double)t_sdl / (double)freq);
+                if (pace_late_n > 0)
+                    printf("     pace: 超时 %llu/%llu 帧，平均 %.3f ms/帧，最大 %.3f ms，"
+                           "丢帧重同步 %llu 次（目标 %.2f ms）\n",
+                           (unsigned long long)pace_late_n,
+                           (unsigned long long)fps_frames,
+                           pace_late_sum / (double)pace_late_n, pace_late_max,
+                           (unsigned long long)pace_resync_n,
+                           1000.0 / (nds_frame_hz * pace_speed));
+                else
+                    printf("     pace: 无超时（%llu 帧全部赶上目标 %.2f ms，重同步 %llu 次）\n",
+                           (unsigned long long)fps_frames,
+                           1000.0 / (nds_frame_hz * pace_speed),
+                           (unsigned long long)pace_resync_n);
             }
             fflush(stdout);
             fps_frames = 0;
             fps_mark_ms = now_ms;
             t_evt = 0; t_run = 0;
             t_ppu = 0; t_sdl = 0;
+            pace_late_sum = 0.0; pace_late_max = 0.0; pace_late_n = 0;
+            pace_resync_n = 0;
         }
 
         if (frame_limit != 0 && ++frames_done >= frame_limit) {
@@ -961,8 +981,11 @@ int main(int argc, char *argv[])
         /* 21-B9yi(续82)：帧节奏等待 —— 把这一帧对齐到「下一帧截止时刻」。
            做法：SDL_Delay 睡掉大部分时间，最后 <1.5 ms 忙等（SDL_Delay 只有
            毫秒粒度，单靠它会带来 ~1 ms 抖动，让 fps 在 55–65 之间晃）。
-           若已经落后（拖动窗口、命中断点、或场景比真机还慢），把截止时刻
-           重置到「现在 + 一帧」，避免连续追赶式狂跑。 */
+           21-B9yi(续93)：**落后时不要一律重置截止时刻**。此前「只要落后就
+           `pace_next = now + 一帧`」会把每次睡眠多睡的那点时间**丢掉**，
+           于是每帧系统性偏慢：实测 18000 帧长跑平均 **58.4 fps**（每帧 17.15 ms，
+           目标是 16.71 ms，慢 2.6%）。正确做法是**保留欠账**（下一帧少等一会儿补回来），
+           只有落后超过一整帧（拖窗口/断点/场景比真机还慢）才重新对齐。 */
         if (pace_ticks > 0.0) {
             double now = (double)SDL_GetPerformanceCounter();
             if (now < pace_next) {
@@ -975,8 +998,21 @@ int main(int argc, char *argv[])
             }
             pace_next += pace_ticks;
             now = (double)SDL_GetPerformanceCounter();
-            if (pace_next < now)
+            {
+                double late_ms = (now - (pace_next - pace_ticks)) * 1000.0
+                                 / (double)pace_freq;
+                if (late_ms > 0.0) {
+                    pace_late_sum += late_ms;
+                    if (late_ms > pace_late_max)
+                        pace_late_max = late_ms;
+                    pace_late_n++;
+                }
+            }
+            /* 落后不足一帧 ⇒ 保留欠账，下帧自动补偿；超过一帧才重新对齐。 */
+            if (pace_next + pace_ticks < now) {
                 pace_next = now + pace_ticks;
+                pace_resync_n++;
+            }
         }
     }
 

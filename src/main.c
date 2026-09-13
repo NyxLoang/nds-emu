@@ -293,6 +293,8 @@ int main(int argc, char *argv[])
             stats_every = _wcstoui64(wargv[i + 1], NULL, 10);
             runner_set_stats_series(stats_every);
         }
+        else if (wcscmp(wargv[i], L"--screen-hash-every") == 0 && i + 1 < wargc)
+            runner_set_hash_series(_wcstoui64(wargv[i + 1], NULL, 10));
         else if (wcscmp(wargv[i], L"--frames") == 0 && i + 1 < wargc)
             g_cli_frames = _wcstoui64(wargv[i + 1], NULL, 10);
         else if (wcscmp(wargv[i], L"--fps-every") == 0 && i + 1 < wargc)
@@ -373,6 +375,8 @@ int main(int argc, char *argv[])
             stats_every = strtoull(argv[i + 1], NULL, 10);
             runner_set_stats_series(stats_every);
         }
+        else if (strcmp(argv[i], "--screen-hash-every") == 0 && i + 1 < argc)
+            runner_set_hash_series(strtoull(argv[i + 1], NULL, 10));
         else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc)
             g_cli_frames = strtoull(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--fps-every") == 0 && i + 1 < argc)

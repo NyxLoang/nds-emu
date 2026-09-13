@@ -17,6 +17,13 @@ static const char *s_shot_prefix = NULL;
    （非黑像素比例 + 均值 RGB），与参考核 harness 的同名统计口径一致，
    用于客观判定“画面是在推进还是定格”。 */
 static uint64_t s_stats_every = 0;
+/* 21-B9yi(续75)：`--screen-hash-every N` 的画面指纹间隔（见 runner_headless_frames） */
+static uint64_t s_hash_every = 0;
+
+void runner_set_hash_series(uint64_t every)
+{
+    s_hash_every = every;
+}
 /* 21-B9yi(续46)：`--touch-frame/-x/-y/-period` 配置的触摸注入脚本 */
 static int s_touch_on = 0;
 static uint64_t s_touch_frame = 0, s_touch_period = 0;
@@ -923,6 +930,30 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             if (fb_t != NULL && fb_b != NULL) {
                 render_frame(nds->bus, fb_t, fb_b);
                 runner_print_screen_stats(fr, fb_t, fb_b);
+            }
+            free(fb_t);
+            free(fb_b);
+            fflush(stdout);
+        }
+        /* 21-B9yi(续75)：**画面指纹**（`--screen-hash-every N`）。
+           每 N 帧渲染一次双屏、各算一个 64 位 FNV-1a 哈希并打印。用途：
+           ①客观统计「一段运行跑过多少张不同画面」（比 disp-change 更细、
+              比逐帧截图便宜）；②比较不同输入策略能把游戏带到多远。 */
+        if (s_hash_every != 0 && (fr % s_hash_every) == 0) {
+            uint32_t *fb_t = (uint32_t *)malloc(sizeof(uint32_t)
+                                                * RENDER_SCREEN_W * RENDER_SCREEN_H);
+            uint32_t *fb_b = (uint32_t *)malloc(sizeof(uint32_t)
+                                                * RENDER_SCREEN_W * RENDER_SCREEN_H);
+            if (fb_t != NULL && fb_b != NULL) {
+                render_frame(nds->bus, fb_t, fb_b);
+                uint64_t ht = 1469598103934665603ull, hb = ht;
+                for (size_t i = 0; i < (size_t)RENDER_SCREEN_W * RENDER_SCREEN_H; i++) {
+                    ht = (ht ^ fb_t[i]) * 1099511628211ull;
+                    hb = (hb ^ fb_b[i]) * 1099511628211ull;
+                }
+                printf("screenhash: f=%llu top=%016llX bot=%016llX\n",
+                       (unsigned long long)fr, (unsigned long long)ht,
+                       (unsigned long long)hb);
             }
             free(fb_t);
             free(fb_b);

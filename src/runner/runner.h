@@ -31,6 +31,8 @@ void runner_set_touch_random(runner_t *r, uint64_t frame, uint32_t seed,
                              uint64_t period);
 void runner_set_keys_random_series(uint64_t frame, uint32_t seed, uint64_t period);
 void runner_set_touch_random_series(uint64_t frame, uint32_t seed, uint64_t period);
+/* 21-B9yi(续75)：每 N 帧给双屏画面算指纹并打印（统计「跑过多少张不同画面」）。 */
+void runner_set_hash_series(uint64_t every);
 /* 21-B9yi(续46)：触摸注入脚本（屏幕像素坐标；period=0 只点一次，否则每 period
    帧点一次、每次按住 12 帧）。 */
 void runner_set_touch(runner_t *r, uint64_t frame, int x, int y, uint64_t period);

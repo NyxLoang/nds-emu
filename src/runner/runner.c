@@ -213,6 +213,52 @@ struct runner {
 static unsigned s_arm9_shift;             /* 0 = ÷1（默认）、1 = ÷2（旧口径 A/B） */
 #define RUNNER_SYS9(c) ((uint64_t)(c) >> s_arm9_shift)
 
+/* 21-B9yi(续97)：**指令级对照窗口**（`NDS_TRACE_FRAME=N` + `NDS_TRACE_COUNT=K`）。
+   用途：比较两条本该一致的时间线（例如「存档后继续」与「读档后继续」）在哪一条指令上
+   开始分道扬镳——逐条打印 PC 与关键寄存器，diff 一下就能定位到第一处不同。
+   只在窗口内打印，避免刷屏；默认关闭。 */
+static uint64_t s_trace_frame = UINT64_MAX;
+static uint64_t s_trace_count;
+static uint64_t s_trace_budget;
+static uint64_t s_trace_printed;
+static int s_trace_state = -1;   /* -1=未读环境变量，0=关，1=开 */
+
+static int trace_enabled(void)
+{
+    if (s_trace_state < 0) {
+        const char *f = getenv("NDS_TRACE_FRAME");
+        const char *c = getenv("NDS_TRACE_COUNT");
+        if (f != NULL && c != NULL && atoll(c) > 0) {
+            s_trace_frame = (uint64_t)atoll(f);
+            s_trace_count = (uint64_t)atoll(c);
+            s_trace_budget = s_trace_count;
+            s_trace_state = 1;
+        } else {
+            s_trace_state = 0;
+        }
+    }
+    return s_trace_state == 1;
+}
+
+static void trace_step(const char *who, const runner_t *r, const arm_cpu_t *cpu)
+{
+    if (!trace_enabled() || s_trace_budget == 0)
+        return;
+    printf("tr %s pc=%08X r0=%08X r1=%08X r2=%08X r3=%08X r7=%08X sp=%08X"
+           " lr=%08X cpsr=%08X cyc=%llu if9=%08X if7=%08X now=%llu"
+           " t70=%04X/%04X/%u t71=%04X/%04X/%u\n",
+           who, cpu->r[15], cpu->r[0], cpu->r[1], cpu->r[2], cpu->r[3],
+           cpu->r[7], cpu->r[13], cpu->r[14], cpu->cpsr,
+           (unsigned long long)cpu->cycles,
+           r->nds->io->irq[0].ifl, r->nds->io->irq[1].ifl,
+           (unsigned long long)r->tm.now,
+           r->nds->io->timer[1][0].cnt_l, r->nds->io->timer[1][0].cnt_h,
+           r->nds->io->timer[1][0].acc,
+           r->nds->io->timer[1][1].cnt_l, r->nds->io->timer[1][1].cnt_h,
+           r->nds->io->timer[1][1].acc);
+    s_trace_budget--;
+}
+
 /* 21-B9wz 诊断：整段运行的 ARM9 累积热点（hot9: 前 16 + 占比 + 总数）。
    和参考核的 ins9/hist9 对照用：两边热点集合一致说明代码路径相同，
    差异只可能在时序/外设状态。 */
@@ -662,10 +708,14 @@ static int runner_step(runner_t *r)
         cpu_step(nds->cpu7);
         r->a7_wait = (nds->cpu7->step_cycles == 0);
         if (!r->a7_wait) r->cost7 += nds->cpu7->step_cycles;
+        if (trace_enabled() && runner_frame_index(r) >= s_trace_frame)
+            trace_step("7", r, nds->cpu7);
     } else {
         cpu_step(nds->cpu);
         r->a9_wait = (nds->cpu->step_cycles == 0);
         if (!r->a9_wait) r->cost9 += nds->cpu->step_cycles;
+        if (trace_enabled() && runner_frame_index(r) >= s_trace_frame)
+            trace_step("9", r, nds->cpu);
         if (s_h9_on != 0) {
             uint32_t pc = nds->cpu->r[15];
             uint32_t h = (pc >> 4) & 0xFFFFu;

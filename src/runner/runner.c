@@ -362,10 +362,22 @@ void runner_resync_time(runner_t *r)
             r->last_now = now;
     }
     uint64_t fc = r->frame_cycles;
-    r->ctx.next_line = (now / (fc / 263) + 1) * (fc / 263);
-    r->ctx.next_frame = (now / fc + 1) * fc;
-    timing_arm(&r->tm, 0, r->ctx.next_line, runner_ev_line, &r->ctx);
-    timing_arm(&r->tm, 1, r->ctx.next_frame, runner_ev_frame, &r->ctx);
+    /* 事件截止时刻：优先用**存档里记的原值**（事件在存档时刻已武装到某个具体时刻，
+       按 `now` 重算不一定相同）；没有存档信息时才按 now 重算。 */
+    uint64_t nl = 0, nf = 0;
+    if (have_saved && state_get_host_sched(&nl, &nf) && nl > now && nf > now) {
+        r->ctx.next_line = nl;
+        r->ctx.next_frame = nf;
+    } else {
+        r->ctx.next_line = (now / (fc / 263) + 1) * (fc / 263);
+        r->ctx.next_frame = (now / fc + 1) * fc;
+    }
+    /* 21-B9yi(续106)：`timing_arm()` 的第三个参数是**相对延时**（内部做
+       `deadline = now + delay`），不是绝对时刻！这里此前直接把绝对截止时刻传进去，
+       读档后两个事件被排到「现在 + 一万多帧」⇒ **VBlank/扫描线事件全没了**
+       （实测读档后帧号飘到 24000、中断时序全乱，正是读档分歧的根因）。 */
+    timing_arm(&r->tm, 0, r->ctx.next_line - now, runner_ev_line, &r->ctx);
+    timing_arm(&r->tm, 1, r->ctx.next_frame - now, runner_ev_frame, &r->ctx);
     r->cost9 = cost9;
     r->cost7 = cost7;
     /* 21-B9yi(续96)：**等待标志必须按 CPU 的真实状态复原**。
@@ -1266,6 +1278,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         state_set_host_time(r->tm.now, r->cost9, r->cost7);
         state_set_host_wait(r->a9_wait, r->a7_wait);   /* 21-B9yi(续100)：等待标志一起存 */
         state_set_host_last_now(r->last_now);          /* 21-B9yi(续101)：last_now 一起存 */
+        state_set_host_sched(r->ctx.next_line, r->ctx.next_frame);  /* 续106：事件截止时刻 */
         if (getenv("NDS_STATEDBG") != NULL)
             printf("runnerdbg[save]: fr=%llu now=%llu cost9=%llu cost7=%llu"
                    " wait9=%d wait7=%d\n",
@@ -1635,6 +1648,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     state_set_host_time(r->tm.now, r->cost9, r->cost7);
     state_set_host_wait(r->a9_wait, r->a7_wait);   /* 21-B9yi(续100)：等待标志一起存 */
     state_set_host_last_now(r->last_now);          /* 21-B9yi(续101)：last_now 一起存 */
+    state_set_host_sched(r->ctx.next_line, r->ctx.next_frame);  /* 续106 */
     state_cli_save_at_exit(nds, runner_frame_index(r));
     runner_wav_close();   /* 21-B9yi(续85)：收尾回填 WAV 头（在此之前文件是流式写的） */
     runner_destroy(r);

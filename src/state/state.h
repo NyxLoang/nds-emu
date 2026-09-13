@@ -66,5 +66,10 @@ int  state_get_host_wait(int *wait9, int *wait7);
    就会让之后每一步的计费都差 1 个周期（实测正是这个量级）。 */
 void state_set_host_last_now(uint64_t last_now);
 int  state_get_host_last_now(uint64_t *last_now);
+/* 21-B9yi(续106)：**已武装的两个事件截止时刻**（扫描线 / 帧）。
+   它们不一定等于「按 now 重算」的值（见 runner_resync_time 的说明），
+   所以直接存原值、读档时原样恢复，避免读档后事件时序错位。 */
+void state_set_host_sched(uint64_t next_line, uint64_t next_frame);
+int  state_get_host_sched(uint64_t *next_line, uint64_t *next_frame);
 
 #endif /* NDS_EMU_STATE_H */

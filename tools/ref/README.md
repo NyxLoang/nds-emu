@@ -53,6 +53,7 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_PCHIT_LO=0200EE4C` / `REF_PCHIT_HI=0200EF00` / `REF_PCHIT_MAX=N` | 挂 `ARM9Read16/32` 的**地址命中**日志（`refpc arm9 …`）。**已知限制**：本版 melonDS 的**指令取指走 ARM.h 的内联 `CodeRead16/32→BusRead*`**，不进虚拟 `NDS::ARM9Read*` ⇒ 抓不到取指（实测对确定会执行的地址也是 0 命中），只对**数据读**有效；要追「执行了哪段代码」得给参考树打补丁（21-B9yi 续108 记录了这个负结果） |
 | `REF_INSTRSTAT=N` | 每 N 帧打一行 `refinstr: f=… i9=… i7=… b9=… b7=…`（两核**累计指令条数** + 其中**执行在 BIOS 区**的条数；与本模拟器的 `NDS_INSTRSTAT=N` 同口径）。需要先给参考树打 `melonds-armstat.patch`（见下） |
 | `REF_CARTSTAT=N` | 每 N 帧打一行 `refcart: f=… reads=…`（**0x04100010 ROM 数据口累计读次数**），与本地 `NDS_CARTSTAT=N` 的 `cartro:` 同口径；用来比较两边「从 ROM 取数」的时间线（21-B9yi 续108i） |
+| `REF_CARTLOG=1` | **卡带传输级日志**：`refcartlog: f=… START cmd=… len=… romcnt=…` / `… END pos=… len=… cnt=…`，与本地 `NDS_CARTLOG2=LO-HI` 的 `cartlog2:` 行字段对齐。需要先打 `melonds-cartlog.patch`（见下） |
 
 ### 可选补丁：`melonds-armstat.patch`（每帧指令数，21-B9yi 续108e）
 
@@ -77,6 +78,26 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 只执行了 ARM9 BIOS **3,341** 条、ARM7 BIOS **25,806** 条 —— 即 melonDS **也是 HLE**
 SWI 的，并不真跑 FreeBIOS 代码。所以「本地 HLE 掉 SWI ⇒ 工作量比参考核少」这条假设
 **被证伪**，开机段的指令数差异另有原因（下一步查「开机被哪个事件/IO 门控」）。
+
+### 可选补丁：`melonds-cartlog.patch`（卡带传输级日志，21-B9yi 续108j）
+
+```powershell
+git -C "$env:TEMP\melonds-ref" apply <仓库路径>\tools\ref\melonds-cartlog.patch
+ninja -C "$env:TEMP\melonds-ref\build-core" refhead
+```
+
+实测（同键脚本、开机段）：
+
+```text
+参考核 f=9  refcartlog: START cmd=B7000A4A len=512 romcnt=A1416657
+            refcartlog: END   pos=512 len=512 cnt=0
+            refcartlog: START cmd=B8000000 len=4   romcnt=A7416000   ← B8 = 读芯片 ID
+            refcartlog: START cmd=B7000A4C len=512 romcnt=A1416657   ← 下一块（地址 +0x200）
+本地（同帧）同一套命令/长度/递增规律，但**每帧 ~52 次传输**（≈45 块）
+```
+
+⇒ 两边的命令流**同构**（`B7` 512 字节块 + `B8` 芯片 ID 交替，地址按 0x200 递增），
+差异纯粹在**节奏**：本地一次循环迭代能凑满一整块，参考核要 ~10 倍时间。
 
 ## 主内存逐字节对账（21-B9yi 续91）
 

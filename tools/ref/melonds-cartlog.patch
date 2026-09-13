@@ -1,0 +1,45 @@
+diff --git a/src/NDSCart.cpp b/src/NDSCart.cpp
+index 35394c9..626ebeb 100644
+--- a/src/NDSCart.cpp
++++ b/src/NDSCart.cpp
+@@ -38,6 +38,18 @@
+ 
+ namespace melonDS
+ {
++
++/* 21-B9yi(续108j) 诊断：`REF_CARTLOG=1` → 把卡带**传输级**事件按帧打出来
++   （START: 命令+长度；END: 已传位置/长度）。字段与本地 `NDS_CARTLOG2` 的
++   `cartlog2:` 行对齐，用于比较「谁在什么时候作废/重排一次传输」。 */
++extern int RefDbgFrame;
++static int RefCartLogOn()
++{
++    static int on = -1;
++    if (on < 0)
++        on = (std::getenv("REF_CARTLOG") != nullptr) ? 1 : 0;
++    return on;
++}
+ using Platform::Log;
+ using Platform::LogLevel;
+ 
+@@ -797,6 +809,11 @@ void NDSCartSlot::Interface::WriteROMCnt(u32 val, u32 mask)
+     if (Parent.CartActive && Parent.CPUSelect == Num)
+         Parent.Cart->ROMCommandStart(Parent, ROMCommand);
+ 
++    if (RefCartLogOn())
++        std::printf("refcartlog: f=%d START cmd=%02X%02X%02X%02X len=%u romcnt=%08X\n",
++                    RefDbgFrame, ROMCommand[0], ROMCommand[1], ROMCommand[2],
++                    ROMCommand[3], datasize, ROMCnt);
++
+     // reset the FIFO
+     ROMDataPosCPU = 0;
+     ROMDataPosCart = 0;
+@@ -942,6 +959,9 @@ void NDSCartSlot::Interface::ROMAdvanceSend()
+ 
+ void NDSCartSlot::Interface::ROMEndTransfer(u32 param)
+ {
++    if (RefCartLogOn())
++        std::printf("refcartlog: f=%d END pos=%u len=%u cnt=%d romcnt=%08X\n",
++                    RefDbgFrame, ROMTransferPos, ROMTransferLen, ROMDataCount, ROMCnt);
+     ROMCnt &= ~(1<<31);
+ 
+     ROMTransferPos = 0;

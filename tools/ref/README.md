@@ -52,6 +52,7 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_FIFO_LOG=1` / `REF_FIFO_MAX=N` | **IPC 发送流日志**：每次写 0x04000188 打一行 `fifolog arm9 a=… v=… pc=… lr=… f=…`（默认上限 20000），与本地 `--watch 04000188-0400018C` 对齐，用来逐条对照两核消息流（21-B9yi 续108） |
 | `REF_PCHIT_LO=0200EE4C` / `REF_PCHIT_HI=0200EF00` / `REF_PCHIT_MAX=N` | 挂 `ARM9Read16/32` 的**地址命中**日志（`refpc arm9 …`）。**已知限制**：本版 melonDS 的**指令取指走 ARM.h 的内联 `CodeRead16/32→BusRead*`**，不进虚拟 `NDS::ARM9Read*` ⇒ 抓不到取指（实测对确定会执行的地址也是 0 命中），只对**数据读**有效；要追「执行了哪段代码」得给参考树打补丁（21-B9yi 续108 记录了这个负结果） |
 | `REF_INSTRSTAT=N` | 每 N 帧打一行 `refinstr: f=… i9=… i7=… b9=… b7=…`（两核**累计指令条数** + 其中**执行在 BIOS 区**的条数；与本模拟器的 `NDS_INSTRSTAT=N` 同口径）。需要先给参考树打 `melonds-armstat.patch`（见下） |
+| `REF_CARTSTAT=N` | 每 N 帧打一行 `refcart: f=… reads=…`（**0x04100010 ROM 数据口累计读次数**），与本地 `NDS_CARTSTAT=N` 的 `cartro:` 同口径；用来比较两边「从 ROM 取数」的时间线（21-B9yi 续108i） |
 
 ### 可选补丁：`melonds-armstat.patch`（每帧指令数，21-B9yi 续108e）
 

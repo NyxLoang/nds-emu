@@ -22,6 +22,9 @@ bus_t *bus_create(void)
 static uint32_t s_data_cost;
 static int s_memtim = -1;
 
+/* 21-B9yi(续108i)：卡带数据口读次数（诊断，见 bus.h）。 */
+unsigned long long g_cart_reads;
+
 int bus_memtim_on(void)
 {
     if (s_memtim < 0) {
@@ -851,6 +854,7 @@ uint32_t bus_read32(const bus_t *bus, uint32_t addr)
     /* 卡带数据端口 CARD_DATA（0x04100010）在 IO 区间外，需整体读（读自动推进地址） */
     if (addr == BUS_CARD_DATA)
     {
+        g_cart_reads++;   /* 21-B9yi(续108i)：诊断计数（NDS_CARTSTAT） */
         /* 21-B9yi 诊断：NDS_CARTLOG2=LO-HI 时打印每次数据端口读的（帧, CPSR）,
            用于对照「参考核的块读是否在关中断状态下原子完成」 */
         {

@@ -134,6 +134,10 @@ int bus_memtim_on(void);
 void bus_data_cost_reset(void);
 uint32_t bus_data_cost_take(void);
 
+/* 21-B9yi(续108i)：卡带数据口（0x04100010）的读次数（`NDS_CARTSTAT=1` 每帧打印），
+   与参考核 harness 的 `refcart:` 同口径，用来比较两边「从 ROM 取数」的时间线。 */
+extern unsigned long long g_cart_reads;
+
 bus_t *bus_create(void);
 void bus_destroy(bus_t *bus);
 

@@ -75,6 +75,10 @@ static void watch_write(int who, const char* op, u32 addr, u64 val,
    覆写不了）。这条记录留着，免得下一个人再踩一遍。 */
 static u32 g_pchit_lo = 0, g_pchit_hi = 0;
 static int g_pchit_on = -1, g_pchit_n = 0, g_pchit_max = 2000;
+/* 21-B9yi(续108i)：**卡带数据口读次数**统计（`REF_CARTSTAT=1` 时每帧一行）。
+   用途：比较两边「游戏从 ROM 取数」的时间线——开机装载是卡带驱动的，
+   若本地更早/更密地把数据交出去，游戏就会更早跑完装载（见 docs/21 续108i）。 */
+static u32 g_cart_reads, g_cart_period;
 
 static void pchit_init(void)
 {
@@ -460,6 +464,8 @@ public:
     u32 ARM9Read32(u32 addr) override
     {
         pchit_check(0, addr & ~3u, ARM9.R[15], ARM9.CPSR);
+        if (addr == 0x04100010u)
+            g_cart_reads++;   /* 21-B9yi(续108i)：ROM 数据口 */
         return NDS::ARM9Read32(addr);
     }
 
@@ -654,6 +660,20 @@ int main(int argc, char** argv)
                             (unsigned long long)nds->ARM7.InstrCount,
                             (unsigned long long)nds->ARM9.BiosInstrCount,
                             (unsigned long long)nds->ARM7.BiosInstrCount);
+        }
+        /* 21-B9yi(续108i)：`REF_CARTSTAT=1` → 每帧一行 ROM 数据口读次数（累计）。 */
+        {
+            static int cart_stat = -1;
+            if (cart_stat == -1) {
+                cart_stat = (std::getenv("REF_CARTSTAT") != nullptr) ? 1 : 0;
+                if (const char* e = std::getenv("REF_CARTSTAT"))
+                    g_cart_period = (u32)std::atoi(e);   /* 0 = 每帧 */
+            }
+            if (cart_stat > 0) {
+                u32 period = g_cart_period ? g_cart_period : 1u;
+                if ((frame % period) == 0)
+                    std::printf("refcart: f=%d reads=%u\n", frame, g_cart_reads);
+            }
         }
         /* 21-B9yi(续91)：`REF_RAMDUMP_FRAME=N` → 额外在第 N 帧 dump 主内存，
            便于用二分法定位「本地与参考核从哪一帧开始分叉」（固定帧号只有 10 个，

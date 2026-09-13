@@ -1598,6 +1598,23 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                 fflush(stdout);
             }
         }
+        /* 21-B9yi(续108i)：`NDS_CARTSTAT=N` → 每 N 帧一行 ROM 数据口累计读次数
+           （与参考核 `refcart:` 同口径，用来比较「从 ROM 取数」的时间线）。 */
+        {
+            static uint64_t cart_every = 0;
+            if (cart_every == 0) {
+                const char *e = getenv("NDS_CARTSTAT");
+                cart_every = (e != NULL) ? (uint64_t)atoll(e) : UINT64_MAX;
+                if (cart_every == 0)
+                    cart_every = 1;
+            }
+            if (fr % cart_every == 0) {
+                extern unsigned long long g_cart_reads;
+                printf("cartro: f=%llu reads=%llu\n", (unsigned long long)fr,
+                       (unsigned long long)g_cart_reads);
+                fflush(stdout);
+            }
+        }
     }
 
     printf("headless-frames: done. frame=%llu now=%llu"

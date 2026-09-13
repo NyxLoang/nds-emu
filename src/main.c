@@ -792,6 +792,8 @@ int main(int argc, char *argv[])
 
         SDL_Event e;
         uint64_t c0 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
+        /* 21-B9yi(续93b)：本帧的分段计时（事件 / 模拟 / 渲染），供重帧诊断使用 */
+        uint64_t c1 = 0, c2 = 0;
         while (SDL_PollEvent(&e)) {
             if (window_handle_event(&e)) {
                 quit = 1;
@@ -879,13 +881,14 @@ int main(int argc, char *argv[])
            阶段 8.4：双核按 ARM9:ARM7 = 2:1 交错调度（i%3==2 时跑 ARM7）。
            每 60 周期打一次状态，避免死循环时刷屏。 */
         if (nds->cpu != NULL && nds->cpu7 != NULL) {
-            uint64_t c1 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
+            c1 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
             if (g_cli_fps_every != 0)
                 t_evt += c1 - c0;
             if (frame_runner != NULL)
                 runner_run_frame(frame_runner);
+            c2 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
             if (g_cli_fps_every != 0)
-                t_run += SDL_GetPerformanceCounter() - c1;
+                t_run += c2 - c1;
             if (nds->cpu->cycles % 60u == 0) {
                 printf("cpu: frame done, ARM9 PC=%08X cycles=%llu | ARM7 PC=%08X cycles=%llu\n",
                        nds->cpu->r[15], (unsigned long long)nds->cpu->cycles,
@@ -927,6 +930,22 @@ int main(int argc, char *argv[])
             if (g_cli_fps_every != 0) {
                 t_ppu += r2 - r1;                 /* ppu_render：软件合成 + 纹理上传 + 双屏绘制 */
                 t_sdl += (r1 - r0) + (r3 - r2);   /* 清屏/菜单 + Present */
+            }
+        }
+
+        /* 21-B9yi(续93b)：**重帧逐帧诊断**（仅 `--fps-every` 打开时）。
+           续93 发现重场景每 3000 帧有 27~35 个「超出一整帧预算」的突发帧（最重 37~40 ms），
+           这里把超过阈值的帧单独打出来，看时间花在 模拟 / ppu 渲染 / SDL 的哪一块。 */
+        if (g_cli_fps_every != 0 && c0 != 0) {
+            uint64_t fend = SDL_GetPerformanceCounter();
+            double tot_ms = 1000.0 * (double)(fend - c0) / (double)freq;
+            if (tot_ms > 25.0) {
+                printf("heavy: f=%llu tot=%.1f ms  evt=%.1f  emu=%.1f  render=%.1f\n",
+                       (unsigned long long)(frames_done + 1), tot_ms,
+                       1000.0 * (double)(c1 - c0) / (double)freq,
+                       1000.0 * (double)(c2 - c1) / (double)freq,
+                       1000.0 * (double)(fend - c2) / (double)freq);
+                fflush(stdout);
             }
         }
 
@@ -990,6 +1009,9 @@ int main(int argc, char *argv[])
             double now = (double)SDL_GetPerformanceCounter();
             if (now < pace_next) {
                 double wait_ms = (pace_next - now) * 1000.0 / (double)pace_freq;
+                /* 21-B9yi(续93c)：阈值 1.5 ms 的对照实验（试过提到 3 ms「少睡多转」）
+                   显示 fps 无变化（58.3/59.8/58.7 完全一样）⇒ 说明误差不来自睡眠粒度，
+                   于是**还原 1.5 ms**，避免白烧 CPU。 */
                 if (wait_ms > 1.5)
                     SDL_Delay((uint32_t)(wait_ms - 1.0));
                 while ((double)SDL_GetPerformanceCounter() < pace_next) {
@@ -1008,8 +1030,12 @@ int main(int argc, char *argv[])
                     pace_late_n++;
                 }
             }
-            /* 落后不足一帧 ⇒ 保留欠账，下帧自动补偿；超过一帧才重新对齐。 */
-            if (pace_next + pace_ticks < now) {
+            /* 21-B9yi(续93c)：**欠账上限改成时间制（100 ms）**。
+               保留欠账让下几帧少等、把短突发补回来（旧实现「落后 1 帧就丢」，
+               重场景里每次丢掉一整段欠账，27~37 次/3000 帧 ⇒ 58.4 fps）；
+               但不能无限保留：声卡是按墙钟推进的，游戏时间必须跟住墙钟，
+               所以只允许最多 100 ms 的欠账（够吸收突发，又让漂移有界）。 */
+            if (now - pace_next > 0.1 * (double)pace_freq) {
                 pace_next = now + pace_ticks;
                 pace_resync_n++;
             }

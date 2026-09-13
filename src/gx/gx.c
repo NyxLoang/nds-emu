@@ -580,6 +580,13 @@ void gx_raster_tri(gx_t *g, int x0, int y0, int x1, int y1, int x2, int y2, uint
         for (int xx = minx; xx <= maxx; xx++)
             if (gx_point_in_tri(xx, yy, x0, y0, x1, y1, x2, y2))
             {
+                /* 21-B9yi(续108l)：抗锯齿开启时，把要被覆盖的不透明像素下推
+                   （melonDS 在画新不透明像素前 `ColorBuffer[+BufferSize] = …`） */
+                size_t pi = (size_t)yy * GX_SCREEN_W + xx;
+                if (gx_aa_enabled(g) && g->fba[pi] != 0) {
+                    g->fb2[pi] = g->fb[pi];
+                    g->fba2[pi] = g->fba[pi];
+                }
                 g->fb[yy * GX_SCREEN_W + xx] = color;
                 /* 21-B9yi(续34)：这个公开入口画出来的是**不透明**几何，
                    必须同时写 alpha 平面，否则 3D 图层在合成时会被当成透明。 */
@@ -993,6 +1000,35 @@ static void gx_raster_clipped_tri(gx_t *g, const gx_clipv_t *va,
 }
 
 /* 原 gx_raster_vert_tri 的实现（顶点已在屏幕空间且已裁剪） */
+
+/* 21-B9yi(续108l)：3D 抗锯齿是否生效（DISP3DCNT bit4）——`NDS_NOAA=1` 可关，
+   便于 A/B 量化「覆盖度计算 + 边缘混合」的代价与效果。 */
+int gx_aa_enabled(const gx_t *g)
+{
+    static int noaa = -1;
+    if (noaa < 0)
+        noaa = (getenv("NDS_NOAA") != NULL) ? 1 : 0;
+    return ((g->disp3dcnt & (1u << 4)) != 0) && (noaa == 0);
+}
+
+/* 21-B9yi(续108l)：**4 子样本覆盖度**（0..31，31=整像素在内）。
+   把像素放大 2 倍（中心在 2x+1），子样本取 (±1,±1)——与 melonDS 抗锯齿
+   （DISP3DCNT bit4）用的覆盖度同义，交给 2D 合成阶段做边缘融合。 */
+static uint8_t gx_coverage4(int xx, int yy, int x0, int y0,
+                            int x1, int y1, int x2, int y2)
+{
+    int in = 0;
+    const int cx2 = xx * 2 + 1, cy2 = yy * 2 + 1;
+    const int ax = x0 * 2, ay = y0 * 2;
+    const int bx = x1 * 2, by = y1 * 2;
+    const int dx = x2 * 2, dy = y2 * 2;
+    if (gx_point_in_tri(cx2 - 1, cy2 - 1, ax, ay, bx, by, dx, dy)) in++;
+    if (gx_point_in_tri(cx2 + 1, cy2 - 1, ax, ay, bx, by, dx, dy)) in++;
+    if (gx_point_in_tri(cx2 - 1, cy2 + 1, ax, ay, bx, by, dx, dy)) in++;
+    if (gx_point_in_tri(cx2 + 1, cy2 + 1, ax, ay, bx, by, dx, dy)) in++;
+    return (uint8_t)((in * 31) / 4);
+}
+
 static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
                                    const gx_vertex_t *b, const gx_vertex_t *c)
 {
@@ -1018,10 +1054,18 @@ static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
         if (fmaxy >= GX_SCREEN_H) fmaxy = GX_SCREEN_H - 1;
         /* 平色路径也要写 alpha 平面（3D 图层合成看的就是它） */
         uint32_t drew = 0;
+        const int aa_on = gx_aa_enabled(g);
         for (int yy = fminy; yy <= fmaxy; yy++)
             for (int xx = fminx; xx <= fmaxx; xx++)
                 if (gx_point_in_tri(xx, yy, fx0, fy0, fx1, fy1, fx2, fy2)) {
+                    uint8_t cov = 31;
+                    if (aa_on && pa == 31) {
+                        cov = gx_coverage4(xx, yy, fx0, fy0, fx1, fy1, fx2, fy2);
+                        if (cov == 0)
+                            continue;   /* 21-B9yi(续108l)：边缘无覆盖 → 不写 */
+                    }
                     g->fba[(size_t)yy * GX_SCREEN_W + xx] = pa;
+                    g->cov[(size_t)yy * GX_SCREEN_W + xx] = cov;
                     drew++;
                 }
         g->px_written += drew;
@@ -1139,8 +1183,26 @@ static void gx_raster_vert_tri_raw(gx_t *g, const gx_vertex_t *a,
                 col = gx_fog_apply(g, col, &aa, pz);
             if ((g->disp3dcnt & (1u << 7)) && (g->poly_attr & (1u << 15)))
                 g->fog_px++;
+            /* 21-B9yi(续108l)：**抗锯齿的覆盖度**（DISP3DCNT bit4，本作开着）。
+               只对不透明片元算：把像素放大 2 倍（中心在 2x+1），用 4 个子样本
+               (±1,±1) 判是否在三角形内 ⇒ 覆盖度 0..31（4 个全中 = 31）。
+               melonDS 在 `ScanlineFinalPass` 里用同样的覆盖度把 3D 边缘像素与
+               下层融合；本地把覆盖度交给 2D 合成阶段（render.c 的 render_3d）。 */
+            uint8_t cov = 31;
+            if (gx_aa_enabled(g) && aa == 31) {
+                cov = gx_coverage4(xx, yy, x0, y0, x1, y1, x2, y2);
+                if (cov == 0)
+                    continue;   /* 边缘上完全没覆盖：不写这个像素（露出下层） */
+            }
+            /* 21-B9yi(续108l)：抗锯齿要保留「被压下去的那一层」——
+               melonDS 在画新的不透明像素前把旧像素下推（`& (1<<4)` 时）。 */
+            if (gx_aa_enabled(g) && aa == 31 && g->fba[pi] != 0) {
+                g->fb2[pi] = g->fb[pi];
+                g->fba2[pi] = g->fba[pi];
+            }
             g->fb[pi] = col;
             g->fba[pi] = aa;
+            g->cov[pi] = cov;
             g->zbuf[pi] = (uint32_t)pz;
             drew++;
         }
@@ -1496,6 +1558,10 @@ static void gx_exec(gx_t *g, uint8_t cmd, const int32_t *p)
     case GX_CMD_SWAP_BUFFERS:
         for (size_t i = 0; i < (size_t)GX_SCREEN_W * GX_SCREEN_H; i++)
             g->zbuf[i] = 0xFFFFFFu;
+        /* 21-B9yi(续108l)：**覆盖度不在这里清**——颜色缓冲跨 SWAP 也不清
+           （真机语义：SWAP 只换深度），覆盖度跟着颜色走，由每个写像素的
+           光栅化分支覆盖写；清了会把「本帧早先画好、还没被重画」的内容
+           判成覆盖 0，整块 3D 图层会消失（实测 f=2000 顶屏全黑）。 */
         break;
     case GX_CMD_VIEWPORT:
         g->vx1 = p[0] & 0xFF;
@@ -1698,6 +1764,11 @@ void gx_reset(gx_t *g)
     g->color = 0x7FFF;
     for (size_t i = 0; i < (size_t)GX_SCREEN_W * GX_SCREEN_H; i++)
         g->zbuf[i] = 0xFFFFFFu;      /* 深度缓冲：最远 */
+    /* 21-B9yi(续108l)：覆盖度默认 31（=整像素、相当于没有抗锯齿效果），
+       只有真正被光栅化写到的像素才会被改写。 */
+    memset(g->cov, 31, sizeof g->cov);
+    memset(g->fb2, 0, sizeof g->fb2);
+    memset(g->fba2, 0, sizeof g->fba2);
     g_q_head = g_q_len = g_pending = 0;
     g_e_head = g_e_len = g_need = g_chave = 0;
     g_fifo_word = g_fifo_ncmd = g_fifo_pcnt = g_fifo_need = 0;
@@ -1712,6 +1783,24 @@ const uint16_t *gx_framebuffer(const gx_t *g)
 const uint8_t *gx_framebuffer_alpha(const gx_t *g)
 {
     return g->fba;
+}
+
+/* 21-B9yi(续108l)：每像素覆盖度平面（0..31；只在 DISP3DCNT bit4 抗锯齿时被写非 31），
+   2D 合成阶段用它把 3D 边缘像素与下层融合。 */
+const uint8_t *gx_framebuffer_coverage(const gx_t *g)
+{
+    return g->cov;
+}
+
+/* 21-B9yi(续108l)：抗锯齿混合用的「前一层 3D 像素」（melonDS 的下推缓冲）。 */
+const uint16_t *gx_framebuffer2(const gx_t *g)
+{
+    return g->fb2;
+}
+
+const uint8_t *gx_framebuffer2_alpha(const gx_t *g)
+{
+    return g->fba2;
 }
 
 /* 21-B9yi(续34)：装配 bus（纹理/调色板取数）。测试里可不设，此时纹理路径关闭。 */

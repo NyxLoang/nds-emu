@@ -5310,6 +5310,76 @@ static void test_gx_fifo(nds_t *nds)
              nds->io->irq[0].ifl & IO_IF_GXFIFO, 0u);
 }
 
+/* ---- 21-B9yi(续108l) 用例：3D 抗锯齿（DISP3DCNT bit4）的覆盖度与「下推」缓冲 ----
+   本作开着抗锯齿（DISP3DCNT=0x91 → bit0 纹理 + bit4 AA + bit7 雾）。真机/melonDS
+   在 `ScanlineFinalPass` 里按每像素覆盖度把顶层 3D 像素与被压下去的 3D 像素混合，
+   2D 合成阶段再用混合后的 alpha 与 2D 图层混合。这里验证两件可测的事：
+   <1> 覆盖度：内部像素 = 31（整像素），边缘附近存在 0<cov<31 的像素；
+   <2> 抗锯齿开启时，画在已有着色像素上的新不透明像素会把旧像素「下推」到 fb2/fba2。 */
+static void test_gx_aa(nds_t *nds)
+{
+    gx_t *g = &nds->io->gx;
+    bus_t *bus = nds->bus;
+    gx_reset(g);
+    bus->active_is_arm7 = 0;
+
+    /* 复位后覆盖度默认 31（等价于没有抗锯齿效果） */
+    CHECK_EQ("gx aa cov default", gx_framebuffer_coverage(g)[0], 31);
+
+    /* 打开抗锯齿（不开纹理映射 ⇒ 走平色光栅化路径，它同样要写覆盖度） */
+    g->disp3dcnt = 0x10u;
+
+    static const uint32_t proj[16] = {
+        0x400, 0, 0, 0,
+        0, 0x400, 0, 0,
+        0, 0, 0x1000, 0,
+        0, 0, 0, 0x1000,
+    };
+    bus_write32(bus, GX_GXFIFO, 0x10); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x16);
+    for (int i = 0; i < 16; i++) bus_write32(bus, GX_GXFIFO, proj[i]);
+    bus_write32(bus, GX_GXFIFO, 0x10); bus_write32(bus, GX_GXFIFO, 1);
+    bus_write32(bus, GX_GXFIFO, 0x15);
+    bus_write32(bus, GX_GXFIFO, 0x20); bus_write32(bus, GX_GXFIFO, 0x7C00);
+    bus_write32(bus, GX_GXFIFO, 0x60); bus_write32(bus, GX_GXFIFO, 0xBFFF0000u);
+    bus_write32(bus, GX_GXFIFO, 0x40); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x23); bus_write32(bus, GX_GXFIFO, 0x00000000u); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x23); bus_write32(bus, GX_GXFIFO, 0x00004000u); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x23); bus_write32(bus, GX_GXFIFO, 0xC0000000u); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x41);
+    gx_advance(g, 100000u);
+
+    /* 三角形 (127,95)-(255,95)-(127,191)：内部点 (200,120) 覆盖度应为 31 */
+    CHECK_EQ("gx aa cov interior",
+             gx_framebuffer_coverage(g)[120 * GX_SCREEN_W + 200], 31);
+    CHECK_EQ("gx aa cov written alpha", g->fba[120 * GX_SCREEN_W + 200], 31);
+    /* 斜边附近应出现部分覆盖（0 < cov < 31）的像素 */
+    {
+        const uint8_t *cv = gx_framebuffer_coverage(g);
+        int partial = 0;
+        for (int y = 95; y <= 191 && !partial; y++)
+            for (int x = 120; x <= 255; x++)
+                if (cv[(size_t)y * GX_SCREEN_W + x] > 0 &&
+                    cv[(size_t)y * GX_SCREEN_W + x] < 31) { partial = 1; break; }
+        CHECK_EQ("gx aa partial coverage exists", partial, 1);
+    }
+
+    /* 同一三角形再画一遍（绿色）：抗锯齿开启 ⇒ 旧像素被下推到 fb2/fba2 */
+    bus_write32(bus, GX_GXFIFO, 0x20); bus_write32(bus, GX_GXFIFO, 0x03E0);
+    bus_write32(bus, GX_GXFIFO, 0x40); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x23); bus_write32(bus, GX_GXFIFO, 0x00000000u); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x23); bus_write32(bus, GX_GXFIFO, 0x00004000u); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x23); bus_write32(bus, GX_GXFIFO, 0xC0000000u); bus_write32(bus, GX_GXFIFO, 0);
+    bus_write32(bus, GX_GXFIFO, 0x41);
+    gx_advance(g, 100000u);
+
+    CHECK_EQ("gx aa top color", g->fb[120 * GX_SCREEN_W + 200], 0x03E0u);
+    CHECK_EQ("gx aa pushed color", g->fb2[120 * GX_SCREEN_W + 200], 0x7C00u);
+    CHECK_EQ("gx aa pushed alpha", g->fba2[120 * GX_SCREEN_W + 200], 31);
+
+    g->disp3dcnt = 0;   /* 收尾：别影响后面的用例 */
+}
+
 /* ---- 阶段 19.4 用例：3D 图层合成进 2D 顶屏 ---- */
 static void test_gx_layer(nds_t *nds)
 {
@@ -6357,6 +6427,13 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_gx_fifo(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9yi xu108l] 3D 抗锯齿（覆盖度 + 下推缓冲）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_gx_aa(nds);
         nds_destroy(nds);
     }
     printf("\n[case 19.4] 3D 图层合成进 2D 顶屏\n");

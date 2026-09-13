@@ -216,6 +216,16 @@ typedef struct gx {
        放在像素高字节、`DrawBG_3D()` 用「alpha==0 才跳过」判透明；本地用一张
        并行 alpha 平面表达同一语义，`fb` 保持 RGB555 不变（旧用例与出图口径不变）。 */
     uint8_t fba[GX_SCREEN_W * GX_SCREEN_H];
+    /* 21-B9yi(续108l)：**每像素覆盖度**（0..31，31=整像素）。DISP3DCNT bit4（抗锯齿）
+       开启时，光栅化对「不透明片元」用 4 个子样本估覆盖度；2D 合成阶段据此把
+       3D 边缘像素与下层颜色融合（melonDS `ScanlineFinalPass` 的 AA 分支同口径）。 */
+    uint8_t cov[GX_SCREEN_W * GX_SCREEN_H];
+    /* 21-B9yi(续108l)：抗锯齿要用「被压下去的那一层 3D 像素」——melonDS 在
+       `ScanlineFinalPass` 里把顶层 3D 像素与 `ColorBuffer[pixeladdr+BufferSize]`
+       （画新不透明像素时把旧像素下推的那份）按覆盖度混合，颜色只在**下层 3D
+       像素不透明**时才混，alpha 一律混。这里用两张并行平面表达同一语义。 */
+    uint16_t fb2[GX_SCREEN_W * GX_SCREEN_H];
+    uint8_t  fba2[GX_SCREEN_W * GX_SCREEN_H];
     /* 21-B9yi(续34)：深度缓冲（24 位 Z，0xFFFFFF = 最远）。
        真机的深度缓冲不由交换缓冲清空（游戏每帧自己画「清屏多边形」把深度顶到最远），
        本地没有裁剪/清屏多边形的精确语义，改为**每帧交换缓冲时置最远**：
@@ -265,6 +275,16 @@ void gx_state(const gx_t *g, uint32_t *fifo_words, uint32_t *busy,
 const uint16_t *gx_framebuffer(const gx_t *g);
 /* 21-B9yi(续34)：3D 图层 alpha 平面（0=透明）。 */
 const uint8_t *gx_framebuffer_alpha(const gx_t *g);
+
+/* 21-B9yi(续108l)：3D 每像素覆盖度（0..31；抗锯齿关闭时恒 31）。 */
+const uint8_t *gx_framebuffer_coverage(const gx_t *g);
+
+/* 21-B9yi(续108l)：「被压下去的」前一层 3D 像素（抗锯齿混合用；见 gx_t 的说明）。 */
+const uint16_t *gx_framebuffer2(const gx_t *g);
+const uint8_t *gx_framebuffer2_alpha(const gx_t *g);
+
+/* 21-B9yi(续108l)：3D 抗锯齿是否生效（DISP3DCNT bit4；`NDS_NOAA=1` 可关）。 */
+int gx_aa_enabled(const gx_t *g);
 /* 21-B9yi(续34)：让 GX 能读 VRAM 做纹理采样（由 nds_create 装配）。 */
 void gx_set_bus(gx_t *g, struct bus *bus);
 

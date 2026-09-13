@@ -570,10 +570,53 @@ static void render_3d(const bus_t *bus, comp_t *c)
     const gx_t *g = &bus->io->gx;
     const uint16_t *src = gx_framebuffer(g);
     const uint8_t *asrc = gx_framebuffer_alpha(g);
+    /* 21-B9yi(续108l)：**3D 抗锯齿**（DISP3DCNT bit4，本作开着）。melonDS 分两步：
+       <1> `ScanlineFinalPass`：按覆盖度把**顶层 3D 像素**与**被压下去的 3D 像素**
+           （`ColorBuffer[pixeladdr+BufferSize]`）混合——颜色只在下面那层不透明时混，
+            alpha 一律混：`A = (A₁·cov + A₂·(32-cov))>>5`；
+       <2> 2D 合成阶段再用这个 alpha 把 3D 图层与 2D 图层混合。
+       本地两步都在这里做：先算 (色, alpha)，再按 alpha 与「下层已合成的颜色」混合。 */
+    const uint8_t *cova = gx_framebuffer_coverage(g);
+    const uint16_t *src2 = gx_framebuffer2(g);
+    const uint8_t *asrc2 = gx_framebuffer2_alpha(g);
+    int aa_on = gx_aa_enabled(g);
     for (int i = 0; i < PX_COUNT; i++) {
         if (asrc[i] == 0)
             continue;
-        comp_put(c, i, i % RENDER_SCREEN_W, i / RENDER_SCREEN_W, rgb555_to_888(src[i]), 4);
+        uint32_t color = rgb555_to_888(src[i]);
+        uint32_t eff = asrc[i];
+        if (aa_on && cova[i] < 31) {
+            uint32_t cov = cova[i];
+            uint32_t a2 = asrc2[i];
+            if (a2 != 0) {
+                /* <1>颜色：与压下去的那层 3D 像素按覆盖度混合 */
+                uint32_t c2 = rgb555_to_888(src2[i]);
+                uint32_t w = cov, iw = 31u - cov;
+                uint32_t r = ((color & 0xFFu) * w + (c2 & 0xFFu) * iw) / 31u;
+                uint32_t g2 = (((color >> 8) & 0xFFu) * w
+                               + ((c2 >> 8) & 0xFFu) * iw) / 31u;
+                uint32_t b = (((color >> 16) & 0xFFu) * w
+                              + ((c2 >> 16) & 0xFFu) * iw) / 31u;
+                color = r | (g2 << 8) | (b << 16);
+            }
+            /* <1>alpha：一律按覆盖度混合（下面那层透明时 alpha 会被压低，
+               于是 2D 图层能透出来——这就是「3D 边缘与 2D 背景抗锯齿」的来源） */
+            eff = (eff * cov + a2 * (31u - cov)) / 31u;
+        }
+        if (eff == 0)
+            continue;
+        if (eff < 31) {
+            /* 与下层（简单路径=直写帧缓冲；否则=当前最上层颜色）按比例混合 */
+            uint32_t under = c->simple ? c->fb[i] : c->px[i].top;
+            uint32_t w = eff, iw = 31u - eff;
+            uint32_t r = ((color & 0xFFu) * w + (under & 0xFFu) * iw) / 31u;
+            uint32_t g2 = (((color >> 8) & 0xFFu) * w
+                           + ((under >> 8) & 0xFFu) * iw) / 31u;
+            uint32_t b = (((color >> 16) & 0xFFu) * w
+                          + ((under >> 16) & 0xFFu) * iw) / 31u;
+            color = r | (g2 << 8) | (b << 16);
+        }
+        comp_put(c, i, i % RENDER_SCREEN_W, i / RENDER_SCREEN_W, color, 4);
     }
 }
 

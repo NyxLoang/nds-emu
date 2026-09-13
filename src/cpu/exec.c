@@ -325,6 +325,7 @@ void arm_exception(arm_cpu_t *cpu, uint32_t vector_offset, unsigned new_mode,
 
 /* ---- 10.5 LDM/STM（含 PUSH/POP）：块搬移，IA/IB/DA/DB 四模式 ----
    P/U 决定寻址方向，W 写回基址；寄存器按升序访问（r0 在最低地址）。 */
+static void arm_write_pc_load(arm_cpu_t *cpu, uint32_t val);   /* 21-B9yi(续109f) */
 static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
 {
     unsigned p = (insn >> 24) & 1u, u = (insn >> 23) & 1u,
@@ -355,10 +356,13 @@ static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
     if (u)      addr = p ? rn_val + 4 : rn_val;            /* IB / IA */
     else        addr = p ? rn_val - 4u * n : rn_val - 4u * (n - 1); /* DB / DA */
 
+    uint32_t pc_loaded = 0;   /* 21-B9yi(续109f)：列表含 PC 时暂存，循环后按互调写回 */
     for (int i = 0; i < 16; i++) {
         if (!(list & (1u << i))) continue;
         if (l) {
-            cpu->r[i] = bus_read32(cpu->nds->bus, addr);
+            uint32_t v = bus_read32(cpu->nds->bus, addr);
+            if (i == 15) pc_loaded = v;      /* 21-B9yi(续109f)：LDM 到 PC 走互调 */
+            else         cpu->r[i] = v;
         } else {
             /* 21-B9zn：melonDS A_STM 的“基址在列表内”口径（ARM9/ARM7 共用）。
                STM 当基址寄存器 rn 也在列表、且存在更低编号寄存器时，
@@ -381,10 +385,19 @@ static void exec_block_transfer(arm_cpu_t *cpu, uint32_t insn)
     }
     /* 写回：无论增/减方向，最终基址 = 起始 + n*4 或 - n*4 */
     if (w) cpu->r[rn] = u ? rn_val + 4u * n : rn_val - 4u * n;
-    /* LDM ... ^（S=1 且列表含 PC）：加载 PC 后，再用当前模式的 SPSR 恢复 CPSR（12.3 异常返回） */
-    if (l && s && (list & (1u << 15))) {
-        int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
-        if (idx >= 0) exec_apply_cpsr(cpu, cpu->spsr[idx]);
+    /* 列表含 PC 的 LDM：两种语义分开处理。 */
+    if (l && (list & (1u << 15))) {
+        if (s) {
+            /* LDM ... ^：异常返回 —— PC 取加载值**原样**（状态由 SPSR 决定），
+               然后用当前模式的 SPSR 恢复 CPSR（12.3 异常返回）。保持既有口径。 */
+            cpu->r[15] = pc_loaded;
+            int idx = exec_spsr_index(cpu->cpsr & CPSR_MODE_MASK);
+            if (idx >= 0) exec_apply_cpsr(cpu, cpu->spsr[idx]);
+        } else {
+            /* 21-B9yi(续109f)：普通 LDM 到 PC = 互调加载（ARM9 按 bit0 定状态，
+               ARM7 忽略 bit0、状态不变）。 */
+            arm_write_pc_load(cpu, pc_loaded);
+        }
     }
     if (g_trace) {
         /* 21-B6：LDM/STM trace 附上基址（rn=13 即 SP 变化前）与弹出 PC，
@@ -487,6 +500,27 @@ static int exec_dsp_mul(arm_cpu_t *cpu, uint32_t insn)
     }
 }
 
+/* 21-B9yi(续109f)：把「从内存加载进 PC」的值按核写回（互调加载）。
+
+   ARMv5T（ARM9）：`LDR pc,[…]` / `LDM …,{pc}` 属于**互调加载** —— 值的 bit0 决定
+   之后的状态（1=Thumb）、但不进 PC；bit1 也不进（Thumb 半字地址）。
+   ARMv4T（ARM7）：**不做互调**，bit0 直接忽略、状态不变。
+   参考核 melonDS 的写法：`if (cpu->Num==1) val &= ~0x1; cpu->JumpTo(val);`
+   （`JumpTo` 按 bit0 设/清 CPSR.T）。
+
+   为什么补：本地此前把内存值**原样**写进 r[15] ⇒ 当游戏从 ARM 代码返回 Thumb 代码
+   （ARMv5T 的常见习惯：函数指针/返回地址 bit0=1）时，PC 变成奇数、状态仍是 ARM，
+   于是把 Thumb 字节当 ARM 码译码 ⇒ 未定义指令。Pokemon 黑2 引导期就是踩到这里
+   （`PC=0207AFA3 insn=1E009000`，值 0x0207AFA3 的 bit0=1 本应切 Thumb）。 */
+static void arm_write_pc_load(arm_cpu_t *cpu, uint32_t val)
+{
+    if (!cpu->is_arm7) {
+        if (val & 1u) cpu->cpsr |= CPSR_T;
+        else          cpu->cpsr &= ~CPSR_T;
+    }
+    cpu->r[15] = val & ~1u;
+}
+
 static void exec_single_transfer(arm_cpu_t *cpu, uint32_t insn)
 {
     unsigned p = (insn >> 24) & 1u, u = (insn >> 23) & 1u,
@@ -509,7 +543,11 @@ static void exec_single_transfer(arm_cpu_t *cpu, uint32_t insn)
     if (p == 0) addr = rn_val;      /* 后变址：先按 Rn 访存，再更新 */
     if (w || p == 0) cpu->r[rn] = u ? rn_val + offset : rn_val - offset; /* 回写 */
     if (l) {
-        cpu->r[rd] = b ? bus_read8(cpu->nds->bus, addr) : bus_read32(cpu->nds->bus, addr);
+        uint32_t val = b ? bus_read8(cpu->nds->bus, addr) : bus_read32(cpu->nds->bus, addr);
+        if (rd == 15 && !b)
+            arm_write_pc_load(cpu, val);   /* 21-B9yi(续109f)：互调加载（见函数注释） */
+        else
+            cpu->r[rd] = val;
         if (g_trace)
             printf("cpu: PC=%08X insn=%08X LDR%s r%u, [r%u] = %08X\n",
                    cpu->r[15], insn, b ? "B" : "", rd, rn, cpu->r[rd]);
@@ -597,6 +635,26 @@ static void exec_arm9_dtcm_update(arm_cpu_t *cpu)
     }
 }
 
+/* 21-B9yi(续109g)：把 CP15 c9,c1,1 + c1 bit18 变成 bus 的 ARM9 ITCM 窗口。
+   真机（ARM946E-S）ITCM 的**基址与大小都可配**：
+     大小 = 0x200 << ((val>>1)&0x1F)（与 melonDS 同一公式；可大于 32KB → 窗口内镜像）
+     基址 = val 的高位，按大小对齐
+     使能 = CP15 c1 bit18
+   —— FFXII 用基址 0x01FF8000（与本模拟器此前的写死值一致），Pokemon 黑2 用基址 0
+   （它读 0x0080 取 ITCM 变量；本地此前读 0 导致引导期空转）。 */
+static void exec_arm9_itcm_update(arm_cpu_t *cpu)
+{
+    if (cpu->is_arm7)
+        return;
+    uint32_t v = cpu->cp15_itcm;
+    uint32_t size = 0x200u << ((v >> 1) & 0x1Fu);
+    int enabled = (int)((cpu->cp15[1] >> 18) & 1u);
+    uint32_t base = (size != 0u) ? (v & ~(size - 1u)) : 0u;
+    bus_set_arm9_itcm(cpu->nds->bus, enabled, base, size);
+    if (getenv("NDS_CP15DBG") != NULL)
+        printf("cp15itcm: val=%08X base=%08X size=%u enabled=%d\n", v, base, size, enabled);
+}
+
 static void exec_coprocessor(arm_cpu_t *cpu, uint32_t insn)
 {
     unsigned l = (insn >> 20) & 1u;
@@ -616,6 +674,8 @@ static void exec_coprocessor(arm_cpu_t *cpu, uint32_t insn)
                 cpu->cp15_itcm = cpu->r[rd];
             if (!l && op2 == 0)
                 exec_arm9_dtcm_update(cpu);
+            if (!l && op2 == 1)
+                exec_arm9_itcm_update(cpu);
         } else if (l) {
             cpu->r[rd] = cpu->cp15[crn];
         } else {
@@ -624,6 +684,7 @@ static void exec_coprocessor(arm_cpu_t *cpu, uint32_t insn)
                 cpu->vector_base = (cpu->cp15[1] & (1u << 13))
                                        ? 0xFFFF0000u : 0x00000000u;
                 exec_arm9_dtcm_update(cpu);
+                exec_arm9_itcm_update(cpu);
             }
         }
     }

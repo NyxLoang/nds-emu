@@ -4095,6 +4095,30 @@ static void test_thumb_branch(nds_t *nds)
     CHECK_EQ("thumb BLX Rm even PC", cpu->r[15], base + 0x40);
     thumb_stop(nds);
 
+    /* 21-B9yi(续109e)：Thumb 把 **r15 当操作数读**时必须给出 PC = 指令地址 + 4
+       （本模拟器 r[15] 存指令地址）。此前直接读 r[15] ⇒ `ADD r0,PC` 少 4，
+       于是「add r0,pc → ldrh → lsls/asrs → add pc,r0」这种跳转表分发整体偏 4 字节，
+       落到别的分支上（Pokemon 黑2 引导期就是因此落到 `BLX r2` 而 r2=0 ⇒ 跑到地址 0）。 */
+    thumb_start(nds, base);
+    cpu->r[0] = 0;                      /* cpu_reset 会留下非 0 的 r0，显式清零 */
+    bus_write16(nds->bus, base, 0x4478); cpu_step(cpu);
+    CHECK_EQ("thumb ADD r0,PC", cpu->r[0], base + 4);
+    thumb_stop(nds);
+
+    /* MOV r0,PC（0x4678）同口径 */
+    thumb_start(nds, base);
+    cpu->r[0] = 0;
+    bus_write16(nds->bus, base, 0x4678); cpu_step(cpu);
+    CHECK_EQ("thumb MOV r0,PC", cpu->r[0], base + 4);
+    thumb_stop(nds);
+
+    /* ADD PC,r0（0x4487）：PC = (PC+4) + Rm */
+    thumb_start(nds, base);
+    cpu->r[0] = 0x40;
+    bus_write16(nds->bus, base, 0x4487); cpu_step(cpu);
+    CHECK_EQ("thumb ADD PC,r0", cpu->r[15], base + 4 + 0x40);
+    thumb_stop(nds);
+
     /* 条件分支 BEQ 命中：Z=1 → PC=base+8 */
     thumb_start(nds, base);
     cpu->cpsr |= CPSR_Z;
@@ -5706,6 +5730,84 @@ static void test_window_render(nds_t *nds)
     CHECK_EQ("win out row",   fb_top[8 * 256],  0xFF000000u); /* (0,8) 窗外 → 黑 */
 }
 
+/* ---- 21-B9yi(续109f)：ARMv5T 互调加载（LDR/LDM 写 PC）---- */
+/* ---- 21-B9yi(续109g)：ARM9 ITCM 窗口由 CP15 配置（基址可变、物理 32KB 镜像）---- */
+static void test_arm9_itcm_window(nds_t *nds)
+{
+    /* 两款实测 ROM（FFXII / Pokemon 黑2）都把 ITCM 配成 val=0x20：
+       窗口 0x0-0x1FFFFFF（0x200<<16 = 32MB）、物理 32KB 按掩码镜像、c1 bit18 使能。 */
+    bus_set_arm9_itcm(nds->bus, 1, 0u, 0x2000000u);
+
+    bus_write16(nds->bus, 0x0080u, 0x1234u);              /* ITCM 里的变量 */
+    CHECK_EQ("itcm base0 alias @01FF8080",
+             bus_read16(nds->bus, BUS_ARM9_ITCM_BASE + 0x80u), 0x1234u);
+    bus_write32(nds->bus, BUS_ARM9_ITCM_BASE + 0x100u, 0xCAFEBABEu);
+    CHECK_EQ("itcm base0 alias read @0x100", bus_read32(nds->bus, 0x0100u), 0xCAFEBABEu);
+
+    /* ARM7 看不到 ITCM（私有） */
+    nds->bus->active_is_arm7 = 1;
+    CHECK_EQ("itcm not visible to arm7", bus_read16(nds->bus, 0x0080u), 0x0000u);
+    nds->bus->active_is_arm7 = 0;
+
+    /* 基址改到 0x01FF8000 + 32KB（旧写死口径）：0x0080 不再命中 ITCM */
+    bus_set_arm9_itcm(nds->bus, 1, BUS_ARM9_ITCM_BASE, BUS_ARM9_ITCM_SIZE);
+    CHECK_EQ("itcm window moved -> 0x80 unmapped", bus_read16(nds->bus, 0x0080u), 0x0000u);
+    CHECK_EQ("itcm window moved -> old base still works",
+             bus_read16(nds->bus, BUS_ARM9_ITCM_BASE + 0x80u), 0x1234u);
+
+    /* 关闭使能（CP15 c1 bit18=0）：整窗读 0 / 写忽略 */
+    bus_set_arm9_itcm(nds->bus, 0, 0, 0);
+    CHECK_EQ("itcm disabled reads 0",
+             bus_read16(nds->bus, BUS_ARM9_ITCM_BASE + 0x80u), 0x0000u);
+
+    /* 复原默认窗口，避免污染后续用例 */
+    bus_set_arm9_itcm(nds->bus, 1, BUS_ARM9_ITCM_BASE, BUS_ARM9_ITCM_SIZE);
+    bus_write16(nds->bus, BUS_ARM9_ITCM_BASE, 0u);
+}
+
+static void arm_enter_mode(arm_cpu_t *cpu, unsigned mode)
+{
+    cpu->cpsr = (cpu->cpsr & ~(CPSR_T | 0x1Fu)) | mode;   /* 清 T（ARM 态）并切模式 */
+}
+
+static void test_interwork_loads(nds_t *nds)
+{
+    const uint32_t base = BUS_MAIN_RAM_BASE + 0x3000;
+    uint32_t thumb_ptr = (base + 0x80) | 1u;   /* bit0=1 ⇒ 目标是 Thumb */
+
+    /* ARM9（ARMv5T）：LDR pc,[r0] 载入奇数 → 切 Thumb、PC 清 bit0 */
+    bus_write32(nds->bus, base + 0x40, thumb_ptr);
+    cpu_reset(nds->cpu, base);
+    arm_enter_mode(nds->cpu, 0x13u);           /* SVC */
+    nds->cpu->r[0] = base + 0x40;
+    bus_write32(nds->bus, base, 0xE590F000u);  /* ldr pc, [r0] */
+    cpu_step(nds->cpu);
+    CHECK_EQ("arm9 LDR pc interwork T", (nds->cpu->cpsr & CPSR_T) ? 1u : 0u, 1u);
+    CHECK_EQ("arm9 LDR pc interwork PC", nds->cpu->r[15], base + 0x80);
+
+    /* ARM9：LDM r0,{pc} 同口径（列表 = 0x8000 ⇒ 只含 PC） */
+    bus_write32(nds->bus, base + 0x60, (base + 0xA0) | 1u);
+    cpu_reset(nds->cpu, base);
+    arm_enter_mode(nds->cpu, 0x13u);
+    nds->cpu->r[0] = base + 0x60;
+    bus_write32(nds->bus, base, 0xE8908000u);  /* ldmia r0, {pc} */
+    cpu_step(nds->cpu);
+    CHECK_EQ("arm9 LDM pc interwork T", (nds->cpu->cpsr & CPSR_T) ? 1u : 0u, 1u);
+    CHECK_EQ("arm9 LDM pc interwork PC", nds->cpu->r[15], base + 0xA0);
+
+    /* ARM7（ARMv4T）：同一指令**不**互调 —— bit0 忽略、状态保持 ARM */
+    nds->bus->active_is_arm7 = 1;
+    bus_write32(nds->bus, base + 0x40, (base + 0x80) | 1u);
+    cpu_reset(nds->cpu7, base);
+    arm_enter_mode(nds->cpu7, 0x13u);
+    nds->cpu7->r[0] = base + 0x40;
+    bus_write32(nds->bus, base, 0xE590F000u);
+    cpu_step(nds->cpu7);
+    CHECK_EQ("arm7 LDR pc stays ARM", (nds->cpu7->cpsr & CPSR_T) ? 1u : 0u, 0u);
+    CHECK_EQ("arm7 LDR pc PC", nds->cpu7->r[15], base + 0x80);
+    nds->bus->active_is_arm7 = 0;
+}
+
 int main(void)
 {
 #ifdef _WIN32
@@ -6319,6 +6421,20 @@ int main(void)
         nds_t *nds = nds_create();
         if (nds == NULL) return 1;
         test_thumb_branch(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9yi 续109f] ARMv5T 互调加载（LDR/LDM 写 PC）\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_interwork_loads(nds);
+        nds_destroy(nds);
+    }
+    printf("\n[case 21-B9yi 续109g] ARM9 ITCM 窗口按 CP15 配置\n");
+    {
+        nds_t *nds = nds_create();
+        if (nds == NULL) return 1;
+        test_arm9_itcm_window(nds);
         nds_destroy(nds);
     }
     printf("\n[case 13.5] Thumb PUSH/POP + STMIA/LDMIA\n");

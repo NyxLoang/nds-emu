@@ -223,6 +223,7 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
        这里直接读全局值，热路径不再有「是否初始化过」的判断。 */
     if (cpu->is_arm7)
         return 1u;
+    const bus_t *bus = cpu->nds->bus;   /* 21-B9yi(续109g)：ITCM 窗口来自 CP15 配置 */
     if (cpu_memtim_enabled()) {
         /* 21-B9yi(续108g)：取指按「cache 命中」口径计 2 个 ARM9 周期（=1 系统单位）。
            未命中/冷启动的 18 周期惩罚**不在这里**建模（实测直接按 18 计会把吞吐压到
@@ -231,7 +232,7 @@ static uint32_t cpu_fetch_cost(const arm_cpu_t *cpu, uint32_t pc, int nonseq)
         (void)nonseq;
         return 2u;
     }
-    if (pc - BUS_ARM9_ITCM_BASE < BUS_ARM9_ITCM_SIZE)
+    if (bus->arm9_itcm_on && pc - bus->arm9_itcm_base < bus->arm9_itcm_size)
         return 1u;                           /* ITCM：melonDS 恒 1 */
     if ((pc >> 24) != 0x02u)
         return 1u;                           /* WRAM/IO/VRAM/BIOS 等 */
@@ -649,8 +650,9 @@ int cpu_step(arm_cpu_t *cpu)
        预取只在两种最常见代码区（ARM9 ITCM / Main RAM）做，其它区域直接跳过。 */
     {
         uint32_t npc = cpu->next_fetch_pc;
-        if (!cpu->is_arm7 && npc - BUS_ARM9_ITCM_BASE < BUS_ARM9_ITCM_SIZE)
-            __builtin_prefetch(&bus->arm9_itcm[npc - BUS_ARM9_ITCM_BASE]);
+        if (!cpu->is_arm7 && bus->arm9_itcm_on &&
+            npc - bus->arm9_itcm_base < bus->arm9_itcm_size)
+            __builtin_prefetch(&bus->arm9_itcm[npc & (BUS_ARM9_ITCM_SIZE - 1u)]);
         else if (npc >= BUS_MAIN_RAM_BASE &&
                  npc - BUS_MAIN_RAM_BASE < BUS_MAIN_RAM_SIZE)
             __builtin_prefetch(&bus->main_ram[npc - BUS_MAIN_RAM_BASE]);

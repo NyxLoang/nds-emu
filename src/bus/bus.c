@@ -12,6 +12,9 @@ bus_t *bus_create(void)
     if (bus == NULL)
         return NULL;
     bus_vram_reset_default(bus);
+    /* 21-B9yi(续109g)：ITCM 默认窗口 = 本模拟器一直用的 0x01FF8000+32KB；
+       游戏写 CP15 c9,c1,1 后按它的基址/大小重设（Pokemon 黑2 基址 0）。 */
+    bus_set_arm9_itcm(bus, 1, BUS_ARM9_ITCM_BASE, BUS_ARM9_ITCM_SIZE);
     return bus;
 }
 
@@ -185,6 +188,19 @@ void bus_set_arm9_dtcm(bus_t *bus, int enabled, uint32_t base, uint32_t size)
     bus->arm9_dtcm_on = enabled && size > 0;
     bus->arm9_dtcm_base = bus->arm9_dtcm_on ? base : 0xFFFFFFFFu;
     bus->arm9_dtcm_size = bus->arm9_dtcm_on ? size : 0;
+}
+
+/* 21-B9yi(续109g)：ARM9 ITCM 窗口（CP15 c9,c1,1 基址/大小 + c1 bit18 使能）。
+   物理只有 32KB，窗口内按 `addr & (32K-1)` 镜像 —— 与参考核一致（其 ITCM
+   也是「大小可 >32KB、物理数组按掩码绕回」）。这样基址 0 的游戏（如 Pokemon 黑2
+   读 0x0080）与基址 0x01FF8000 的游戏（FFXII 执行 0x01FF95xx）都能命中同一块内存。 */
+void bus_set_arm9_itcm(bus_t *bus, int enabled, uint32_t base, uint32_t size)
+{
+    if (bus == NULL)
+        return;
+    bus->arm9_itcm_on = enabled && size > 0;
+    bus->arm9_itcm_base = bus->arm9_itcm_on ? base : 0xFFFFFFFFu;
+    bus->arm9_itcm_size = bus->arm9_itcm_on ? size : 0;
 }
 
 /* ---- 21-B9wd：VRAMCNT 动态映射（端口自 melonDS GPU::MapVRAM_*） ---- */
@@ -505,11 +521,11 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
 {
     /* ARM9 ITCM（阶段 21-B8）：固定 0x01FF8000-0x01FFFFFF，只有 ARM9 能访问。
        FFXII 复位从 0x02070420 拷贝 0x6BC0 字节到此处作为系统例程。 */
-    if (!bus->active_is_arm7 &&
-        addr >= BUS_ARM9_ITCM_BASE &&
-        addr - BUS_ARM9_ITCM_BASE < BUS_ARM9_ITCM_SIZE) {
+    if (!bus->active_is_arm7 && bus->arm9_itcm_on &&
+        addr >= bus->arm9_itcm_base &&
+        addr - bus->arm9_itcm_base < bus->arm9_itcm_size) {
         *region = bus->arm9_itcm;
-        *off = (size_t)(addr - BUS_ARM9_ITCM_BASE);
+        *off = (size_t)(addr & (BUS_ARM9_ITCM_SIZE - 1u));
         return 1;
     }
     if (addr >= BUS_MAIN_RAM_BASE &&
@@ -672,8 +688,10 @@ static int bus_resolve_mem(const bus_t *bus, uint32_t addr,
                            const uint8_t **region, size_t *off, size_t *avail)
 {
     size_t rel;
-    if (!bus->active_is_arm7 && addr >= BUS_ARM9_ITCM_BASE) {
-        rel = (size_t)(addr - BUS_ARM9_ITCM_BASE);
+    if (!bus->active_is_arm7 && bus->arm9_itcm_on &&
+        addr >= bus->arm9_itcm_base &&
+        addr - bus->arm9_itcm_base < bus->arm9_itcm_size) {
+        rel = (size_t)(addr & (BUS_ARM9_ITCM_SIZE - 1u));
         if (rel < BUS_ARM9_ITCM_SIZE) {
             *region = bus->arm9_itcm;
             *off = rel;

@@ -164,27 +164,45 @@ int thumb_step(arm_cpu_t *cpu, uint16_t insn)
     /* ---- 格式 5：bits15-10 = 010001：高寄存器 / BX / BLX ---- */
     if ((insn >> 10) == 0x11u) {
         op = (insn >> 8) & 3u;
+        /* 21-B9yi(续109e)：Thumb 把 **r15 当操作数读**时读到的是 ARM 定义的 PC 值
+           = 指令地址 + 4。本模拟器的 r[15] 存的是**指令地址**（流水线值放在局部变量
+           `pc`），所以这里不能直接读 `cpu->r[15]`。本地此前直接读 ⇒ `ADD r0,PC`
+           一类少 4，跳转表分发整体偏 4 字节、落到别的分支上（Pokemon 黑2 引导期因此
+           落到 `BLX r2` 而 r2=0 ⇒ 跳到地址 0 死掉）。ARM 侧 `read_reg` 早已按 +8 修正。 */
         if (op == 3) {
             /* BX/BLX Rm：寄存器号在 bit6:3（如 BX lr=0x4770 → Rm=14），
                低 3 位固定为 0；bit7=0 BX / 1 BLX。T=Rm[0]，PC=Rm&~1；
                BLX 先 lr=当前 pc|1。 */
             unsigned bx_rm = (insn >> 3) & 0xFu;
+            uint32_t rm_val = (bx_rm == 15) ? pc : cpu->r[bx_rm];
             if (insn & (1u << 7)) /* BLX Rm */
                 /* 21-B9yi(续109c)：与 BL/BLX 立即数同一条规则 —— LR = 「下一条指令」| 1
                    = (pc - 2) | 1（参考核 `T_BLX_REG`：`lr = R[15] - 1`，其 R[15] = pc+4）。
                    此前写成 `pc | 1` ⇒ 返回地址 +2，返回时跳过紧邻的 2 字节指令。 */
                 cpu->r[14] = ((pc - 2u) | 1u);
-            cpu->cpsr = (cpu->r[bx_rm] & 1u) ? (cpu->cpsr | CPSR_T) : (cpu->cpsr & ~CPSR_T);
-            cpu->r[15] = cpu->r[bx_rm] & ~1u;
+            cpu->cpsr = (rm_val & 1u) ? (cpu->cpsr | CPSR_T) : (cpu->cpsr & ~CPSR_T);
+            cpu->r[15] = rm_val & ~1u;
             return 1;
         }
         /* ADD/CMP/MOV Rd, Rm（可含高寄存器）：Rd=bit7:bits2-0，Rm=bit6:bits5-3 */
         rm = ((insn >> 3) & 7u) | ((insn >> 6) & 1u ? 8u : 0u);
         rd = (insn & 7u) | ((insn >> 7) & 1u ? 8u : 0u);
-        if (op == 0) { cpu->r[rd] += cpu->r[rm]; if (rd == 15) cpu->r[15] &= ~1u; } /* ADD */
-        else if (op == 1) { set_nz(cpu->r[rd] - cpu->r[rm], cpu); set_c(cpu->r[rd] >= cpu->r[rm], cpu); set_v_sub(cpu->r[rd], cpu->r[rm], cpu->r[rd] - cpu->r[rm], cpu); } /* CMP */
-        else { cpu->r[rd] = cpu->r[rm]; if (rd == 15) cpu->r[15] &= ~1u; }          /* MOV */
-        if (op != 1 && rd == 15) return 1; /* ADD/MOV 写 PC：已跳转，不再 +2 */
+        {
+            uint32_t rm_val = (rm == 15) ? (pc & ~1u) : cpu->r[rm];
+            uint32_t rd_val = (rd == 15) ? (pc & ~1u) : cpu->r[rd];
+            if (op == 0) {          /* ADD：写 PC 时 PC = (PC+4) & ~1 + Rm */
+                uint32_t r = rd_val + rm_val;
+                if (rd == 15) { cpu->r[15] = r & ~1u; return 1; }
+                cpu->r[rd] = r;
+            } else if (op == 1) {   /* CMP（两个操作数都可能读到 PC） */
+                set_nz(rd_val - rm_val, cpu);
+                set_c(rd_val >= rm_val, cpu);
+                set_v_sub(rd_val, rm_val, rd_val - rm_val, cpu);
+            } else {                /* MOV：写 PC 时 PC = Rm & ~1 */
+                if (rd == 15) { cpu->r[15] = rm_val & ~1u; return 1; }
+                cpu->r[rd] = rm_val;
+            }
+        }
         cpu->r[15] += 2;
         return 1;
     }

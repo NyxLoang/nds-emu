@@ -114,6 +114,12 @@ uint32_t vram_map_texpal[8];          /* 3D 纹理调色板 16KB 槽 → bank �
     int      arm9_dtcm_on;                /* ARM9 DTCM 是否使能（CP15 c1 bit16） */
     uint32_t arm9_dtcm_base;              /* ARM9 DTCM 基址（未使能为 0xFFFFFFFF） */
     uint32_t arm9_dtcm_size;              /* ARM9 DTCM 大小 */
+    /* 21-B9yi(续109g)：ARM9 ITCM 的**窗口**由 CP15 c9,c1,1 配置（真机基址可变）：
+       物理只有 32KB（arm9_itcm[]），窗口内按 32KB 掩码镜像。默认值 = 本模拟器一直
+       使用的 0x01FF8000 + 32KB（FFXII 的配置），只有在游戏真的写 CP15 时才改。 */
+    int      arm9_itcm_on;                /* ARM9 ITCM 是否使能（CP15 c1 bit18） */
+    uint32_t arm9_itcm_base;              /* ARM9 ITCM 窗口基址 */
+    uint32_t arm9_itcm_size;              /* ARM9 ITCM 窗口大小（可 > 32KB，物理镜像） */
     int active_is_arm7;                   /* 当前访问者身份：0=ARM9, 1=ARM7 */
     /* 21-B9yi(续108g)：本次访问是「取指」还是「数据访问」——访存代价模型只给数据
        访问计费（取指代价由 CPU 侧按行计），由 cpu_fetch/cpu_fetch16 置位。 */
@@ -157,6 +163,8 @@ void bus_set_watch_read(bus_t *bus, int idx, uint32_t lo, uint32_t hi);
 /* CP15 更新 ARM9 DTCM 映射（阶段 21-B8）：enabled=0 时 0x027E0000 等地址走 Main RAM
    镜像；enabled=1 时 ARM9 对 [base, base+size) 的读写改走私有 DTCM。 */
 void bus_set_arm9_dtcm(bus_t *bus, int enabled, uint32_t base, uint32_t size);
+/* 21-B9yi(续109g)：CP15 更新 ARM9 ITCM 窗口（enabled=0 时该窗口读 0/写忽略）。 */
+void bus_set_arm9_itcm(bus_t *bus, int enabled, uint32_t base, uint32_t size);
 
 /* 写 VRAMCNT：按 melonDS GPU::MapVRAM_* 的分支更新逻辑窗口映射。
    bank：0=A … 8=I；cnt：VRAMCNT 寄存器写入的 8 位值。 */

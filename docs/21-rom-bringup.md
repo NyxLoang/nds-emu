@@ -7050,3 +7050,11 @@ BIOS）。本地 ARM7 主要停在 `0x115C↔0x1160` 的 `subs/bgt` 两指令循
 「BIOS 等待时间被少算」这一个数量级。→ 下一步按参考核口径给 ARM7 的 BIOS 等待/延时循环
 计费（先给参考核加 SWI+r0 参数日志，量清它到底在哪个循环、每次多少条），
 验收判据：该 ROM 的 FIFO 写次数从 **0 → >0**、`disp` 从 **0 → 非 0**。
+
+**（重要更正）参考核是「真跑 FreeBIOS」，不是 HLE SWI。** 查参考树
+`ARMInterpreter.cpp` 的 `A_SVC/T_SVC`：两者都只做「存 SPSR、LR=返回地址、跳到
+`ExceptionBase+0x08`」，没有任何 HLE 分支；melonDS 把 FreeBIOS 镜像放在 0x00000000，
+SWI 进去就**逐条执行 BIOS 代码**。所以续108h 里「melonDS 自己也 HLE SWI」这条记录
+**是错的** —— 当时 `b7` 很小，是因为 **FFXII 的 ARM7 在前 50 帧几乎不调用 SWI**；
+换成口袋妖怪黑2 就完全不同（96% 的 ARM7 指令都在 BIOS 区跑等待循环）。
+真正的差别是本地 **BIOS 等待循环的推进速度**，而不是「谁 HLE 了 SWI」。

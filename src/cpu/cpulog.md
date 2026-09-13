@@ -1137,3 +1137,12 @@ f=10   本地   i9=5,601,900   i7=   150,126
 量出同帧同段它到底在哪个 BIOS 循环里、每次循环多少条指令；
 ② 再对齐本地 `bios7_low` 的计费（每条指令的周期数 / 循环次数）；
 ③ 复测握手是否通过（判据：FIFO 写次数从 0 变成 >0、`disp` 从 0 变成非 0）。
+
+**（重要更正）参考核不是 HLE SWI，而是真跑 FreeBIOS**：查参考树
+`ARMInterpreter.cpp::A_SVC/T_SVC` —— 两者都只做「存 SPSR、LR=返回地址、跳到异常向量
+`ExceptionBase + 0x08`」，没有任何 HLE 分支；melonDS 的 FreeBIOS 镜像就摆在 0x00000000，
+SWI 进去后**逐条执行 BIOS 代码**。因此续108h 记录的那句「melonDS 自己也 HLE SWI，
+并不真跑 FreeBIOS」**是错的**，必须更正：当时看到的 `b7` 很小是因为 **FFXII 的 ARM7
+在 f≤50 里几乎不调用 SWI**（不是因为它 HLE）。对 Pokemon 黑2 就完全不同：96% 的 ARM7
+指令都在 BIOS 区里跑等待循环。这条更正也解释了为什么「本地 HLE 掉 SWI」这条线索当时
+被误判为证伪 —— 真正的差别是**本地 BIOS 等待循环的推进速度**，不是「谁 HLE」。

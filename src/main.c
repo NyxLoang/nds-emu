@@ -306,6 +306,13 @@ int main(int argc, char *argv[])
             g_cli_fps_every = _wcstoui64(wargv[i + 1], NULL, 10);
         else if (wcscmp(wargv[i], L"--speed") == 0 && i + 1 < wargc)
             g_cli_speed = wcstod(wargv[i + 1], NULL);
+        else if (wcscmp(wargv[i], L"--snd-wav") == 0 && i + 1 < wargc) {
+            /* 21-B9yi(续85)：无头模式把模拟音频写成 WAV（宽路径 → UTF-8 窄路径） */
+            static char wav_buf[512];
+            WideCharToMultiByte(CP_UTF8, 0, wargv[i + 1], -1, wav_buf,
+                                (int)sizeof wav_buf, NULL, NULL);
+            runner_set_wav_path(wav_buf);
+        }
         else if (wcscmp(wargv[i], L"--touch-frame") == 0 && i + 1 < wargc)
             touch_frame = _wcstoui64(wargv[i + 1], NULL, 0);
         else if (wcscmp(wargv[i], L"--touch-x") == 0 && i + 1 < wargc)
@@ -390,6 +397,8 @@ int main(int argc, char *argv[])
             g_cli_fps_every = strtoull(argv[i + 1], NULL, 10);
         else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc)
             g_cli_speed = strtod(argv[i + 1], NULL);
+        else if (strcmp(argv[i], "--snd-wav") == 0 && i + 1 < argc)
+            runner_set_wav_path(argv[i + 1]);
         else if (strcmp(argv[i], "--touch-frame") == 0 && i + 1 < argc)
             touch_frame = strtoull(argv[i + 1], NULL, 0);
         else if (strcmp(argv[i], "--touch-x") == 0 && i + 1 < argc)

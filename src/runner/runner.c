@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>   /* 21-B9yi(续85)：MultiByteToWideChar（WAV 路径支持中文目录） */
+#endif
 #include "nds/nds.h"      /* nds_t / bus_t */
 #include "bus/bus.h"      /* bus_set_diag */
 
@@ -350,6 +353,107 @@ int runner_save_screenshot(const struct nds *nds, const char *path)
     return rc;
 }
 
+/* 21-B9yi(续85)：无头模式音频 → WAV。
+   为什么需要：「声音」这一项此前只有 NDS_SNDSTAT 的「非静音样本数」这种弱证据；
+   导出 WAV 后既能**人耳试听**，也能与参考核同帧段做结构性对照。
+   时间轴由模拟周期决定（`tm.now/1024`），与墙钟无关 ⇒ 同脚本同输出，可复现。
+   文件头先占位，收尾时回填长度（流式写，不占内存）。 */
+static FILE *s_wav;
+static uint32_t s_wav_data_bytes;
+static int16_t s_wav_l[4096], s_wav_r[4096];
+
+static void wav_put32(uint32_t v)
+{
+    uint8_t b[4] = { (uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16),
+                     (uint8_t)(v >> 24) };
+    fwrite(b, 1, 4, s_wav);
+}
+
+static void wav_put16(uint16_t v)
+{
+    uint8_t b[2] = { (uint8_t)v, (uint8_t)(v >> 8) };
+    fwrite(b, 1, 2, s_wav);
+}
+
+static void wav_open(void)
+{
+    /* 头：RIFF/WAVE/fmt(PCM,2ch,32768Hz,16bit)/data；长度先写 0，收尾回填 */
+    fwrite("RIFF", 1, 4, s_wav);
+    wav_put32(0);
+    fwrite("WAVE", 1, 4, s_wav);
+    fwrite("fmt ", 1, 4, s_wav);
+    wav_put32(16);
+    wav_put16(1);
+    wav_put16(2);
+    wav_put32(SND_MIX_RATE);
+    wav_put32(SND_MIX_RATE * 2u * 2u);   /* byte rate */
+    wav_put16(4);                        /* block align */
+    wav_put16(16);
+    fwrite("data", 1, 4, s_wav);
+    wav_put32(0);
+}
+
+void runner_set_wav_path(const char *path)
+{
+    if (path == NULL || path[0] == '\0')
+        return;
+#ifdef _WIN32
+    /* 路径是 UTF-8（CLI 侧统一口径）；Windows 的 fopen 走 ANSI 代码页，
+       中文目录会失败 ⇒ 转宽字符后用 _wfopen。 */
+    wchar_t wpath[512];
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, 512) > 0)
+        s_wav = _wfopen(wpath, L"wb");
+    else
+        s_wav = NULL;
+#else
+    s_wav = fopen(path, "wb");
+#endif
+    if (s_wav == NULL) {
+        printf("snd-wav: 无法写入 %s\n", path);
+        return;
+    }
+    s_wav_data_bytes = 0;
+    wav_open();
+    printf("snd-wav: 录制到 %s（%u Hz / 16bit / 立体声，时间轴=模拟周期）\n",
+           path, (unsigned)SND_MIX_RATE);
+    fflush(stdout);
+}
+
+/* 与 snd_advance 同源：这里**自己**渲染一份（不能先 advance 再 render，会双推进）。 */
+static void wav_capture(struct nds *nds, uint32_t samples)
+{
+    if (s_wav == NULL)
+        return;
+    uint32_t left = samples;
+    while (left > 0) {
+        uint32_t n = (left > 4096u) ? 4096u : left;
+        snd_render(&nds->io->snd, nds->bus, s_wav_l, s_wav_r, (int)n);
+        for (uint32_t i = 0; i < n; i++) {
+            uint16_t l = (uint16_t)s_wav_l[i], r = (uint16_t)s_wav_r[i];
+            uint8_t bl[4] = { (uint8_t)l, (uint8_t)(l >> 8),
+                              (uint8_t)r, (uint8_t)(r >> 8) };
+            fwrite(bl, 1, 4, s_wav);
+        }
+        s_wav_data_bytes += n * 4u;
+        left -= n;
+    }
+}
+
+void runner_wav_close(void)
+{
+    if (s_wav == NULL)
+        return;
+    fseek(s_wav, 4, SEEK_SET);
+    wav_put32(36u + s_wav_data_bytes);
+    fseek(s_wav, 40, SEEK_SET);
+    wav_put32(s_wav_data_bytes);
+    fclose(s_wav);
+    s_wav = NULL;
+    printf("snd-wav: 完成 %u 字节 PCM（%.1f 秒）\n", (unsigned)s_wav_data_bytes,
+           (double)s_wav_data_bytes / (double)(SND_MIX_RATE * 4u));
+    fflush(stdout);
+}
+
 /* 帧号到达脚本时刻时注入按键，保持 8 帧后释放（游戏按帧轮询）。 */
 static void runner_keys(runner_t *r)
 {
@@ -502,7 +606,12 @@ int runner_run_frame(runner_t *r)
             uint64_t delta = want - r->snd_done;
             if (delta > 4096ull)
                 delta = 4096ull;
-            snd_advance(&r->nds->io->snd, r->nds->bus, (uint32_t)delta);
+            /* 21-B9yi(续85)：录 WAV 时自己渲染一份并留档（snd_render 与
+               snd_advance 同源，两者只能选一个，否则通道状态会被推进两次）。 */
+            if (s_wav != NULL)
+                wav_capture(r->nds, (uint32_t)delta);
+            else
+                snd_advance(&r->nds->io->snd, r->nds->bus, (uint32_t)delta);
             r->snd_done = want;
         }
     }
@@ -1263,6 +1372,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         free(fb_bot);
     }
     bios7_low_dump_hist("end"); /* 21-B9ye：低地址取指直方图（与参考核 hist7 对照） */
+    runner_wav_close();   /* 21-B9yi(续85)：收尾回填 WAV 头（在此之前文件是流式写的） */
     runner_destroy(r);
     fflush(stdout);
 }

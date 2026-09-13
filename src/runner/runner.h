@@ -73,4 +73,11 @@ void runner_set_stats_series(uint64_t every);
 void runner_savechip_report(const struct nds *nds);
 int runner_save_screenshot(const struct nds *nds, const char *path);
 
+/* 21-B9yi(续85)：把无头模式**模拟出来的音频**按 32768Hz/16bit/立体声写成 WAV
+   （`--snd-wav 路径`）。用途：①「声音」这一项终于有可听产物（人耳判定）；
+   ②与参考核同帧段的音频做结构性对照。时间轴由**模拟周期**决定（不是墙钟），
+   所以同一输入脚本 → 同一个 WAV（可复现）。 */
+void runner_set_wav_path(const char *path);
+void runner_wav_close(void);
+
 #endif /* NDS_EMU_RUNNER_H */

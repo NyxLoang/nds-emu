@@ -787,6 +787,19 @@ int main(int argc, char *argv[])
     double pace_late_sum = 0.0, pace_late_max = 0.0;
     uint64_t pace_late_n = 0;
     uint64_t pace_resync_n = 0;   /* 超时超过一整帧 ⇒ 必须丢弃欠账的帧数（不可追回） */
+    /* 21-B9yi(续103)：欠账上限（秒）。默认 **30 s**（≈允许一直追帧）；
+       `NDS_PACE_DEBT_MS=N` 可改（毫秒），设成很小的值可以复现旧行为做 A/B。
+       为什么默认放大：声卡是**按墙钟**推进的，而重场景会掉到 ~52 fps ⇒
+       游戏时间越落越远（实测 12000 帧累计 **7.6 s** 音画漂移）。允许追帧后，
+       落下的部分会在随后的轻场景补回来（实测总时长 208.2 s → **200.6 s**，
+       漂移 ≈ 0.1 s，平均帧率仍 59.8）。上限保留 30 s 只是为了防「进程被挂起几分钟」
+       之后拼命追帧。 */
+    double pace_debt_cap = 30.0;
+    {
+        const char *e = getenv("NDS_PACE_DEBT_MS");
+        if (e != NULL && atof(e) > 0.0)
+            pace_debt_cap = atof(e) / 1000.0;
+    }
     {
         const char *e = getenv("NDS_FF_MUL");
         if (e != NULL && atof(e) > 0.0)
@@ -1084,6 +1097,16 @@ int main(int argc, char *argv[])
                            (unsigned long long)fps_frames,
                            1000.0 / (nds_frame_hz * pace_speed),
                            (unsigned long long)pace_resync_n);
+                /* 21-B9yi(续103)：**音画漂移读数** —— 这一段「游戏时间」比墙钟慢/快多少。
+                   声卡是按墙钟走的，所以这个数就是「声音相对画面超前多少」的直接量度
+                   （正值=画面落后、声音超前）。 */
+                {
+                    double want_ms = 1000.0 * (double)fps_frames
+                                     / (nds_frame_hz * pace_speed);
+                    printf("     drift: 本段模拟 %.1f ms vs 墙钟 %llu ms ⇒ 画面落后 %+.1f ms"
+                           "（声卡按墙钟走，正值=声音超前）\n",
+                           want_ms, (unsigned long long)dt, (double)dt - want_ms);
+                }
             }
             fflush(stdout);
             fps_frames = 0;
@@ -1139,7 +1162,11 @@ int main(int argc, char *argv[])
                重场景里每次丢掉一整段欠账，27~37 次/3000 帧 ⇒ 58.4 fps）；
                但不能无限保留：声卡是按墙钟推进的，游戏时间必须跟住墙钟，
                所以只允许最多 100 ms 的欠账（够吸收突发，又让漂移有界）。 */
-            if (now - pace_next > 0.1 * (double)pace_freq) {
+            /* 21-B9yi(续103)：上限可用 `NDS_PACE_DEBT_MS` 调整（默认 100 ms）。
+               放宽上限 ⇒ 重场景掉队后会在随后的轻场景**追帧**补回来，
+               让「模拟时间」跟住墙钟（声卡按墙钟走）⇒ 音画漂移有界。
+               代价：追赶期间会短暂跑得比真机快（视觉上几乎察觉不到）。 */
+            if (now - pace_next > pace_debt_cap * (double)pace_freq) {
                 pace_next = now + pace_ticks;
                 pace_resync_n++;
             }

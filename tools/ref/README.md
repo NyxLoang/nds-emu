@@ -147,3 +147,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\ref\fb2bmp.ps1 `
 参考核 注入触摸：refspi: datareads=18122      本地（修复前）：842（漏）
                                               本地（修复后）：70080/3000 帧（≈24/帧，同参考核）
 ```
+
+## 本地侧对账工具：`tools/statetest.ps1`（21-B9yi 续107）
+
+不依赖参考核，只回答一个问题：**即时存档是不是精确的**。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\statetest.ps1 `
+    -Rom tools\rom_ascii.nds -Frame 1000 -Run 2000 `
+    -Extra "--key-frame,1;--key-mask,0x3FF;--key-period,120"
+```
+
+三趟：①连续跑到 `Frame+Run`；②跑到 `Frame` 并存一份即时存档；③读该存档再跑 `Run` 帧。
+然后把两边的**主存/VRAM/ITCM/DTCM/ARM7WRAM/共享WRAM/调色板/io9/io7** 逐个逐字节比较，
+输出每项的差异字节数并给 `PASS/FAIL`。`-Extra` 是给模拟器的附加参数，用**分号**分隔
+（逗号留给参数自身，如 `--touch-drag 64,128,150,90`）。
+
+> 为什么值得单独做工具：这些实验最容易被「上一轮的残留 dump 文件」和「`--dump` 前缀丢失」
+> 骗到（后者是 Windows 上 `wargv` 的 use-after-free，见 `src/mainlog.md` 续107）。
+> 脚本会先清掉旧产物，缺文件就报错，并把真正跑的那条命令行回显出来。

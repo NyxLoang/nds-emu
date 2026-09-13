@@ -413,20 +413,31 @@ void runner_resync_time(runner_t *r)
        和存档时那条时间线对不上（实测这样会让 200 帧后的 IRQ 计数差 300+、画面完全不同）。
        这里按「当前帧号」反推脚本应处的状态：
          * 按键脚本（固定掩码）：`(fr - key_frame) % period` 落在 [0,12) 内 = 按住中；
-         * 随机按键：按同样规则replay 种子 LCG 到当前帧；
-         * 固定触摸脚本：与按键同规则。 */
+         * 随机按键：按同样规则 replay 种子 LCG 到当前帧；
+         * 固定触摸脚本：与按键同规则。
+       21-B9yi(续107)：补齐**随机触摸**与**拖拽手势**的相位复原，并让
+       `period == 0`（单次）的固定脚本也按帧号推断「此刻是否还在按住」
+       —— 此前这四种情况都会在读档后从脚本起点重来。 */
     uint64_t fr = now / r->frame_cycles;
     if (r->key_random) {
         if (r->key_period > 0 && fr >= r->key_frame) {
-            uint64_t steps = (fr - r->key_frame) / r->key_period;
-            uint64_t phase = (fr - r->key_frame) % r->key_period;
+            /* 随机脚本的节奏与固定脚本不同：`runner_keys()` 里按下后保持 12 帧，
+               抬起那一帧才把 `next_press = fr + period` ⇒ **周期 = period + 12**
+               （固定脚本才是 `next_press += period`）。这里必须按同一节奏反推，
+               否则每轮的按下时刻都会偏移 12 帧。 */
+            uint64_t cycle = r->key_period + 12u;
+            uint64_t steps = (fr - r->key_frame) / cycle;
+            uint64_t phase = (fr - r->key_frame) % cycle;
             uint32_t seed = r->key_seed;
             for (uint64_t i = 0; i < steps; i++)
                 seed = seed * 1664525u + 1013904223u;
+            /* 本轮（第 steps 次按下）的取样值：**无论此刻是否还在按住，按下都已经发生过**
+               ⇒ 种子必须前进一步并写回，否则下一次按下会取到上一次的掩码
+               （实测读档后第 417 帧的随机按键与连续跑不同 ⇒ 主存整片分叉）。 */
+            seed = seed * 1664525u + 1013904223u;
             r->key_seed = seed;
             if (phase < 12u) {
-                r->key_seed = seed * 1664525u + 1013904223u;
-                uint16_t m = (uint16_t)((r->key_seed >> 8) & 0xFFFu);
+                uint16_t m = (uint16_t)((seed >> 8) & 0xFFFu);
                 if (m == 0)
                     m = 0x001u;
                 r->key_mask = m;
@@ -435,25 +446,77 @@ void runner_resync_time(runner_t *r)
                 io_set_keyinput(r->nds->io, m);
             } else {
                 r->key_down = 0;
-                r->next_press = fr + (r->key_period - phase);
+                r->next_press = r->key_frame + (steps + 1u) * cycle;
                 io_set_keyinput(r->nds->io, 0);
             }
         }
-    } else if (r->key_mask != 0 && r->key_period > 0 && fr >= r->key_frame) {
-        uint64_t phase = (fr - r->key_frame) % r->key_period;
+    } else if (r->key_mask != 0 && fr >= r->key_frame) {
+        /* period == 0（单次按键）：按住 12 帧后不再触发（next_press 不再前进）。 */
+        uint64_t phase = (r->key_period != 0)
+                       ? ((fr - r->key_frame) % r->key_period)
+                       : (fr - r->key_frame);
         if (phase < 12u) {
             r->key_down = 1;
             r->key_release_frame = fr + (12u - phase);
             io_set_keyinput(r->nds->io, (uint16_t)r->key_mask);
         } else {
             r->key_down = 0;
-            r->next_press = fr + (r->key_period - phase);
+            r->next_press = (r->key_period != 0)
+                          ? (fr + (r->key_period - phase)) : UINT64_MAX;
             io_set_keyinput(r->nds->io, 0);
         }
     }
-    if (r->touch_enabled && !r->touch_random && !r->drag_on &&
-        r->touch_period > 0 && fr >= r->touch_frame) {
-        uint64_t phase = (fr - r->touch_frame) % r->touch_period;
+    /* 触摸：三种脚本（随机 / 拖拽 / 固定）各自按帧号反推。 */
+    if (r->touch_enabled && r->touch_random && r->touch_period > 0 &&
+        fr >= r->touch_frame) {
+        /* 节奏同随机按键：按住 12 帧 + period 抬起到下一次按下 ⇒ 周期 = period + 12 */
+        uint64_t cycle = r->touch_period + 12u;
+        uint64_t steps = (fr - r->touch_frame) / cycle;
+        uint64_t phase = (fr - r->touch_frame) % cycle;
+        uint32_t seed = r->touch_seed;
+        for (uint64_t i = 0; i < steps; i++)
+            seed = seed * 1664525u + 1013904223u;
+        seed = seed * 1664525u + 1013904223u;   /* 本轮按下的取样值（同随机按键） */
+        r->touch_seed = seed;
+        if (phase < 12u) {
+            int px = (int)((seed >> 8) & 0xFFu);
+            int py = (int)((seed >> 16) % 192u);
+            io_set_touch(r->nds->io, runner_touch_adc(px, 33, 16),
+                         runner_touch_adc(py, 33, 16), 1);
+            r->touch_down = 1;
+            r->touch_release_frame = fr + (12u - phase);
+        } else {
+            r->touch_down = 0;
+            r->next_touch = r->touch_frame + (steps + 1u) * cycle;
+            io_set_touch(r->nds->io, 0, 0xFFFu, 0);
+        }
+    } else if (r->touch_enabled && r->drag_on && fr >= r->touch_frame) {
+        /* 拖拽：手势占 [start, start+drag_steps] 帧（`el > drag_steps` 才抬起），
+           轨迹同一帧内按线性插值 —— 与 runner_touch() 的算法逐式一致。 */
+        uint64_t phase = (r->touch_period != 0)
+                       ? ((fr - r->touch_frame) % r->touch_period)
+                       : (fr - r->touch_frame);
+        int n = (r->drag_steps > 0) ? r->drag_steps : 1;
+        if (phase <= (uint64_t)r->drag_steps) {
+            int px = r->drag_x1 + (r->drag_x2 - r->drag_x1) * (int)phase / n;
+            int py = r->drag_y1 + (r->drag_y2 - r->drag_y1) * (int)phase / n;
+            io_set_touch(r->nds->io, runner_touch_adc(px, 33, 16),
+                         runner_touch_adc(py, 33, 16), 1);
+            r->touch_down = 1;
+            r->drag_active = 1;
+            r->drag_start_frame = fr - phase;
+        } else {
+            r->touch_down = 0;
+            r->drag_active = 0;
+            r->next_touch = (r->touch_period != 0)
+                          ? (fr + (r->touch_period - phase)) : UINT64_MAX;
+            io_set_touch(r->nds->io, 0, 0xFFFu, 0);
+        }
+    } else if (r->touch_enabled && !r->touch_random && !r->drag_on &&
+               fr >= r->touch_frame) {
+        uint64_t phase = (r->touch_period != 0)
+                       ? ((fr - r->touch_frame) % r->touch_period)
+                       : (fr - r->touch_frame);
         if (phase < 12u) {
             io_set_touch(r->nds->io,
                          runner_touch_adc(r->touch_x, 33, 16),
@@ -462,7 +525,8 @@ void runner_resync_time(runner_t *r)
             r->touch_release_frame = fr + (12u - phase);
         } else {
             r->touch_down = 0;
-            r->next_touch = fr + (r->touch_period - phase);
+            r->next_touch = (r->touch_period != 0)
+                          ? (fr + (r->touch_period - phase)) : UINT64_MAX;
             io_set_touch(r->nds->io, 0, 0xFFFu, 0);
         }
     }
@@ -1249,10 +1313,6 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         printf("headless-frames: runner_create failed\n");
         return;
     }
-    /* 21-B9yi(续96)：若刚读过档，把调度时间轴拉到存档时刻
-       （否则读档后的第一帧会把「几百帧的差额」一次性补掉）。 */
-    if (state_take_pending_load())
-        runner_resync_time(r);
     h9_enabled();   /* 21-B9yi(续41)：初始化热点 PC 统计开关（默认关） */
     /* 21-B9yi(续71)：随机按键浸泡优先于固定按键脚本 */
     if (s_keyrandom_on)
@@ -1268,6 +1328,15 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                               s_drag_x2, s_drag_y2, s_drag_steps, s_touch_period);
     else if (s_touch_on)  /* 21-B9yi(续46)：触摸注入脚本 */
         runner_set_touch(r, s_touch_frame, s_touch_x, s_touch_y, s_touch_period);
+    /* 21-B9yi(续107)：**读档重同步必须在脚本配置之后**。
+       `runner_resync_time()` 里除时间轴之外，还要按当前帧号**反推输入脚本相位**
+       （见那里的注释）；而 `runner_set_keys*()` 会把 `next_press` 重置回脚本起点。
+       旧顺序（先 resync 再 set_keys）等于把相位复原的结果**当场覆盖掉**：
+       实测读档后第一帧就立刻补按一次全键（`runner: key mask=03FF at frame=300`），
+       而连续跑那条时间线要到第 361 帧才按 ⇒ 读档与连续跑从此必然分叉。
+       （否则读档后的第一帧还会把「几百帧的差额」一次性补掉。） */
+    if (state_take_pending_load())
+        runner_resync_time(r);
     uint64_t start = runner_frame_index(r);
     for (uint64_t fi = 0; fi < frames; fi++) {
         if (!runner_run_frame(r))

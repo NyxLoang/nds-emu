@@ -175,8 +175,11 @@ develop ───────── 日常开发主线（默认分支）
   `--load-state 文件.state`（启动读入）。
 * 内容：内存（主存/ITCM/DTCM/ARM7 WRAM/Shared WRAM/VRAM/调色板/OAM）、双核 CPU 全部寄存器与周期、
   IO 全区、存档芯片、宿主调度时间戳；ROM 与宿主窗口状态不存。
-* **已知限制**：读档后**能正常继续玩**，但不是**逐字节重放**——读档后最初若干帧画面完全一致，
-  随后 ARM7 的时序预算会累积出差异，约百帧后可能走到不同场景（详见 `src/state/statelog.md`）。
+* **保真度**：**逐字节重放**（21-B9yi 续107 起）——「跑到第 N 帧存档 → 读档再跑 M 帧」与
+  「连续跑到 N+M 帧」的主存/VRAM/ITCM/DTCM/ARM7WRAM/共享WRAM/调色板/IO 镜像**完全相同**。
+  根因是「读档后的输入脚本相位复原」被脚本配置顺序覆盖（详见 `src/state/statelog.md` 续107）。
+* **验收工具**：`powershell -File tools\statetest.ps1 -Rom <ROM> -Frame 1000 -Run 2000`
+  （可加 `-Extra "--key-random,12345;--key-period,40"`）自动跑上面那组对照并给 PASS/FAIL。
 * 诊断：`NDS_STATEDBG=1` 会在存档/读档时打印关键的 CPU 与中断状态，便于对比两侧。
 
 > 诊断：`NDS_TRACE_FRAME=N` + `NDS_TRACE_COUNT=K` 从第 N 帧起逐条打印指令级 trace

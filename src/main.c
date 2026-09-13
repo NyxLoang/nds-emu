@@ -327,8 +327,18 @@ int main(int argc, char *argv[])
             key_mask = (uint32_t)wcstoul(wargv[i + 1], NULL, 0);
         else if (wcscmp(wargv[i], L"--key-period") == 0 && i + 1 < wargc)
             key_period = _wcstoui64(wargv[i + 1], NULL, 0);
-        else if (wcscmp(wargv[i], L"--dump") == 0 && i + 1 < wargc)
-            dump_prefix_w = wargv[i + 1];
+        else if (wcscmp(wargv[i], L"--dump") == 0 && i + 1 < wargc) {
+            /* 21-B9yi(续107)：**必须拷进静态缓冲**，不能存 `wargv[i+1]` 指针。
+               Windows 路径在这之后（ROM/存档装载完、开跑之前）会 `LocalFree(wargv)`，
+               而 `--dump` 真正写文件是在**整段跑完之后** ⇒ 存指针就是读已释放内存：
+               实测前缀时有时无，丢了前缀就把 `_mainram.bin` 之类的文件写到**当前目录**
+               （仓库里出现过的那批根目录 `_*.bin` 就是这么来的）。
+               `--shot` 当时已经拷进 `shot_buf`，这里是同一个坑的另一处。 */
+            static wchar_t dump_prefix_buf[512];
+            wcsncpy(dump_prefix_buf, wargv[i + 1], 511);
+            dump_prefix_buf[511] = 0;
+            dump_prefix_w = dump_prefix_buf;
+        }
         else if (wcscmp(wargv[i], L"--watch") == 0 && i + 1 < wargc) {
             /* 21-B9xj：--watch LO-HI（如 --watch 04000106-04000108），最多 4 组 */
             uint32_t lo = 0, hi = 0;
@@ -773,9 +783,6 @@ int main(int argc, char *argv[])
 
     /* 21-B9wq：持久化帧驱动调度器（与 headless 共用事件/周期成本模型） */
     runner_t *frame_runner = runner_create(nds);
-    /* 21-B9yi(续96)：窗口模式同样要在读档后把时间轴拉齐。 */
-    if (frame_runner != NULL && state_take_pending_load())
-        runner_resync_time(frame_runner);
     /* 21-B9yi(续69)：**窗口模式也套用键盘脚本**（`--key-frame/-mask/-period`）。
        此前这些参数只在无头路径生效 ⇒ 所有「窗口带按键」的测量其实都是**无输入**状态，
        而游戏的输入状态会让工作量差 2.6 倍（见 docs/21 续68）⇒ 之前的窗口帧率
@@ -789,6 +796,12 @@ int main(int argc, char *argv[])
     if (touch_random_on)
         runner_set_touch_random(frame_runner, touch_frame, touch_random_seed,
                                 touch_period ? touch_period : 90);
+    /* 21-B9yi(续107)：窗口模式同样要在读档后把时间轴拉齐；但**必须放在脚本配置之后**
+       ——`runner_resync_time()` 会按当前帧号反推输入脚本相位，而上面的
+       `runner_set_keys*()` 会把 `next_press` 重置回脚本起点，顺序反了就白做
+       （读档后第一帧立刻补按一次，见 src/runner/runner.c 里同一处的说明）。 */
+    if (frame_runner != NULL && state_take_pending_load())
+        runner_resync_time(frame_runner);
     /* 21-B9yi(续49)：显式关掉指令级 trace。它是 bring-up 用的诊断设施，
        开着时**每条指令都会 printf**（窗口模式实测 <2 fps + GB 级日志）。 */
     exec_set_trace(0);

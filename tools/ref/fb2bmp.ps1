@@ -1,6 +1,13 @@
 # Convert a reference-core framebuffer dump (%TEMP%\ref_fb_<frame>.bin:
-# top+bottom screens, 256x192 32bpp pixels) into a 24bpp BMP so it can be
-# compared side by side with the local `--shot-every` BMPs.
+# two 256x192 32bpp screens) into a 24bpp BMP so it can be compared side by
+# side with the local `--shot-every` BMPs.
+#
+# 21-B9yi(xu108m) IMPORTANT: melonDS's `GetFramebuffers(&top, &bottom)` hands
+# back `Framebuffer[front][0]` first, and that one is the DS's **bottom** screen
+# (measured: its stats match our bottom screen exactly).  So the bin layout is
+# [screen A = DS bottom][screen B = DS top] and this script used to put the
+# bottom screen on top, i.e. its output was vertically swapped relative to our
+# `--shot` BMPs (top screen first).  Fixed here.
 #
 # NOTE: keep this file ASCII-only -- Windows PowerShell 5.1 reads .ps1 as ANSI
 # and non-ASCII characters in comments can break parsing.
@@ -38,7 +45,8 @@ $rows = New-Object byte[] $dataSize
 for ($y = 0; $y -lt $total; $y++) {
     $dispY = $total - 1 - $y
     for ($x = 0; $x -lt $w; $x++) {
-        $off = (($dispY * $w) + $x) * 4
+        if ($dispY -lt $h) { $scr = 1; $yy = $dispY } else { $scr = 0; $yy = $dispY - $h }
+        $off = ((($scr * $h) + $yy) * $w + $x) * 4
         $v = [BitConverter]::ToUInt32($b, $off)
         $s = ($y * $rowSize) + ($x * 3)
         $rows[$s + 0] = [byte](($v -shr 16) -band 0xFF)

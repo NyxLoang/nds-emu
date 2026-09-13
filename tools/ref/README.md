@@ -161,8 +161,35 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\ref\fb2bmp.ps1 `
            -In "$env:TEMP\ref_fb_4000.bin" -Out build\ref_4000.bmp
 ```
 
-（顶屏在上、底屏在下，和本地 `--shot-every` 出的 BMP 版式一致，可直接目视并排比较。
-脚本保持纯 ASCII —— Windows PowerShell 5.1 按 ANSI 读 `.ps1`，中文注释会解析失败。）
+（**21-B9yi 续108m 更正**：本脚本原来把参考核 dump 的**第一个**屏放到图片上方，而
+melonDS 的 `GetFramebuffers(&top,&bottom)` 交回来的第一个其实是**底屏**
+（实测它的统计与非黑像素数、均值都与本地底屏逐值相同）⇒ 输出图与本地 `--shot` 的
+「顶屏在上」**上下颠倒**。已修好：现在两个脚本/截图版式一致。
+脚本保持纯 ASCII —— Windows PowerShell 5.1 按 ANSI 读 `.ps1`，非 ASCII 注释会解析失败。）
+
+## 画面逐像素对账：`tools/ref/fbcmp.ps1`（21-B9yi 续108m）
+
+```powershell
+# 1) 本地跑同一脚本、同一批帧，并**关掉主亮度**（参考核帧缓冲是 MASTER_BRIGHT 之前的）
+$env:NDS_NOMB='1'; .\build\nds-emu.exe <ROM> --headless-frames 251 --key-frame 1 `
+    --key-mask 0x3FF --key-period 120 --shot-every 1 --shot-prefix build\fb
+# 2) 参考核：REF_SHOT_EVERY 每 10 帧导出 %TEMP%\ref_fb_<frame>.bin
+# 3) 对账（注意参考核 dump 在 frame==N 时已跑 N+1 帧 ⇒ 本地取第 N+1 帧的截图）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ref\fbcmp.ps1 `
+    -Ref "$env:TEMP\ref_fb_120.bin" -Bmp build\fb_00121.bmp
+```
+
+**实测结果（同键脚本、同一批帧）**：
+
+```text
+ref f=120 vs 本地 f=121：底屏差 0/49152、顶屏差 0/49152（MAE 0.0000）⇒ 逐像素完全一致
+ref f=250 vs 本地 f=251：同上（0/0）⇒ 逐像素完全一致
+ref f=50  vs 本地 f=51 ：底屏差 2864、顶屏差 6614（MAE≈7~8）—— 该帧仍在淡入过渡，
+                          两边游戏状态本身还有 238 B 差异，属预期
+```
+
+⇒ 只要两边游戏状态一致，**本模拟器的画面与参考核逐像素相同**（含 2D 图层/3D 图层/抗锯齿/
+主亮度之前的那一级合成）。
 
 ## 已知口径差异（对照时必须记住）
 

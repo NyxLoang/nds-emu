@@ -22,7 +22,10 @@ static void audio_callback(void *userdata, Uint8 *stream, int len)
         frames = AUDIO_BUF_FRAMES;
 
     nds_t *nds = g_audio_nds;
-    if (nds != NULL) {
+    /* 21-B9yi(续92)：**宿主渲染关闭时本回调只吐静音**。
+       为什么：快进（按住 Tab）改由 runner 按**模拟时间**推进 SPU，此时声卡若还按
+       墙钟去调 snd_render，既与 4 倍速的游戏时间脱节，又会把通道状态**多推进一次**。 */
+    if (nds != NULL && snd_host_render_active()) {
         snd_render(&nds->io->snd, nds->bus, g_audio_l, g_audio_r, frames);
     } else {
         for (int i = 0; i < frames; i++) {

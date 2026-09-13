@@ -655,12 +655,13 @@ int main(int argc, char *argv[])
     /* 21-B9yi(续68)：`NDS_NOAUDIO=1` 跳过声卡（诊断用，量化音频回调的开销）。
        跳过时 snd 仍按模拟时间推进（runner 的 snd_advance 路径，与无头一致），
        游戏侧行为等价，只是没有声音输出。 */
+    int audio_on = 0;   /* 21-B9yi(续92)：声卡是否真的开着（快进恢复时要据此决定宿主渲染标志） */
     {
         const char *e = getenv("NDS_NOAUDIO");
         if (e != NULL && e[0] != '0')
             printf("window: NDS_NOAUDIO=1（不打开声卡，仅用于测帧率）\n");
-        else
-            audio_init(nds);
+        else if (audio_init(nds) == 0)
+            audio_on = 1;
     }
 
     /* 阶段 4.6：默认 2× 缩放启动（菜单下拉可切回 1x/2x） */
@@ -718,6 +719,22 @@ int main(int argc, char *argv[])
        「SDL 事件泵」与「runner_run_frame（模拟）」两块。 */
     uint64_t t_evt = 0, t_run = 0, freq = SDL_GetPerformanceFrequency();
     uint64_t t_ppu = 0, t_sdl = 0;   /* 21-B9yi(续70)：宿主渲染再拆分 */
+    /* 21-B9yi(续92)：**按住 Tab 快进**（默认 ×4）。快进时：
+       ①帧节奏目标改成 59.8261×4；②把 SPU 从「声卡按墙钟推进」切回
+       「runner 按模拟时间推进」（`snd_set_host_render_active(0)`），
+       声卡回调则只输出静音（见 audio.c）——这样 4 倍速下游戏逻辑仍然正确，
+       又不会发出错乱的音频。松开 Tab 全部还原。 */
+    int ff_hold = 0;
+    double ff_mul = 4.0;
+    {
+        const char *e = getenv("NDS_FF_MUL");
+        if (e != NULL && atof(e) > 0.0)
+            ff_mul = atof(e);
+        /* `NDS_FF_HOLD=1`：启动即视为按住快进（自动化验证 / 基准测试用，等价按 Tab） */
+        const char *h = getenv("NDS_FF_HOLD");
+        if (h != NULL && h[0] != '0')
+            ff_hold = 1;
+    }
     /* 21-B9yi(续82)：帧节奏（frame pacing）初始化。
        为什么需要：轻场景下模拟器能跑到 150–265 fps，**快于真机**。而音频回调
        是按真实时间驱动 SPU 的 ⇒ 声音与画面脱节（真机不存在这种状态）。
@@ -746,11 +763,19 @@ int main(int argc, char *argv[])
     uint64_t pace_freq = SDL_GetPerformanceFrequency();
     double pace_ticks = 0.0, pace_next = 0.0;
     if (pace_on && pace_freq != 0) {
-        pace_ticks = (double)pace_freq / (nds_frame_hz * pace_speed);
+        /* 21-B9yi(续92)：启动时若已「按住快进」（NDS_FF_HOLD=1）就按倍速起步，
+           并把 SPU 交给 runner 按模拟时间推进（声卡回调只吐静音）。 */
+        double eff = pace_speed * (ff_hold ? ff_mul : 1.0);
+        pace_ticks = (double)pace_freq / (nds_frame_hz * eff);
         pace_next = (double)SDL_GetPerformanceCounter() + pace_ticks;
+        if (ff_hold) {
+            snd_set_host_render_active(0);
+            printf("window: 快进 开（启动即按住，×%.1f → 目标 %.1f fps，音频静音）\n",
+                   ff_mul, nds_frame_hz * eff);
+        }
         printf("window: 帧节奏开启 目标 %.2f fps（真机 %.2f fps x%.2f）"
                "；NDS_NOSYNC=1 或 --speed 0 关闭，--speed N 倍速\n",
-               nds_frame_hz * pace_speed, nds_frame_hz, pace_speed);
+               nds_frame_hz * eff, nds_frame_hz, eff);
         fflush(stdout);
     }
     /* 21-B9yi(续47)：鼠标 → 触摸屏（底屏）。布局（逻辑坐标）：
@@ -820,7 +845,21 @@ int main(int argc, char *argv[])
                 case SDLK_DOWN:    bit = KEY_DOWN;  break;
                 case SDLK_LEFT:    bit = KEY_LEFT;  break;
                 case SDLK_RIGHT:   bit = KEY_RIGHT; break;
+                case SDLK_TAB:     bit = 0;         break;  /* 快进键（下面单独处理） */
                 default:           bit = 0;         break;
+                }
+                /* 21-B9yi(续92)：按住 Tab = 快进 ×N（松手还原）。 */
+                if (e.key.keysym.sym == SDLK_TAB) {
+                    ff_hold = down;
+                    double eff = pace_speed * (ff_hold ? ff_mul : 1.0);
+                    pace_ticks = (pace_freq != 0)
+                               ? (double)pace_freq / (nds_frame_hz * eff) : 0.0;
+                    pace_next = (double)SDL_GetPerformanceCounter() + pace_ticks;
+                    snd_set_host_render_active((ff_hold || !audio_on) ? 0 : 1);
+                    printf("window: 快进 %s（目标 %.1f fps，%s）\n",
+                           ff_hold ? "开" : "关", nds_frame_hz * eff,
+                           ff_hold ? "音频静音、SPU 跟随模拟时间" : "恢复实时音频");
+                    fflush(stdout);
                 }
                 if (bit != 0) {
                     if (down) keys_pressed |= bit;

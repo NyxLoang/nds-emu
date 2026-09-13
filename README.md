@@ -28,6 +28,7 @@ build/nds-emu.exe "tools/Z 最终幻想12 亡灵之翼 6.5全剧情修正版(简
 | `A` `F` | L / R |
 | `Enter` `Backspace` | START / SELECT |
 | 方向键 | 十字键 |
+| **按住 `Tab`** | **快进 ×4**（跳过过场用；快进时音频静音、SPU 跟随模拟时间，`NDS_FF_MUL` 可改倍数） |
 | **鼠标按住底屏** | **触摸屏**（按下=触点、拖动=笔移动、抬起=抬笔） |
 | 鼠标点顶部菜单栏 | 切换缩放（1x–4x）/ 语言（中/英） |
 
@@ -87,6 +88,8 @@ NDS_NOSYNC=1 build/nds-emu.exe "<ROM>" --frames 600 --fps-every 300
 | `NDS_NORENDER=1` / `NDS_NOAUDIO=1` | 窗口模式跳过宿主渲染 / 不打开声卡 |
 | `NDS_NOSYNC=1` | 关闭帧节奏（全速运行，用于压测；默认按真机 59.83 Hz 限速） |
 | `NDS_UNKIOSUM=1` | 无头跑完打印**全部未知 IO 地址**（含读写方向），用于跟参考核寄存器表核账 |
+| `NDS_FF_MUL=4` | 快进倍数（默认 4；按住 `Tab` 生效） |
+| `NDS_FF_HOLD=1` | 启动即视为按住快进（自动化验证/基准用，等价于一直按着 `Tab`） |
 | `NDS_SNDSTAT=1` | 按秒打印混音输出非静音样本数与峰值 |
 | `NDS_GXHIST` / `NDS_BGDBG` / `NDS_MAT_FRAME` / `NDS_POLYDBG` / `NDS_IODUMP_FRAME` … | GX/2D/IO 诊断（细节见 `docs/21-rom-bringup.md`） |
 

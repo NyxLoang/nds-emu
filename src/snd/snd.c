@@ -7,13 +7,44 @@
 /* 21-B9xl 诊断：通道启动/结束打点（带帧号），用于与参考核对照“通道生命周期”。 */
 extern unsigned long long g_dbg_frame;
 static int g_snd_evt_log = 0;
+/* 21-B9yi(续88)：每通道启动/结束计数（覆盖整轮，不受下面打印截断影响） */
+static uint32_t s_ch_starts[SND_CHANNEL_COUNT];
+static uint32_t s_ch_ends[SND_CHANNEL_COUNT];
+/* 21-B9yi(续88)：按格式统计「混进来的样本数」（0=PCM8/1=PCM16/2=ADPCM/3=PSG/4=噪声通道）。
+   只在 NDS_SNDSTAT 打开时累加（那一层本来就在热路径里判过，不额外增加常态开销）。 */
+static uint64_t s_fmt_samples[5];
 
 static void snd_log(const char *what, int ch)
 {
+    /* 21-B9yi(续88)：计数放在「打印截断」之前，保证统计覆盖整轮运行 */
+    if (ch >= 0 && ch < SND_CHANNEL_COUNT) {
+        if (what[0] == 's')
+            s_ch_starts[ch]++;
+        else if (what[0] == 'e')
+            s_ch_ends[ch]++;
+    }
     if (g_snd_evt_log >= 240)
         return;
     g_snd_evt_log++;
     printf("snd: ch=%d %s f=%llu\n", ch, what, g_dbg_frame);
+}
+
+void snd_channel_report(void)
+{
+    printf("sndch: starts/ends");
+    for (int i = 0; i < SND_CHANNEL_COUNT; i++)
+        if (s_ch_starts[i] || s_ch_ends[i])
+            printf(" %d=%u/%u", i, s_ch_starts[i], s_ch_ends[i]);
+    printf("\n");
+    if (s_fmt_samples[0] || s_fmt_samples[1] || s_fmt_samples[2] ||
+        s_fmt_samples[3] || s_fmt_samples[4])
+        printf("sndfmt: pcm8=%llu pcm16=%llu adpcm=%llu psg=%llu noise=%llu\n",
+               (unsigned long long)s_fmt_samples[0],
+               (unsigned long long)s_fmt_samples[1],
+               (unsigned long long)s_fmt_samples[2],
+               (unsigned long long)s_fmt_samples[3],
+               (unsigned long long)s_fmt_samples[4]);
+    fflush(stdout);
 }
 
 /* ---- 寄存器地址换算 ---- */
@@ -83,6 +114,7 @@ static void snd_reset_channel(snd_channel_t *c)
     c->adpcm_word = 0;
     c->adpcm_cursor = 0;
     c->adpcm_started = 0;
+    c->noise = 0x7FFFu;   /* 21-B9yi(续88)：噪声 LFSR 初值（参考核 Start() 同值） */
 }
 
 void snd_write8(snd_t *s, uint32_t addr, uint8_t val)
@@ -224,17 +256,39 @@ static void snd_adpcm_decode_one(snd_channel_t *c, const struct bus *bus)
 /* ---- PSG ---- */
 
 /* 方波（通道 8-13）与噪声（14-15）都返回 ±满幅（10 位域 ±0x200）。 */
-static int32_t snd_psg_sample(const snd_channel_t *c, uint32_t idx, int ch)
+/* 21-B9yi(续88)：PSG 方波表 + 噪声 LFSR —— 直接抄参考核（melonDS SPU.cpp/h）。
+   此前本地是「自定相位 + 自定伪随机」：duty=0 的首样本为正、占空比按 (duty+1)/8；
+   参考核的表是「duty=0 首样本为负、每行有 N 个 +0x7FFF」。
+   两者听起来都像方波，但**相位与占空比摆放不同** ⇒ 换成参考核口径。
+   注意量纲：参考核是 16 位（±0x7FFF），本地混音管线是 10 位域（±0x200），故 >>6。 */
+static const int16_t s_psg_table[8][8] = {
+    { -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF,  0x7FFF },
+    { -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF,  0x7FFF,  0x7FFF },
+    { -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF },
+    { -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF },
+    { -0x7FFF, -0x7FFF, -0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF },
+    { -0x7FFF, -0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF },
+    { -0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF,  0x7FFF },
+    { -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF, -0x7FFF }
+};
+
+static int32_t snd_psg_sample(snd_channel_t *c, uint32_t idx, int ch)
 {
     if (ch >= 14) {
-        /* 白噪声：确定性伪随机位（近似 LFSR），随源采样变化 */
-        uint32_t h = idx * 0x9E3779B9u;
-        return ((h >> 16) & 1) ? 0x200 : -0x200;
+        /* 通道 14/15 的 PSG 格式 = 噪声（melonDS `DoRun`：`Num >= 14 → Run<4>`）。
+           melonDS 的 LFSR：**先看当前最低位决定输出**，再移位/异或 0x6000；初值 0x7FFF。 */
+        int32_t out;
+        if (c->noise & 1u) {
+            c->noise = (c->noise >> 1) ^ 0x6000u;
+            out = -0x7FFF;
+        } else {
+            c->noise >>= 1;
+            out = 0x7FFF;
+        }
+        return out >> 6;
     }
-    /* 方波：8 步一周期，占空比 (duty+1)/8 */
     int duty = (int)((c->cnt >> SNDCNT_DUTY_SHIFT) & 7);
-    int step = (int)(idx & 7);
-    return (step < duty + 1) ? 0x200 : -0x200;
+    return (int32_t)s_psg_table[duty][idx & 7u] >> 6;
 }
 
 /* ---- 混音 ---- */
@@ -321,6 +375,12 @@ void snd_render(snd_t *s, const struct bus *bus, int16_t *out_l, int16_t *out_r,
                     continue; /* 未启动（bit31=0） */
                 int fmt = (int)((c->cnt >> SNDCNT_FORMAT_SHIFT) & 3);
                 int32_t raw = snd_channel_raw(c, bus, ch);
+                if (stat_state == 1) {
+                    int f = fmt;
+                    if (fmt == SND_FORMAT_PSG && ch >= 14)
+                        f = 4;   /* 通道 14/15 的 PSG = 噪声 */
+                    s_fmt_samples[f]++;
+                }
 
                 int mul = (int)(c->cnt & SNDCNT_VOL_MUL_MASK);
                 int div = (int)((c->cnt >> SNDCNT_VOL_DIV_SHIFT) & 3);

@@ -4983,12 +4983,32 @@ static void test_snd_mix(nds_t *nds)
     CHECK_EQ("adpcm R", (uint16_t)R[0], 0x4000u);
     bus_write32(nds->bus, c2 + 0x0, 0);   /* 停掉 ch2 */
 
-    /* PSG 方波：duty=0 → 首个相位 +0x200 → 满偏 out=0x7FC0（通道 3） */
+    /* PSG 方波（21-B9yi 续88 换成参考核的表）：duty=0 的首样本是 **负** 满偏
+       （melonDS PSGTable[0][0] = -0x7FFF）⇒ 10 位域 -512 ⇒ out = -32768 = 0x8000 */
     uint32_t c3 = b + 3 * SND_CH_STRIDE;
-    bus_write32(nds->bus, c3 + 0x0, 0xE07F007Fu);   /* PSG, vol127, pan127, start */
-    snd_render(&nds->io->snd, nds->bus, L, R, 1);
-    CHECK_EQ("psg R", (uint16_t)R[0], 0x7FC0u);
+    /* TMR≈1022 ⇒ 相位约每输出样本走 1 格（相位由通道 TMR 驱动，见 runner/snd 说明） */
+    bus_write16(nds->bus, c3 + 0x8, 1022u);
+    bus_write32(nds->bus, c3 + 0x0, 0xE07F007Fu);   /* PSG、duty=0、vol127、pan127、start */
+    snd_render(&nds->io->snd, nds->bus, L, R, 8);
+    CHECK_EQ("psg duty0 首样本", (uint16_t)R[0], 0x8000u);
+    CHECK_EQ("psg duty0 第8样本", (uint16_t)R[7], 0x7FC0u);   /* 表尾 = +0x7FFF */
     bus_write32(nds->bus, c3 + 0x0, 0);   /* 停掉 ch3 */
+
+    /* duty=7：整行都是 -0x7FFF ⇒ 每个样本都是负满偏（参考核表最后一行） */
+    bus_write32(nds->bus, c3 + 0x0, 0xE77F007Fu);   /* duty=7（bits24-26=7） */
+    snd_render(&nds->io->snd, nds->bus, L, R, 3);
+    CHECK_EQ("psg duty7 全负 1", (uint16_t)R[0], 0x8000u);
+    CHECK_EQ("psg duty7 全负 2", (uint16_t)R[1], 0x8000u);
+    bus_write32(nds->bus, c3 + 0x0, 0);
+
+    /* 通道 14 的 PSG 格式 = 噪声：LFSR 初值 0x7FFF 是奇数 ⇒ 首样本 -0x7FFF、相位器随之移位 */
+    uint32_t c14 = b + 14 * SND_CH_STRIDE;
+    bus_write32(nds->bus, c14 + 0x0, 0xE07F007Fu);
+    snd_render(&nds->io->snd, nds->bus, L, R, 2);
+    CHECK_EQ("noise 首样本", (uint16_t)R[0], 0x8000u);
+    /* LFSR：0x7FFF 奇数 → (0x7FFF>>1)^0x6000 = 0x5FFF（奇数）⇒ 第二样本仍为负 */
+    CHECK_EQ("noise 第2样本", (uint16_t)R[1], 0x8000u);
+    bus_write32(nds->bus, c14 + 0x0, 0);
 
     /* 主音量 0：仍有通道但整体静音 → 输出 0 */
     bus_write16(nds->bus, SND_SOUNDCNT, 0x8000);

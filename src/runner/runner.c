@@ -1357,6 +1357,8 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     /* 21-B9yi(续87)：`NDS_UNKIOSUM=1` → 列出全部未知 IO 地址（与参考核核账用） */
     if (getenv("NDS_UNKIOSUM") != NULL)
         io_unknown_report();
+    /* 21-B9yi(续88)：每通道启动次数（判断游戏用不用 PSG/噪声通道） */
+    snd_channel_report();
     if (shot_path != NULL) {
         uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
                                               * RENDER_SCREEN_H);

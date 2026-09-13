@@ -63,6 +63,7 @@ typedef struct snd_channel {
     uint32_t adpcm_word;      /* 当前数据字 */
     uint32_t adpcm_cursor;    /* 已解码到的源采样序号（追赶游标） */
     int      adpcm_started;   /* 是否已读头并开始解码 */
+    uint32_t noise;           /* 21-B9yi(续88)：通道 14/15 噪声 LFSR（启动时置 0x7FFF，同参考核） */
 } snd_channel_t;
 
 typedef struct snd {
@@ -97,5 +98,9 @@ void snd_advance(snd_t *s, const struct bus *bus, uint32_t samples);
 /* 宿主侧是否已在按实时速率渲染（SDL 回调）；是则 runner 不再重复推进。 */
 void snd_set_host_render_active(int active);
 int  snd_host_render_active(void);
+
+/* 21-B9yi(续88)：每通道「启动/结束」计数汇总（跑完打印一行）。
+   用途：判断这个游戏到底用不用 PSG/噪声通道（8-15）——决定 PSG 保真度改动的实际影响面。 */
+void snd_channel_report(void);
 
 #endif /* NDS_EMU_SND_H */

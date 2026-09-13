@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <signal.h>
 #ifdef _WIN32
 #include <windows.h>
 #include <wchar.h>
@@ -47,6 +48,19 @@ static uint32_t le32(const uint8_t *p)
 static uint16_t le16(const uint8_t *p)
 {
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+/* 21-B9yi(续102)：**Ctrl+C / 控制台关闭时也要优雅退出**。
+   为什么需要：窗口模式的退出路径会写回 `.sav`（以及 `--save-state` 的存档），
+   但如果用户是从终端里 Ctrl+C 结束进程，默认的 SIGINT 会**直接终止**，
+   存档就丢了。这里只做一件事：把「收到停止请求」记成标志，主循环下一轮
+   主动退出 ⇒ 走完整退出路径（写 .sav / 关闭音频 / 释放）。 */
+static volatile sig_atomic_t g_stop_requested;
+
+static void on_stop_signal(int sig)
+{
+    (void)sig;
+    g_stop_requested = 1;
 }
 
 /* 把卡带头信息写进 ARM9 主存 0x027FFxxx 系统表（对应 melonDS SetupDirectBoot）：
@@ -829,7 +843,21 @@ int main(int argc, char *argv[])
        菜单栏 [0,28)、顶屏 [28,220)、底屏 [220,412)。
        触摸 ADC 换算与 runner `--touch-*` 同口径（固件默认校准，每像素 16 单位）。 */
     int touch_mouse_down = 0;
+    /* 21-B9yi(续102)：Ctrl+C 也能走完整退出路径（写回 .sav / 存档状态） */
+#ifdef _WIN32
+    signal(SIGINT, on_stop_signal);
+    signal(SIGBREAK, on_stop_signal);
+#else
+    signal(SIGINT, on_stop_signal);
+    signal(SIGTERM, on_stop_signal);
+#endif
     while (!quit) {
+        if (g_stop_requested) {
+            printf("window: 收到停止请求，准备退出（写回存档）…\n");
+            fflush(stdout);
+            quit = 1;
+            break;
+        }
         int scale = window_get_scale();
 
         SDL_Event e;

@@ -47,6 +47,39 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_PROJDBG_FRAME=N` | 在 [N,N+20] 帧内，投影矩阵一变就打印「上一条命令 + 新矩阵」（对应本地 `NDS_PROJDBG`） |
 | `REF_IODUMP_FRAME=N` | 打印第 N 帧的 2D 显示寄存器 + VRAMCNT + 颜色特效寄存器（对应本地 `NDS_IODUMP_FRAME`） |
 | `REF_WAV=路径.wav` | **把参考核 SPU 输出录成 WAV**（32768Hz/16bit/立体声），与本地 `--snd-wav` 同口径对照「声音」（21-B9yi 续86） |
+| `REF_RAMDUMP_FRAME=N` | 额外在第 N 帧 dump 主内存（`%TEMP%\ref_f<N>_mainram.bin`）。固定帧号只有 10 个，这个用来**二分定位分叉帧**（21-B9yi 续91） |
+
+## 主内存逐字节对账（21-B9yi 续91）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\ref\ramcmp.ps1 `
+    -Rom "tools\Z 最终幻想12…nds" -Frame 80
+```
+
+原理：参考核在固定帧号（以及 `REF_RAMDUMP_FRAME` 指定的帧）把 4MB 主内存写成文件；
+本地用 `--headless-frames N --dump` 跑到同一帧写出一份，再逐字节比较、列出差异区间。
+
+**用它测出来的结论（2000 帧内）**：
+
+```
+f=50 … f≈297 ：两核主内存**只差约 238 字节（0.006%）**（逐帧同上）
+f=298        ：差 4034 字节（0.10%）
+f=299        ：差 17,724 字节（0.42%）
+f=350        ：差 1,917,883 字节（45.7%）⇒ 从这里开始走成两个不同的场景
+```
+
+⇒ 本模拟器与参考核在**游戏状态层面几乎一致**，分叉起点被精确定位到 **f≈298**；
+差异集中在一小撮游戏变量（首个差异字节 `0x0206C200`，另有 `0x02076FEC` 等）。
+同一帧的寄存器对照显示 2D/VRAMCNT 全一致，只有 **MASTER_BRIGHT 的渐变相位**不同
+（本地在下降、参考核在上升）⇒ 怀疑是某个定时/计数的累积差，属于下一步的深挖点。
+
+**两个坑（重要）**：
+
+* 参考核是在 `frame == N` 时 dump，此时它已经跑了 **N+1** 帧；本地 `--headless-frames N`
+  只跑 N 帧 ⇒ 比较时要么用 `N+1`，要么接受一帧偏移（续91 两种都测过，结论不变）。
+* 本地 `NDS_IODUMP_FRAME` 以前沿用「上一核」的上下文，而 VRAMCNT / DISP3DCNT 是
+  ARM9 专属 ⇒ 帧末若最后执行 ARM7，这些寄存器会被读成 0、与参考核**假性不符**。
+  续91 已改成**强制 ARM9 上下文**再读。
 
 ## 运行注意（血泪教训）
 

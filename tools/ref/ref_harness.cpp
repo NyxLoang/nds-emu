@@ -492,9 +492,18 @@ int main(int argc, char** argv)
         u32 disp = nds->ARM9IORead32(0x04000000);
         if (disp != 0 || frame < 100 || (frame % 50) == 0)
             std::printf("frame %d disp=%08X\n", frame, disp);
+        /* 21-B9yi(续91)：`REF_RAMDUMP_FRAME=N` → 额外在第 N 帧 dump 主内存，
+           便于用二分法定位「本地与参考核从哪一帧开始分叉」（固定帧号只有 10 个，
+           不够细）。文件名与固定帧号的一致，本地用 ramcmp.ps1 对账。 */
+        static int ramdump_frame = -2;
+        if (ramdump_frame == -2) {
+            const char* v = std::getenv("REF_RAMDUMP_FRAME");
+            ramdump_frame = v ? std::atoi(v) : -1;
+        }
         if (frame == 20 || frame == 30 || frame == 50 || frame == 80 ||
             frame == 120 || frame == 180 || frame == 250 ||
-            frame == 350 || frame == 500 || frame == 590)
+            frame == 350 || frame == 500 || frame == 590 ||
+            frame == ramdump_frame)
         {
             const char* tmp = std::getenv("TEMP");
             if (!tmp) tmp = ".";

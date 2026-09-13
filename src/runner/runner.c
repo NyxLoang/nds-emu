@@ -1058,9 +1058,19 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                     0x04000244u, 0x04000245u, 0x04000246u, 0x04000247u,
                     0x04000248u
                 };
-                for (size_t i = 0; i < sizeof regs / sizeof regs[0]; i++)
-                    printf("ourio: %08X=%04X\n", regs[i],
-                           (unsigned)(bus_read16(nds->bus, regs[i]) & 0xFFFFu));
+                /* 21-B9yi(续91)：**必须强制 ARM9 上下文**再读。
+                   参考核用 `ARM9IORead16()`；本地此前沿用「上一核」的上下文，
+                   而 VRAMCNT / DISP3DCNT 这些是 ARM9 专属（`!is_arm7` 才可见）⇒
+                   若帧末最后执行的是 ARM7，这些寄存器会被读成 0，与参考核假性不符
+                   （续91 实测就踩了这个坑）。 */
+                {
+                    int save_arm7 = nds->bus->active_is_arm7;
+                    nds->bus->active_is_arm7 = 0;
+                    for (size_t i = 0; i < sizeof regs / sizeof regs[0]; i++)
+                        printf("ourio: %08X=%04X\n", regs[i],
+                               (unsigned)(bus_read16(nds->bus, regs[i]) & 0xFFFFu));
+                    nds->bus->active_is_arm7 = save_arm7;
+                }
                 fflush(stdout);
             }
             if (mat_frame >= 0 && fr >= (uint64_t)mat_frame

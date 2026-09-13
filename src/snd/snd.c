@@ -205,52 +205,77 @@ void snd_write8(snd_t *s, uint32_t addr, uint8_t val)
 
 /* ---- ADPCM ---- */
 
-static const int16_t snd_adpcm_step[16] = {
-    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31
+/* 21-B9yi(续89)：**IMA-ADPCM 按参考核（melonDS SPU.cpp）重写**。
+   为什么重要：本作音频样本里 **99.5% 是 ADPCM**（见续88 的格式普查），
+   而本地此前是「16 项小步进表 + 自定头部位布局 + 32 位字内 MSB-first 取 nibble」，
+   三处都与硬件不符 ⇒ 解码动态范围被压到很小、且有相位/位序错位。
+   参考核口径：
+     * 头部 4 字节：bits0-15 = 16 位初始采样（有符号）；bits16-22 = 初始 index(0..88)
+     * 数据 nibble 从 SAD+4 起，**每字节低 nibble 在前**（2 nibble/字节）
+     * 前 8 个源采样输出 0（4 字节头部当热身 nibble 消耗掉，参考核 Pos 0..7 直接返回）
+     * 步进表 89 项（IMA），index 按 nibble 低 3 位查 {-1,-1,-1,-1,2,4,6,8} 后夹在 0..88
+     * 采样夹在 ±0x7FFF（不是 -0x8000） */
+static const uint16_t s_adpcm_table[89] = {
+    0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E,
+    0x0010, 0x0011, 0x0013, 0x0015, 0x0017, 0x0019, 0x001C, 0x001F,
+    0x0022, 0x0025, 0x0029, 0x002D, 0x0032, 0x0037, 0x003C, 0x0042,
+    0x0049, 0x0050, 0x0058, 0x0061, 0x006B, 0x0076, 0x0082, 0x008F,
+    0x009D, 0x00AD, 0x00BE, 0x00D1, 0x00E6, 0x00FD, 0x0117, 0x0133,
+    0x0151, 0x0173, 0x0198, 0x01C1, 0x01EE, 0x0220, 0x0256, 0x0292,
+    0x02D4, 0x031C, 0x036C, 0x03C3, 0x0424, 0x048E, 0x0502, 0x0583,
+    0x0610, 0x06AB, 0x0756, 0x0812, 0x08E0, 0x09C3, 0x0ABD, 0x0BD0,
+    0x0CFF, 0x0E4C, 0x0FBA, 0x114C, 0x1307, 0x14EE, 0x1706, 0x1954,
+    0x1BDC, 0x1EA5, 0x21B6, 0x2515, 0x28CA, 0x2CDF, 0x315B, 0x364B,
+    0x3BB9, 0x41B2, 0x4844, 0x4F7E, 0x5771, 0x602F, 0x69CE, 0x7462,
+    0x7FFF
 };
-static const int8_t snd_adpcm_index_tbl[16] = {
-    -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8
-};
+static const int8_t s_adpcm_index_tbl[8] = { -1, -1, -1, -1, 2, 4, 6, 8 };
 
 static void snd_adpcm_read_header(snd_channel_t *c, const struct bus *bus)
 {
     uint32_t hdr = bus != NULL ? bus_read32(bus, c->sad) : 0;
-    int32_t init = (int32_t)((hdr & 0x7F) << 9); /* 7 位有符号，升到 16 位 */
-    if (init & 0x8000) init -= 0x10000;          /* 符号扩展（bit6 为符号位） */
-    c->adpcm_sample = init;
-    c->adpcm_index = (hdr >> 8) & 0xFu;
+    c->adpcm_sample = (int32_t)(int16_t)(hdr & 0xFFFFu);   /* bits0-15：16 位初始采样 */
+    uint32_t idx = (hdr >> 16) & 0x7Fu;                    /* bits16-22：初始 index */
+    if (idx > 88u)
+        idx = 88u;
+    c->adpcm_index = idx;
     c->adpcm_remaining = 0;
     c->adpcm_cursor = 0;
     c->adpcm_started = 1;
 }
 
-/* 解码一个 nibble，把 adpcm_sample 推进到源采样 adpcm_cursor。 */
+/* 解码「源采样序号 adpcm_cursor」这一个 nibble，并把游标 +1。
+   前 8 个（头部热身）输出 0 且不改动解码状态。 */
 static void snd_adpcm_decode_one(snd_channel_t *c, const struct bus *bus)
 {
-    if (c->adpcm_remaining == 0) {
-        /* 第 1 个数据字在头字之后（+4），之后每字 +4 */
-        uint32_t data_addr = c->sad + 4u + (c->adpcm_cursor / 8u) * 4u;
-        c->adpcm_word = bus != NULL ? bus_read32(bus, data_addr) : 0;
-        c->adpcm_remaining = 8;
+    uint32_t n = c->adpcm_cursor;
+    if (n < 8u) {
+        c->adpcm_cursor = n + 1u;
+        return;
     }
-    int nibble = (int)((c->adpcm_word >> ((8 - c->adpcm_remaining) * 4)) & 0xFu);
-    c->adpcm_remaining--;
+    uint32_t k = n - 8u;                       /* 数据区里的第几个 nibble */
+    uint8_t byte = bus != NULL ? bus_read8(bus, c->sad + 4u + (k >> 1)) : 0;
+    uint32_t nib = (k & 1u) ? (uint32_t)(byte >> 4) : (uint32_t)(byte & 0xFu);
 
-    int d = nibble & 7;
-    int sign = (nibble & 8) ? -1 : 1;
-    int step = snd_adpcm_step[c->adpcm_index];
-    int diff = step >> 3;
-    if (d & 1) diff += step >> 2;
-    if (d & 2) diff += step >> 1;
-    if (d & 4) diff += step;
-    c->adpcm_sample += sign * diff;
-    if (c->adpcm_sample > 32767) c->adpcm_sample = 32767;
-    if (c->adpcm_sample < -32768) c->adpcm_sample = -32768;
-    int idx = (int)c->adpcm_index + snd_adpcm_index_tbl[nibble];
+    uint32_t step = s_adpcm_table[c->adpcm_index];
+    uint32_t diff = step >> 3;
+    if (nib & 1u) diff += step >> 2;
+    if (nib & 2u) diff += step >> 1;
+    if (nib & 4u) diff += step;
+
+    if (nib & 8u) {
+        c->adpcm_sample -= (int32_t)diff;
+        if (c->adpcm_sample < -0x7FFF) c->adpcm_sample = -0x7FFF;
+    } else {
+        c->adpcm_sample += (int32_t)diff;
+        if (c->adpcm_sample > 0x7FFF) c->adpcm_sample = 0x7FFF;
+    }
+
+    int idx = (int)c->adpcm_index + (int)s_adpcm_index_tbl[nib & 7u];
     if (idx < 0) idx = 0;
-    if (idx > 15) idx = 15;
+    else if (idx > 88) idx = 88;
     c->adpcm_index = (uint32_t)idx;
-    c->adpcm_cursor++;
+    c->adpcm_cursor = n + 1u;
 }
 
 /* ---- PSG ---- */

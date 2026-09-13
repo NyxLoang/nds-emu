@@ -4971,16 +4971,20 @@ static void test_snd_mix(nds_t *nds)
     CHECK_EQ("pcm16 R", (uint16_t)R[0], 0x4000u);
     bus_write32(nds->bus, c1 + 0x0, 0);   /* 停掉 ch1 */
 
-    /* IMA-ADPCM：头 0x20（init=16384）+ 数据 nibble 0 → raw=0x100（通道 2） */
+    /* IMA-ADPCM（21-B9yi 续89 按参考核重写）：头 = [bits0-15 初始采样][bits16-22 index]，
+       数据从 SAD+4 起、**低 nibble 在前**，前 8 个源采样是热身（输出 0）。 */
     uint32_t c2 = b + 2 * SND_CH_STRIDE;
-    bus_write32(nds->bus, sram + 0x40, 0x00000020);  /* header: sample=32, index=0 */
-    bus_write32(nds->bus, sram + 0x44, 0x00000000);  /* data: 全 0 nibble */
+    bus_write32(nds->bus, sram + 0x40, 0x00580000u);  /* 初始采样 0、index=88（步进 0x7FFF） */
+    bus_write8(nds->bus, sram + 0x44, 0x0Fu);         /* 数据首字节：低 nibble=0xF（负 + 最大步进） */
     bus_write32(nds->bus, c2 + 0x0, 0xD07F007Fu);    /* ADPCM, vol127, pan127, oneshot, start */
     bus_write32(nds->bus, c2 + 0x4, sram + 0x40);
-    bus_write16(nds->bus, c2 + 0x8, 0x1000);
-    bus_write32(nds->bus, c2 + 0xC, 2);
-    snd_render(&nds->io->snd, nds->bus, L, R, 1);
-    CHECK_EQ("adpcm R", (uint16_t)R[0], 0x4000u);
+    bus_write16(nds->bus, c2 + 0x8, 1022u);          /* TMR≈1022 ⇒ 源序号≈输出序号 */
+    bus_write32(nds->bus, c2 + 0xC, 3);              /* len=3 字 ⇒ 头 1 字 + 数据 2 字（16 个源采样） */
+    snd_render(&nds->io->snd, nds->bus, L, R, 9);
+    CHECK_EQ("adpcm 热身样本=0", (uint16_t)R[0], 0x0000u);
+    /* nibble 0xF：diff = 0x7FFF>>3 + >>2 + >>1 + 0x7FFF = 61436 ⇒ 减到下限 -0x7FFF
+       ⇒ 10 位域 -512 ⇒ 满偏负 0x8000 */
+    CHECK_EQ("adpcm 第9样本 负满偏", (uint16_t)R[8], 0x8000u);
     bus_write32(nds->bus, c2 + 0x0, 0);   /* 停掉 ch2 */
 
     /* PSG 方波（21-B9yi 续88 换成参考核的表）：duty=0 的首样本是 **负** 满偏

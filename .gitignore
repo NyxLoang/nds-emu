@@ -11,6 +11,8 @@ tools/*.nds
 tools/*.sav
 # homebrew 假 ROM 跑出来的存档芯片镜像同样是生成物
 homebrew/*.sav
+# 剖析产物（gprof 数据文件等）
+gmon.out
 
 # 历史遗留：早期中断安装时下载的 CMake 便携包（工具链已由 WinLibs 提供）
 tools/cmake.zip

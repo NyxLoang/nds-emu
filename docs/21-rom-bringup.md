@@ -7220,6 +7220,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\statetest.ps1 `
 # B. 战斗内长按 LEADER 下令：直接用战斗档跳进去（快捷键见下），鼠标按住底屏 (21,190) ≥0.4 秒
 .\build-pgo\nds-emu.exe tools\rom_ascii.nds --load-state build\battle.state --shot build\acc.bmp
 #   判据：长按后顶屏 3D 视角切换、底屏选择框变化，并且之后能对单位下令
+
+# B'. 想把「触摸确实送到游戏」变成可打印的证据，可跑脚本化演示（自动做同一手势并比对画面指纹）：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\battle-touch-demo.ps1
+#   期望输出：RESULT: fingerprints diverge => the game reacted to the touch.
+#             first differing line: screenhash: f=12285 …
+#   （注意：`--touch-frame` 等脚本帧号是**绝对帧**；战斗档存在 f=12200，长按要从 12220 起
+#     —— 脚本里就是这个默认值；写成 20 会落在读档之前、毫无效果。）
 ```
 
 窗口按键：`Z/X/S/D`=A/B/X/Y、`A/F`=L/R、`Enter/Backspace`=START/SELECT、方向键=十字键、

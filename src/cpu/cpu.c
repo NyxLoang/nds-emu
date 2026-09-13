@@ -19,6 +19,35 @@ unsigned long long g_pchit_hist[16];
 /* 21-B9yi(续52)：诊断开关的一次性初始化（见下方定义）。 */
 static void cpu_diag_init(void);
 
+/* 21-B9yi(续109d)：T 位变化定点钩子（`NDS_TWATCH=1`）。
+   用途：查「本不该切 ARM 的地方切了 ARM」这类 bug —— 打印**是哪条指令**改了 CPSR.T，
+   连同该指令地址/指令字/LR，一下子就能看出是异常入口、异常返回、BX/BLX、
+   POP{pc} 还是 MSR 干的。默认关闭（零开销：只在开关为 1 时多一次比较）。 */
+static int s_twatch = -1;
+
+static int twatch_on(void)
+{
+    if (s_twatch < 0) {
+        const char *e = getenv("NDS_TWATCH");
+        s_twatch = (e != NULL && e[0] != '0') ? 1 : 0;
+    }
+    return s_twatch;
+}
+
+static void twatch_check(const arm_cpu_t *cpu, uint32_t pc, uint32_t insn, int was_thumb)
+{
+    if (!twatch_on())
+        return;
+    int now_thumb = (cpu->cpsr & CPSR_T) != 0;
+    if (now_thumb != was_thumb) {
+        extern unsigned long long g_dbg_frame;
+        printf("twatch: %s f=%llu pc=%08X insn=%08X T %d->%d cpsr=%08X r0=%08X r1=%08X"
+               " r2=%08X lr=%08X sp=%08X\n",
+               cpu->is_arm7 ? "arm7" : "arm9", g_dbg_frame, pc, insn, was_thumb, now_thumb,
+               cpu->cpsr, cpu->r[0], cpu->r[1], cpu->r[2], cpu->r[14], cpu->r[13]);
+    }
+}
+
 arm_cpu_t *cpu_create(nds_t *nds, uint32_t reset_pc, int is_arm7)
 {
     arm_cpu_t *cpu = calloc(1, sizeof(arm_cpu_t));
@@ -634,6 +663,7 @@ int cpu_step(arm_cpu_t *cpu)
         unsigned long long xt0 = PROF_T0();
         int r = thumb_step(cpu, insn16);
         PROF_ADD(s_prof_exec, xt0);
+        twatch_check(cpu, ipc, insn16, is_thumb);   /* 21-B9yi(续109d)：T 位变化定点 */
         /* 21-B9yh：本步取指代价（见 cpu_fetch_cost；step_cycles=0 表示在等待） */
         uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
         if (cpu_memtim_enabled() && !cpu->is_arm7) {
@@ -657,6 +687,7 @@ int cpu_step(arm_cpu_t *cpu)
     unsigned long long xt0 = PROF_T0();
     int r = exec_step(cpu, insn);
     PROF_ADD(s_prof_exec, xt0);
+    twatch_check(cpu, ipc, insn, is_thumb);   /* 21-B9yi(续109d)：T 位变化定点 */
     {
         uint32_t fc = cpu_fetch_cost(cpu, ipc, fetch_nonseq);
         if (cpu_memtim_enabled() && !cpu->is_arm7) {

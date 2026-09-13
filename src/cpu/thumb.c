@@ -169,8 +169,11 @@ int thumb_step(arm_cpu_t *cpu, uint16_t insn)
                低 3 位固定为 0；bit7=0 BX / 1 BLX。T=Rm[0]，PC=Rm&~1；
                BLX 先 lr=当前 pc|1。 */
             unsigned bx_rm = (insn >> 3) & 0xFu;
-            if (insn & (1u << 7)) /* BLX */
-                cpu->r[14] = (pc | 1u);
+            if (insn & (1u << 7)) /* BLX Rm */
+                /* 21-B9yi(续109c)：与 BL/BLX 立即数同一条规则 —— LR = 「下一条指令」| 1
+                   = (pc - 2) | 1（参考核 `T_BLX_REG`：`lr = R[15] - 1`，其 R[15] = pc+4）。
+                   此前写成 `pc | 1` ⇒ 返回地址 +2，返回时跳过紧邻的 2 字节指令。 */
+                cpu->r[14] = ((pc - 2u) | 1u);
             cpu->cpsr = (cpu->r[bx_rm] & 1u) ? (cpu->cpsr | CPSR_T) : (cpu->cpsr & ~CPSR_T);
             cpu->r[15] = cpu->r[bx_rm] & ~1u;
             return 1;

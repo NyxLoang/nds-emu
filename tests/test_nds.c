@@ -4077,6 +4077,24 @@ static void test_thumb_branch(nds_t *nds)
     CHECK_EQ("thumb BX lr PC", cpu->r[15], base + 0x20);
     thumb_stop(nds);
 
+    /* BLX Rm（0x4790，Rm=2）：21-B9yi(续109c) —— LR 必须是「下一条指令」| 1 = base+3
+       （= (pc-2)|1，pc 为流水线值 base+4）。此前写成 pc|1 = base+5 ⇒ 返回时跳过一条
+       2 字节指令；Pokemon 黑2 引导期正是踩到这条（0x0207C464 `BLX r2`，LR=…469）。 */
+    cpu->r[2] = (base + 0x40) | 1u;   /* 奇数 → Thumb 目标 */
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x4790); cpu_step(cpu);
+    CHECK_EQ("thumb BLX Rm LR", cpu->r[14], (base + 2) | 1u);
+    CHECK_EQ("thumb BLX Rm T=1", (cpu->cpsr & CPSR_T) ? 1u : 0u, 1u);
+    CHECK_EQ("thumb BLX Rm PC", cpu->r[15], base + 0x40);
+    thumb_stop(nds);
+
+    /* BLX Rm（偶地址）→ 切 ARM，LR 同样 = 下一条指令 | 1 */
+    cpu->r[2] = base + 0x40;
+    thumb_start(nds, base); bus_write16(nds->bus, base, 0x4790); cpu_step(cpu);
+    CHECK_EQ("thumb BLX Rm even LR", cpu->r[14], (base + 2) | 1u);
+    CHECK_EQ("thumb BLX Rm even T=0", (cpu->cpsr & CPSR_T) ? 1u : 0u, 0u);
+    CHECK_EQ("thumb BLX Rm even PC", cpu->r[15], base + 0x40);
+    thumb_stop(nds);
+
     /* 条件分支 BEQ 命中：Z=1 → PC=base+8 */
     thumb_start(nds, base);
     cpu->cpsr |= CPSR_Z;

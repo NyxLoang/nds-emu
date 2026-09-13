@@ -23,6 +23,7 @@ namespace melonDS { int RefDbgFrame = -1; }
    本文件在退出前打印每核前 16 名（分桶 = (pc>>4)&0xFFFF，与本地 hot9/hot7 同口径）。 */
 namespace melonDS {
 unsigned long long RefPcHist[2][1 << 16];
+unsigned int RefPcLast[2][1 << 16];
 int RefPcHistOn = 0;
 }
 
@@ -757,9 +758,11 @@ int main(int argc, char** argv)
                         bc = melonDS::RefPcHist[core][i]; best = i;
                     }
                 if (bc == 0) break;
-                /* 桶里存的是「最后一条命中的 PC」不方便；这里只给桶号（×16 即地址范围起点） */
-                std::printf("refhot%d: pc=%08X cnt=%llu (%.1f%%)\n", core == 0 ? 9 : 7,
-                            best << 4, bc, total ? 100.0 * (double)bc / (double)total : 0.0);
+                /* 21-B9yi(续108q)：桶里记的 `RefPcLast` = 该桶最后命中的**真实 PC**，
+                   于是能像本地 `hot9/hot7` 一样直接打出精确地址（而不是桶起点）。 */
+                std::printf("refhot%d: bucket=%04X pc=%08X cnt=%llu (%.1f%%)\n",
+                            core == 0 ? 9 : 7, best, melonDS::RefPcLast[core][best], bc,
+                            total ? 100.0 * (double)bc / (double)total : 0.0);
                 melonDS::RefPcHist[core][best] = 0;
             }
             std::printf("refhot%d: total=%llu\n", core == 0 ? 9 : 7, total);

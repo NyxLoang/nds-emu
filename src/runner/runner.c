@@ -304,6 +304,21 @@ static int h9_enabled(void)
     return s_h9_on;
 }
 
+/* 21-B9yi(续108q)：热点前几名可配（默认 16）。跨核对照时参考核那边有 16 名，
+   本地若某段代码排名在 16 名之后，就需要放大窗口才看得到 —— 这是「本地有没有
+   跑这段代码」这类问题的最省事查法。 */
+static int h9_top(void)
+{
+    static int n = -1;
+    if (n < 0) {
+        const char *e = getenv("NDS_PCHOT_TOP");
+        n = (e != NULL) ? atoi(e) : 16;
+        if (n < 1) n = 1;
+        if (n > 4096) n = 4096;
+    }
+    return n;
+}
+
 runner_t *runner_create(nds_t *nds)
 {
     if (nds == NULL)
@@ -1682,9 +1697,11 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             }
         }
         /* 21-B9wz：ARM9 累积热点前 16（含占比）。21-B9yi(续41)：仅在
-           NDS_PCHOT=1 时统计（默认关闭，见 runner_step 里的说明）。 */
+           NDS_PCHOT=1 时统计（默认关闭，见 runner_step 里的说明）。
+           21-B9yi(续108q)：名次可配 `NDS_PCHOT_TOP=N`（默认 16）——
+           跨核对照时用来查「本地有没有跑参考核热点里那段代码」。 */
         if (h9_enabled()) {
-        for (int hi = 0; hi < 16; hi++) {
+        for (int hi = 0; hi < h9_top(); hi++) {
             uint32_t best = 0, bh = 0;
             for (uint32_t h = 0; h < (1u << 16); h++)
                 if (s_h9_cnt[h] > best) { best = (uint32_t)s_h9_cnt[h]; bh = h; }
@@ -1696,7 +1713,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             s_h9_cnt[bh] = 0;
         }
         printf("hot9: total=%llu\n", (unsigned long long)s_h9_total);
-        for (int hi = 0; hi < 16; hi++) {   /* 21-B9yi(续108)：ARM7 热点 */
+        for (int hi = 0; hi < h9_top(); hi++) {   /* 21-B9yi(续108)：ARM7 热点 */
             uint32_t best = 0, bh = 0;
             for (uint32_t h = 0; h < (1u << 16); h++)
                 if (s_h7_cnt[h] > best) { best = (uint32_t)s_h7_cnt[h]; bh = h; }

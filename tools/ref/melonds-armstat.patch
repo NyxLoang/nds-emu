@@ -1,8 +1,8 @@
 diff --git a/src/ARM.cpp b/src/ARM.cpp
-index 3937a99..8b66964 100644
+index 3937a99..f18f1f9 100644
 --- a/src/ARM.cpp
 +++ b/src/ARM.cpp
-@@ -34,6 +34,13 @@ namespace melonDS
+@@ -34,6 +34,14 @@ namespace melonDS
  using Platform::Log;
  using Platform::LogLevel;
  
@@ -11,12 +11,13 @@ index 3937a99..8b66964 100644
 +   用途：直接回答「参考核这段时间在跑哪些代码、本地在跑哪些」，从而定位
 +   「同一段游戏进度，为什么参考核要多跑 1.7 倍指令」。 */
 +extern unsigned long long RefPcHist[2][1 << 16];
++extern unsigned int RefPcLast[2][1 << 16];
 +extern int RefPcHistOn;
 +
  #ifdef GDBSTUB_ENABLED
  void ARM::GdbCheckA()
  {
-@@ -158,6 +165,8 @@ void ARM::Reset()
+@@ -158,6 +166,8 @@ void ARM::Reset()
  {
      Cycles = 0;
      Halted = 0;
@@ -25,23 +26,29 @@ index 3937a99..8b66964 100644
  
      IRQ = 0;
  
-@@ -616,6 +625,10 @@ void ARMv5::Execute()
+@@ -616,6 +626,13 @@ void ARMv5::Execute()
  
      while (NDS.ARM9Timestamp < NDS.ARM9Target)
      {
 +        InstrCount++;   /* 21-B9yi(续108e) 诊断：每条解释指令记一次 */
-+        if (RefPcHistOn) RefPcHist[0][(R[15] >> 4) & 0xFFFF]++;
++        if (RefPcHistOn) {
++            unsigned hb = (R[15] >> 4) & 0xFFFF;
++            RefPcHist[0][hb]++; RefPcLast[0][hb] = R[15];
++        }
 +        if (R[15] >= 0xFFFF0000u && R[15] < 0xFFFF4000u)
 +            BiosInstrCount++;   /* 21-B9yi(续108h)：执行在 ARM9 BIOS 区 */
  #ifdef JIT_ENABLED
          if constexpr (mode == CPUExecuteMode::JIT)
          {
-@@ -756,6 +769,10 @@ void ARMv4::Execute()
+@@ -756,6 +773,13 @@ void ARMv4::Execute()
  
      while (NDS.ARM7Timestamp < NDS.ARM7Target)
      {
 +        InstrCount++;   /* 21-B9yi(续108e) 诊断：每条解释指令记一次 */
-+        if (RefPcHistOn) RefPcHist[1][(R[15] >> 4) & 0xFFFF]++;
++        if (RefPcHistOn) {
++            unsigned hb = (R[15] >> 4) & 0xFFFF;
++            RefPcHist[1][hb]++; RefPcLast[1][hb] = R[15];
++        }
 +        if (R[15] < 0x4000u)
 +            BiosInstrCount++;   /* 21-B9yi(续108h)：执行在 ARM7 BIOS 区 */
  #ifdef JIT_ENABLED

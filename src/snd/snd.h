@@ -55,7 +55,9 @@ typedef struct snd_channel {
     uint16_t pnt;          /* SOUNDxPNT */
     uint32_t len;          /* SOUNDxLEN */
     /* 运行时 */
-    uint32_t pos;          /* 源采样游标（16.16 定点，整数 = 源采样序号） */
+    uint64_t pos;          /* 源采样游标（16.16 定点，整数 = 源采样序号）；
+                              21-B9yi(续90)：放宽到 64 位 —— 循环点 PNT 可达 262140 字节，
+                              ADPCM 换算成源采样超过 52 万，32 位定点会溢出。 */
     /* ADPCM 解码器状态 */
     int32_t  adpcm_sample;    /* 当前解码采样 */
     uint32_t adpcm_index;     /* 步进索引 0..15 */
@@ -63,7 +65,13 @@ typedef struct snd_channel {
     uint32_t adpcm_word;      /* 当前数据字 */
     uint32_t adpcm_cursor;    /* 已解码到的源采样序号（追赶游标） */
     int      adpcm_started;   /* 是否已读头并开始解码 */
+    /* 21-B9yi(续90)：ADPCM 循环现场 —— 参考核在 Pos==LoopPos*2 时保存
+       (ADPCMVal, ADPCMIndex)，回绕时恢复，否则循环后解码状态是错的。 */
+    int32_t  adpcm_loop_sample;
+    uint32_t adpcm_loop_index;
+    int      adpcm_loop_valid;
     uint32_t noise;           /* 21-B9yi(续88)：通道 14/15 噪声 LFSR（启动时置 0x7FFF，同参考核） */
+    int32_t  last_raw;        /* 21-B9yi(续90)：最近一次取到的原始采样（手动模式下越过末尾要保持它） */
 } snd_channel_t;
 
 typedef struct snd {

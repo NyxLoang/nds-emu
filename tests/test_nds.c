@@ -5020,15 +5020,51 @@ static void test_snd_mix(nds_t *nds)
     CHECK_EQ("snd master0 L", (uint16_t)L[0], 0x0000u);
     CHECK_EQ("snd master0 R", (uint16_t)R[0], 0x0000u);
 
-    /* 单发停止：PCM8, len=1, tmr=1 → 1 个采样后 pos 越界，bit31 清除（通道 4） */
+    /* 单发停止：PCM8, len=1 字（=4 字节）, tmr=1（飞快）⇒ 越过末尾后停止。
+       21-B9yi 续90 起按参考核口径**在「下一次取样时」判结束/循环**（melonDS 也是在
+       NextSample 开头 Pos 自增后才判），所以这里渲染 2 个样本再看 bit31。 */
     bus_write16(nds->bus, SND_SOUNDCNT, 0x807F);
     uint32_t c4 = b + 4 * SND_CH_STRIDE;
     bus_write32(nds->bus, c4 + 0x0, 0x907F007Fu);
     bus_write32(nds->bus, c4 + 0x4, sram);
     bus_write16(nds->bus, c4 + 0x8, 0x0001);
     bus_write32(nds->bus, c4 + 0xC, 1);
-    snd_render(&nds->io->snd, nds->bus, L, R, 1);
+    snd_render(&nds->io->snd, nds->bus, L, R, 2);
     CHECK_EQ("snd oneshot stop", bus_read32(nds->bus, c4 + 0x0) & 0x80000000u, 0x0u);
+
+    /* 21-B9yi 续90：**循环点 PNT 语义**（PCM8，按参考核口径）。
+       SAD = 0x10,0x20,…,0x70,0x7F；PNT=1 字 ⇒ 循环点 = 第 4 个字节；LEN=1 字 ⇒ 总长 8 字节。
+       期望：先播 0..7，回绕后**回到循环点**播 4,5,6,7（而不是回到 0）。 */
+    uint32_t c5 = b + 5 * SND_CH_STRIDE;
+    for (int i = 0; i < 8; i++)
+        bus_write8(nds->bus, sram + 0x60 + (uint32_t)i, (uint8_t)(0x10 * (i + 1)));
+    bus_write8(nds->bus, sram + 0x67, 0x7Fu);
+    bus_write32(nds->bus, c5 + 0x0, 0x887F007Fu);  /* PCM8、vol127、pan127、**循环(01)**、start */
+    bus_write32(nds->bus, c5 + 0x4, sram + 0x60);
+    bus_write16(nds->bus, c5 + 0x8, 1022u);
+    bus_write16(nds->bus, c5 + 0xA, 1u);           /* PNT=1 字 ⇒ 循环点 4 字节 */
+    bus_write32(nds->bus, c5 + 0xC, 1u);           /* LEN=1 字 ⇒ 4 字节 ⇒ 总长 8 字节 */
+    snd_render(&nds->io->snd, nds->bus, L, R, 12);
+    CHECK_EQ("pnt 循环 样本0", (uint16_t)R[0], 0x1000u);
+    CHECK_EQ("pnt 循环 样本3", (uint16_t)R[3], 0x4000u);
+    CHECK_EQ("pnt 循环 样本4", (uint16_t)R[4], 0x5000u);
+    CHECK_EQ("pnt 循环 回绕后首样本=循环点", (uint16_t)R[8], 0x5000u);
+    CHECK_EQ("pnt 循环 回绕后次样本", (uint16_t)R[9], 0x6000u);
+    bus_write32(nds->bus, c5 + 0x0, 0);
+
+    /* 21-B9yi 续90：**手动模式（repeat=0）**越过末尾后不停、保持最后的采样值
+       （参考核 `NextSample` 在 repeat==0 时不解码也不清 start 位）。 */
+    uint32_t c6 = b + 6 * SND_CH_STRIDE;
+    bus_write32(nds->bus, c6 + 0x0, 0x807F007Fu);  /* PCM8、vol127、pan127、repeat=0(手动)、start */
+    bus_write32(nds->bus, c6 + 0x4, sram + 0x60);
+    bus_write16(nds->bus, c6 + 0x8, 1022u);
+    bus_write32(nds->bus, c6 + 0xC, 1u);           /* 总长 4 字节 */
+    snd_render(&nds->io->snd, nds->bus, L, R, 6);
+    CHECK_EQ("manual 末样本前", (uint16_t)R[3], 0x4000u);
+    CHECK_EQ("manual 越界后保持", (uint16_t)R[5], 0x4000u);
+    CHECK_EQ("manual 仍在播放(bit31=1)",
+             bus_read32(nds->bus, c6 + 0x0) & 0x80000000u, 0x80000000u);
+    bus_write32(nds->bus, c6 + 0x0, 0);
 }
 
 /* ---- 阶段 18.4 用例：CPU 程序配置通道 0 并读回寄存器 ---- */

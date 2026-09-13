@@ -10,6 +10,16 @@ static int g_snd_evt_log = 0;
 /* 21-B9yi(续88)：每通道启动/结束计数（覆盖整轮，不受下面打印截断影响） */
 static uint32_t s_ch_starts[SND_CHANNEL_COUNT];
 static uint32_t s_ch_ends[SND_CHANNEL_COUNT];
+/* 21-B9yi(续90)：启动时的「重复模式」与「循环点 PNT 是否为 0」普查 ——
+   用来判断「本地循环时回绕到 0、忽略 PNT」到底是不是真缺陷。
+   s_start_rep[0]=手动、[1]=循环、[2]=单发、[3]=保留；s_start_pnt_nz = PNT≠0 的启动次数。 */
+static uint32_t s_start_rep[4];
+static uint32_t s_start_pnt_nz;
+static uint32_t s_start_pnt_ch[SND_CHANNEL_COUNT];
+/* 21-B9yi(续90)：真正发生「回绕（循环）」的次数，以及其中 PNT≠0 的次数 ——
+   决定「忽略 PNT 的简化循环」对本作有没有实际影响。 */
+static uint32_t s_loop_events;
+static uint32_t s_loop_events_pnt_nz;
 /* 21-B9yi(续88)：按格式统计「混进来的样本数」（0=PCM8/1=PCM16/2=ADPCM/3=PSG/4=噪声通道）。
    只在 NDS_SNDSTAT 打开时累加（那一层本来就在热路径里判过，不额外增加常态开销）。 */
 static uint64_t s_fmt_samples[5];
@@ -44,6 +54,13 @@ void snd_channel_report(void)
                (unsigned long long)s_fmt_samples[2],
                (unsigned long long)s_fmt_samples[3],
                (unsigned long long)s_fmt_samples[4]);
+    if (s_start_rep[0] || s_start_rep[1] || s_start_rep[2] || s_start_rep[3] ||
+        s_start_pnt_nz)
+        printf("sndrep: manual=%u loop=%u oneshot=%u rsv=%u | PNT!=0 的启动=%u\n",
+               s_start_rep[0], s_start_rep[1], s_start_rep[2], s_start_rep[3],
+               s_start_pnt_nz);
+    printf("sndloop: 回绕=%u（其中 PNT!=0 时回绕=%u）\n",
+           s_loop_events, s_loop_events_pnt_nz);
     fflush(stdout);
 }
 
@@ -115,6 +132,9 @@ static void snd_reset_channel(snd_channel_t *c)
     c->adpcm_cursor = 0;
     c->adpcm_started = 0;
     c->noise = 0x7FFFu;   /* 21-B9yi(续88)：噪声 LFSR 初值（参考核 Start() 同值） */
+    c->adpcm_loop_sample = 0;   /* 21-B9yi(续90)：循环现场（参考核 Reset/Start 同口径） */
+    c->adpcm_loop_index = 0;
+    c->adpcm_loop_valid = 0;
 }
 
 void snd_write8(snd_t *s, uint32_t addr, uint8_t val)
@@ -177,6 +197,16 @@ void snd_write8(snd_t *s, uint32_t addr, uint8_t val)
         {
             snd_log("start", ch);
             snd_reset_channel(c);
+            /* 21-B9yi(续90)：启动时刻的重复模式 / 循环点普查 */
+            {
+                uint32_t rep = (c->cnt >> SNDCNT_REPEAT_SHIFT) & 3u;
+                s_start_rep[rep]++;
+                if (c->pnt != 0) {
+                    s_start_pnt_nz++;
+                    if (ch >= 0 && ch < SND_CHANNEL_COUNT)
+                        s_start_pnt_ch[ch]++;
+                }
+            }
         }
         break;
     }
@@ -276,6 +306,18 @@ static void snd_adpcm_decode_one(snd_channel_t *c, const struct bus *bus)
     else if (idx > 88) idx = 88;
     c->adpcm_index = (uint32_t)idx;
     c->adpcm_cursor = n + 1u;
+
+    /* 21-B9yi(续90)：到达循环点时保存解码现场（参考核在同一位置保存
+       ADPCMValLoop/ADPCMIndexLoop），回绕时用它恢复。 */
+    {
+        uint32_t loop_bytes = (uint32_t)(c->pnt & 0xFFFFu) << 2;
+        uint32_t loop_samples = loop_bytes << 1;   /* ADPCM：2 个 nibble 采样/字节 */
+        if (n == loop_samples) {
+            c->adpcm_loop_sample = c->adpcm_sample;
+            c->adpcm_loop_index = c->adpcm_index;
+            c->adpcm_loop_valid = 1;
+        }
+    }
 }
 
 /* ---- PSG ---- */
@@ -323,22 +365,73 @@ static int32_t snd_channel_raw(snd_channel_t *c, const struct bus *bus, int ch)
 {
     int fmt = (int)((c->cnt >> SNDCNT_FORMAT_SHIFT) & 3);
     uint32_t idx = c->pos >> 16;
+
+    /* 21-B9yi(续90)：**循环点 PNT 语义**（按参考核 melonDS 口径）。
+       参考核把 PNT/LEN 都换算成字节：LoopPos=(pnt&0xFFFF)<<2、Length=(len&0x1FFFFF)<<2，
+       播放在 [0, LoopPos+Length) 内进行、**循环时跳回 LoopPos**（并恢复 ADPCM 现场）。
+       本地此前「回绕到 0」——实测本作 20000 帧里 **999 次回绕全部带非零 PNT**，
+       所以那是真缺陷（音频块循环会跳回样本开头而不是循环点）。 */
+    if (fmt != SND_FORMAT_PSG) {
+        uint32_t total_bytes = ((uint32_t)(c->pnt & 0xFFFFu) << 2) +
+                               ((c->len & 0x1FFFFFu) << 2);
+        uint64_t pos_samples = c->pos >> 16;
+        uint64_t used_bytes = (fmt == SND_FORMAT_PCM16) ? pos_samples * 2u
+                            : (fmt == SND_FORMAT_ADPCM) ? (pos_samples >> 1)
+                            : pos_samples;
+        if (total_bytes != 0 && used_bytes >= (uint64_t)total_bytes) {
+            int repeat = (int)((c->cnt >> SNDCNT_REPEAT_SHIFT) & 3);
+            if (repeat == SND_REPEAT_LOOP) {
+                uint32_t loop_bytes = (uint32_t)(c->pnt & 0xFFFFu) << 2;
+                uint64_t back = (fmt == SND_FORMAT_PCM16) ? ((uint64_t)loop_bytes >> 1)
+                              : (fmt == SND_FORMAT_ADPCM) ? ((uint64_t)loop_bytes << 1)
+                              : (uint64_t)loop_bytes;
+                s_loop_events++;
+                if (c->pnt != 0)
+                    s_loop_events_pnt_nz++;
+                c->pos = back << 16;
+                idx = (uint32_t)(c->pos >> 16);
+                if (fmt == SND_FORMAT_ADPCM) {
+                    /* 恢复循环现场；游标指向「循环点样本已算好」的位置 */
+                    c->adpcm_sample = c->adpcm_loop_sample;
+                    c->adpcm_index = c->adpcm_loop_index;
+                    c->adpcm_cursor = (uint32_t)back + 1u;
+                }
+            } else {
+                if (repeat == SND_REPEAT_ONESHOT) {
+                    snd_log("end", ch);
+                    c->cnt &= ~SNDCNT_START;   /* 单发：停止（参考核同时把 CurSample 置 0） */
+                    return 0;
+                }
+                /* 手动模式（repeat=0）：参考核越过末尾后**不再解码**、也不停，
+                   而是保持最后的采样值（等软件清 start 位）。 */
+                return c->last_raw;
+            }
+        }
+    }
+
+    int32_t raw;
     switch (fmt) {
     case SND_FORMAT_PCM8:
-        return ((int32_t)(int8_t)(bus != NULL ? bus_read8(bus, c->sad + idx) : 0)) << 2;
+        raw = ((int32_t)(int8_t)(bus != NULL ? bus_read8(bus, c->sad + idx) : 0)) << 2;
+        break;
     case SND_FORMAT_PCM16:
-        return ((int32_t)(int16_t)(bus != NULL ? bus_read16(bus, c->sad + idx * 2u) : 0)) >> 6;
+        raw = ((int32_t)(int16_t)(bus != NULL ? bus_read16(bus, c->sad + idx * 2u) : 0)) >> 6;
+        break;
     case SND_FORMAT_ADPCM: {
         if (!c->adpcm_started)
             snd_adpcm_read_header(c, bus);
         while (c->adpcm_cursor <= idx)
             snd_adpcm_decode_one(c, bus);
-        return c->adpcm_sample >> 6;
+        raw = c->adpcm_sample >> 6;
+        break;
     }
     case SND_FORMAT_PSG:
     default:
-        return snd_psg_sample(c, idx, ch);
+        raw = snd_psg_sample(c, idx, ch);
+        break;
     }
+    c->last_raw = raw;   /* 21-B9yi(续90)：手动模式越过末尾时保持它 */
+    return raw;
 }
 
 static int32_t snd_arith_div(int32_t v, int shift)
@@ -423,24 +516,8 @@ void snd_render(snd_t *s, const struct bus *bus, int16_t *out_l, int16_t *out_r,
                 uint32_t inc = (uint32_t)(((uint64_t)SND_MASTER_CLOCK << 16) / tmr / SND_MIX_RATE);
                 c->pos += inc;
 
-                /* 单发/手动：到达总长后停止；循环：回绕到 0（简化，见文档） */
-                if (fmt != SND_FORMAT_PSG) {
-                    uint32_t total;
-                    if (fmt == SND_FORMAT_PCM8)       total = c->len * 4u;
-                    else if (fmt == SND_FORMAT_PCM16) total = c->len * 2u;
-                    else                              total = (c->len > 1) ? (c->len - 1u) * 8u : 0u;
-                    int repeat = (int)((c->cnt >> SNDCNT_REPEAT_SHIFT) & 3);
-                    if ((uint64_t)c->pos >= ((uint64_t)total << 16)) {
-                        if (repeat == SND_REPEAT_LOOP) {
-                            c->pos = 0;
-                            snd_reset_channel(c); /* 简化：回绕从头重放 */
-                            c->cnt |= SNDCNT_START;
-                        } else {
-                            snd_log("end", ch);
-                            c->cnt &= ~SNDCNT_START; /* 单发/手动：停止 */
-                        }
-                    }
-                }
+                /* 21-B9yi(续90)：结束/循环判定已移到 `snd_channel_raw()` 顶部
+                   （按参考核口径用 PNT+LEN 的字节数和循环点跳转）。 */
             }
         }
         mixL = (int32_t)(((int64_t)mixL * master) / 127);

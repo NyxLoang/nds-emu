@@ -306,6 +306,25 @@ uint64_t runner_now(const runner_t *r)
     return (r != NULL) ? r->tm.now : 0;
 }
 
+/* 21-B9yi(续77)：打印**存档芯片状态** —— 判断「游戏有没有在运行中真的写过存档」。
+   打印类型/大小/非 0xFF 字节数（擦除态=0xFF）与内容哈希；与初始态不同即说明写过。
+   （此前这一项只能靠人工进菜单存档确认。）两个 headless 汇总路径都会调用。 */
+static void runner_print_savechip(const nds_t *nds)
+{
+    save_t *sv = io_get_save(nds->io);
+    if (sv == NULL || sv->data == NULL || sv->size == 0)
+        return;
+    uint64_t h = 1469598103934665603ull;
+    size_t nz = 0;
+    for (size_t i = 0; i < sv->size; i++) {
+        h = (h ^ sv->data[i]) * 1099511628211ull;
+        if (sv->data[i] != 0xFFu)
+            nz++;
+    }
+    printf("savechip: type=%d size=%zu nonzero(vs 0xFF)=%zu hash=%016llX\n",
+           (int)sv->type, sv->size, nz, (unsigned long long)h);
+}
+
 /* 帧号到达脚本时刻时注入按键，保持 8 帧后释放（游戏按帧轮询）。 */
 static void runner_keys(runner_t *r)
 {
@@ -638,6 +657,7 @@ void runner_headless_cycles(nds_t *nds, uint64_t steps, int trace,
            bus_read32(nds->bus, 0x04000000u),
            bus_read32(nds->bus, 0x04001000u),
         nds->cpu->irq_count, nds->cpu7->irq_count);
+    runner_print_savechip(nds);
     if (shot_path != NULL) {
         /* 21-B9y4：打印截图时刻的 DISPCNT，用于与 main 的 dump 时刻对照 */
         printf("shot: t=frame-end DISPCNT=%08X DISPCNT_SUB=%08X\n",
@@ -1199,6 +1219,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
            bus_read32(nds->bus, 0x04000000u),
            bus_read32(nds->bus, 0x04001000u),
         nds->cpu->irq_count, nds->cpu7->irq_count);
+    runner_print_savechip(nds);   /* 21-B9yi(续77)：存档芯片是否被写过 */
     if (shot_path != NULL) {
         uint32_t *fb_top = (uint32_t *)malloc(sizeof(uint32_t) * RENDER_SCREEN_W
                                               * RENDER_SCREEN_H);

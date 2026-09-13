@@ -223,6 +223,18 @@ static uint64_t s_trace_budget;
 static uint64_t s_trace_printed;
 static int s_trace_state = -1;   /* -1=未读环境变量，0=关，1=开 */
 
+/* 21-B9yi(续98)：定时器计费口径对照开关（见 runner_step 里的注释）。 */
+static int s_timer_all = -1;
+
+static int timer_all_enabled(void)
+{
+    if (s_timer_all < 0) {
+        const char *e = getenv("NDS_TIMER_ALL");
+        s_timer_all = (e != NULL && e[0] != '0') ? 1 : 0;
+    }
+    return s_timer_all;
+}
+
 static int trace_enabled(void)
 {
     if (s_trace_state < 0) {
@@ -289,6 +301,7 @@ runner_t *runner_create(nds_t *nds)
     s_arm9_shift = (e != NULL && e[0] == '2') ? 1u : 0u;   /* 见 RUNNER_SYS9 注释 */
     }
     r->nds = nds;
+    s_timer_all = timer_all_enabled();   /* 21-B9yi(续98)：定时器计费口径（A/B 开关） */
     r->frame_cycles = 560190;
     uint64_t line_cycles = r->frame_cycles / 263;
     timing_init(&r->tm);
@@ -736,8 +749,18 @@ static int runner_step(runner_t *r)
     uint64_t delta = r->tm.now - r->last_now;
     r->last_now = r->tm.now;
     if (delta != 0) {
-        if (was9) io_advance_timers(nds->io, 0, (uint32_t)delta);
-        if (was7) io_advance_timers(nds->io, 1, (uint32_t)delta);
+        /* 21-B9yi(续98)：定时器计费口径 A/B。
+           现状（默认）：只给「本步开始时处于等待」的那个核推进定时器——
+           相当于把「另一个核执行掉的时间」记到等待方头上（挂起时硬件时钟照走）。
+           对照：**按系统时间无条件推进两个核**（更接近真机：定时器是持续走的）。
+           `NDS_TIMER_ALL=1` 打开对照口径，用「与参考核的内存吻合度」判定哪个更准。 */
+        if (s_timer_all) {
+            io_advance_timers(nds->io, 0, (uint32_t)delta);
+            io_advance_timers(nds->io, 1, (uint32_t)delta);
+        } else {
+            if (was9) io_advance_timers(nds->io, 0, (uint32_t)delta);
+            if (was7) io_advance_timers(nds->io, 1, (uint32_t)delta);
+        }
     }
     runner_keys(r);
     runner_touch(r);      /* 21-B9yi(续46)：触摸注入脚本 */

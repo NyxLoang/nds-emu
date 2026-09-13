@@ -6732,3 +6732,67 @@ total=15,414,240             total=12,769,859
 （`01 C3 A0 E3 08 C2 8C E5 …`，与加载日志 `entry=02380000 size=000286B0` 一致），
 **f=2 已被清零**；参考核在第 50 帧的主存同址同样是 0 ⇒ 这类高占比来自**开机头两帧**，
 两边行为一致（不是本地独有）。
+
+---
+
+### 21-B9yi（续108r）：Phase B 收尾 —— **可玩性人工验收**的内容与步骤
+
+Phase B 只剩两项**只能人工判定**的验收（其余项都有自动化判据）。为了让「人工」也不靠
+感觉，这里把**验收内容**、**步骤**、**通过判据**和**留证方式**一次写清。
+
+**准备：窗口模式启动**（FFXII 是触控驱动，验收必须在窗口里做）
+
+```powershell
+# 从开机玩起（走到存档点/战斗要几分钟）
+.\build\nds-emu.exe tools\rom_ascii.nds --shot build\acc.bmp
+
+# 或者：直接用本仓库现成的「战斗指挥界面」存档跳进去（见文末生成命令）
+.\build\nds-emu.exe tools\rom_ascii.nds --load-state build\battle.state --shot build\acc.bmp
+```
+
+窗口按键：`Z/X/S/D`=A/B/X/Y、`A/F`=L/R、`Enter/Backspace`=START/SELECT、方向键=十字键、
+**鼠标按住底屏 = 触摸屏**（拖动 = 笔移动，抬起 = 抬笔）、`Tab` = 快进、
+`F5`/`F8` = 即时存档/读档。
+
+**验收内容 A：游戏内存档（从「能跑」到「真的能存」）**
+
+1. 在游戏里走到任意存档点（或菜单里的存档项），完成一次**游戏内**保存；
+2. 正常退出窗口（关窗或让它跑到 `--frames N` 结束）；
+3. 看退出时的两行输出：
+
+```text
+savechip: type=2 size=8192 nonzero(vs 0xFF)=24 hash=3A361368EF684AD7   ← 保存前/从未保存
+savechip: type=2 size=8192 nonzero(vs 0xFF)=<几百~几千> hash=<变化>      ← 保存后
+save : stored …\rom_ascii.sav
+```
+
+**通过判据**：`nonzero(vs 0xFF)` **从 24 明显变大**（24 = 芯片开机态，不是存档数据），
+且 `.sav` 文件的修改时间/哈希变化 ⇒ 游戏真的把存档写进了芯片并被写回文件。
+再启动一次应打印 `save : loaded …`（不是 `new`）。
+
+**验收内容 B：战斗内「长按 LEADER 面板」能下达指令**
+
+1. 进入战斗（底屏是战术地图 + 左上 `INFORMATION` + 底部 `LEADER` 面板）；
+2. 鼠标按住底屏左下 **LEADER 面板**（约屏幕坐标 `(21,190)`）**≥ 24 帧（≈0.4 秒）**；
+3. 松手后看画面是否变化，并尝试移动/确认。
+
+**通过判据**：长按后**顶屏 3D 视角切换**、底屏选择框/单位状态随之变化（这就是
+续84 用单变量对照量出来的「`≥24` 帧才触发、`≤12` 帧不触发、落点无关」的因果），
+并且之后能对单位下达指令。留证：`--shot` 出的 BMP 或 `--screen-hash-every 15` 的
+分叉样本数。
+
+**`battle.state` 的生成命令（可复现，本仓库不存 5MB 档）**
+
+```powershell
+# 12200 帧自然输入到达战斗指挥界面（续84 的起点），并在该帧存即时档
+.\build\nds-emu.exe tools\rom_ascii.nds --headless-frames 12200 `
+    --key-random 12345 --key-period 40 `
+    --state-save-frame 12200 --save-state build\battle.state `
+    --shot build\acc_battle_f12200.bmp
+# 实测：157 秒跑完；随后 --load-state 在窗口里打印
+#   state: 已读档 build\battle.state（帧 12200）
+#   窗口 60 帧 56.3 fps、退出摘要与 savechip 正常
+```
+
+> **注意**：即时存档带 `STATE_VERSION`，**跨版本作废**（`读档失败` = 版本不匹配），
+> 所以每次大改后用上面的命令**重新生成**，不要用历史遗留的 `build\*.state`。

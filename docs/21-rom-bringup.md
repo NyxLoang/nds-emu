@@ -7188,6 +7188,11 @@ f=600 与参考核 f=585…750（每 5 帧）全部比过、**没有任何一帧
 **① 自动部分（建议在验收前先跑，作为「程序没坏」的基线）**
 
 ```powershell
+# 一条命令跑完 6 项自动判据并打印 PASS/FAIL 表（单测 + 锚点三项 + 读档逐字节 + 触摸送达）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\accept-phaseB.ps1
+# 期望最后两行：ALL AUTOMATIC CHECKS PASSED (6 gates)  +  两项人工验收的说明
+
+# 下面是同一批判据的手工版本（想看细节时逐条跑）：
 # 单测：期望最后一行 === 共 1018 项检查，0 项失败 ===
 .\build\test_nds.exe
 

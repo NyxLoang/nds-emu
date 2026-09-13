@@ -256,9 +256,15 @@ static void trace_step(const char *who, const runner_t *r, const arm_cpu_t *cpu)
 {
     if (!trace_enabled() || s_trace_budget == 0)
         return;
+    /* 该 PC 处**实际取到的指令字**（只对普通内存范围读，避免碰 IO 的副作用）。
+       21-B9yi(续99)：查「PC 在 main RAM 里但 dump 是 0」这种怪事时用它一锤定音。 */
+    uint32_t inst = 0;
+    if (cpu->r[15] >= 0x02000000u && cpu->r[15] < 0x03000000u)
+        inst = bus_read32(r->nds->bus, cpu->r[15]);
     printf("tr %s pc=%08X r0=%08X r1=%08X r2=%08X r3=%08X r7=%08X sp=%08X"
            " lr=%08X cpsr=%08X cyc=%llu if9=%08X if7=%08X now=%llu"
-           " t70=%04X/%04X/%u t71=%04X/%04X/%u\n",
+           " t70=%04X/%04X/%u t71=%04X/%04X/%u inst=%08X"
+           " dtcm=%d/%08X/%08X\n",
            who, cpu->r[15], cpu->r[0], cpu->r[1], cpu->r[2], cpu->r[3],
            cpu->r[7], cpu->r[13], cpu->r[14], cpu->cpsr,
            (unsigned long long)cpu->cycles,
@@ -267,7 +273,9 @@ static void trace_step(const char *who, const runner_t *r, const arm_cpu_t *cpu)
            r->nds->io->timer[1][0].cnt_l, r->nds->io->timer[1][0].cnt_h,
            r->nds->io->timer[1][0].acc,
            r->nds->io->timer[1][1].cnt_l, r->nds->io->timer[1][1].cnt_h,
-           r->nds->io->timer[1][1].acc);
+           r->nds->io->timer[1][1].acc, inst,
+           r->nds->bus->arm9_dtcm_on, r->nds->bus->arm9_dtcm_base,
+           r->nds->bus->arm9_dtcm_size);
     s_trace_budget--;
 }
 

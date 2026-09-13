@@ -63,6 +63,12 @@ static void state_dbg_dump(const nds_t *nds, const char *what)
            (int)nds->io->irq[1].ime, nds->io->irq[1].ie, nds->io->irq[1].ifl,
            nds->io->timer_on[0], nds->io->timer_on[1],
            (unsigned)nds->io->cart_clock_on);
+    /* 21-B9yi(续100)：把 ARM7 两个定时器的**全部字段**也打出来（含 reload），
+       用于核对「存档时刻 vs 读档之后」的定时器状态是否逐字段一致。 */
+    for (int i = 0; i < 2; i++)
+        printf("statedbg[%s]: t7%d cnt_l=%04X cnt_h=%04X reload=%04X acc=%u\n",
+               what, i, nds->io->timer[1][i].cnt_l, nds->io->timer[1][i].cnt_h,
+               nds->io->timer[1][i].reload, nds->io->timer[1][i].acc);
     fflush(stdout);
 }
 
@@ -75,6 +81,20 @@ static int s_pending_load;
 /* 21-B9yi(续96)：宿主调度时间戳（见 state.h 说明） */
 static uint64_t s_host_now, s_host_cost9, s_host_cost7;
 static int s_host_valid;
+static int s_host_wait9, s_host_wait7;   /* 21-B9yi(续100)：runner 的等待标志 */
+
+void state_set_host_wait(int wait9, int wait7)
+{
+    s_host_wait9 = wait9;
+    s_host_wait7 = wait7;
+}
+
+int state_get_host_wait(int *wait9, int *wait7)
+{
+    if (wait9 != NULL) *wait9 = s_host_wait9;
+    if (wait7 != NULL) *wait7 = s_host_wait7;
+    return 1;
+}
 
 void state_set_host_time(uint64_t now, uint64_t cost9, uint64_t cost7)
 {
@@ -264,6 +284,20 @@ int state_save(const nds_t *nds, uint64_t frame, const char *path)
     if (ok == 0 && wr(f, &s_host_now, 8) != 0) ok = -1;
     if (ok == 0 && wr(f, &s_host_cost9, 8) != 0) ok = -1;
     if (ok == 0 && wr(f, &s_host_cost7, 8) != 0) ok = -1;
+    if (ok == 0 && wr(f, &s_host_wait9, 4) != 0) ok = -1;
+    if (ok == 0 && wr(f, &s_host_wait7, 4) != 0) ok = -1;
+    /* 21-B9yi(续100)：GX 的**文件级静态状态**（命令队列 + 条目流）——
+       它们不是 gx_t 的成员，此前没进存档，读档后 GPU 侧与存档时刻不一致。 */
+    {
+        static uint8_t gxblob[128 * 1024];
+        size_t gn = gx_state_size();
+        if (ok == 0 && (gn == 0 || gn > sizeof gxblob)) ok = -1;
+        if (ok == 0 && wr(f, &gn, sizeof gn) != 0) ok = -1;
+        if (ok == 0) {
+            gx_state_save(gxblob);
+            if (wr(f, gxblob, gn) != 0) ok = -1;
+        }
+    }
     /* 内存块 */
     if (ok == 0 && wr(f, nds->bus->main_ram, sizeof nds->bus->main_ram) != 0) ok = -1;
     if (ok == 0 && wr(f, nds->bus->arm9_itcm, sizeof nds->bus->arm9_itcm) != 0) ok = -1;
@@ -335,6 +369,16 @@ int state_load(nds_t *nds, const char *path)
     if (ok == 0 && rd(f, &host_now, 8) != 0) ok = -1;
     if (ok == 0 && rd(f, &host_cost9, 8) != 0) ok = -1;
     if (ok == 0 && rd(f, &host_cost7, 8) != 0) ok = -1;
+    int host_wait9 = 0, host_wait7 = 0;
+    if (ok == 0 && rd(f, &host_wait9, 4) != 0) ok = -1;
+    if (ok == 0 && rd(f, &host_wait7, 4) != 0) ok = -1;
+    /* GX 静态状态（续100）：长度不符就拒绝 */
+    uint8_t gxblob[128 * 1024];
+    size_t gn = 0;
+    if (ok == 0 && rd(f, &gn, sizeof gn) != 0) ok = -1;
+    if (ok == 0 && (gn == 0 || gn > sizeof gxblob)) ok = -1;
+    if (ok == 0 && rd(f, gxblob, gn) != 0) ok = -1;
+    if (ok == 0 && gx_state_load(gxblob, gn) != 0) ok = -1;
     if (ok == 0 && rom_size != (uint32_t)nds->io->cartbus.rom_size) {
         fprintf(stderr, "state: ROM 大小不符（存档 %u / 当前 %u）\n",
                 rom_size, (uint32_t)nds->io->cartbus.rom_size);
@@ -394,6 +438,8 @@ int state_load(nds_t *nds, const char *path)
         s_host_cost9 = host_cost9;
         s_host_cost7 = host_cost7;
         s_host_valid = 1;
+        s_host_wait9 = host_wait9;
+        s_host_wait7 = host_wait7;
         state_dbg_dump(nds, "load");
     }
     free(io_new);

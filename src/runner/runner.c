@@ -264,7 +264,7 @@ static void trace_step(const char *who, const runner_t *r, const arm_cpu_t *cpu)
     printf("tr %s pc=%08X r0=%08X r1=%08X r2=%08X r3=%08X r7=%08X sp=%08X"
            " lr=%08X cpsr=%08X cyc=%llu if9=%08X if7=%08X now=%llu"
            " t70=%04X/%04X/%u t71=%04X/%04X/%u inst=%08X"
-           " dtcm=%d/%08X/%08X\n",
+           " dtcm=%d/%08X/%08X w9=%d w7=%d\n",
            who, cpu->r[15], cpu->r[0], cpu->r[1], cpu->r[2], cpu->r[3],
            cpu->r[7], cpu->r[13], cpu->r[14], cpu->cpsr,
            (unsigned long long)cpu->cycles,
@@ -275,7 +275,7 @@ static void trace_step(const char *who, const runner_t *r, const arm_cpu_t *cpu)
            r->nds->io->timer[1][1].cnt_l, r->nds->io->timer[1][1].cnt_h,
            r->nds->io->timer[1][1].acc, inst,
            r->nds->bus->arm9_dtcm_on, r->nds->bus->arm9_dtcm_base,
-           r->nds->bus->arm9_dtcm_size);
+           r->nds->bus->arm9_dtcm_size, r->a9_wait, r->a7_wait);
     s_trace_budget--;
 }
 
@@ -340,7 +340,8 @@ void runner_resync_time(runner_t *r)
     /* 优先用存档里的**宿主时间戳**（runner 自己的 tm.now/cost）；没有就退回
        「帧号 × 一帧周期」（存档是在帧边界上做的，所以这也精确）。 */
     uint64_t now = 0, cost9 = 0, cost7 = 0;
-    if (state_get_host_time(&now, &cost9, &cost7)) {
+    int have_saved = state_get_host_time(&now, &cost9, &cost7);
+    if (have_saved) {
         /* 用存档里的值 */
     } else {
         now = state_last_frame() * r->frame_cycles;
@@ -362,8 +363,18 @@ void runner_resync_time(runner_t *r)
        定时器就**再也不走**了——实测读档后 IRQ 完全停掉（每帧少 5 次），
        游戏虽然还能跑但定时器驱动的逻辑全停。判据与 runner_step 一致：
        `step_cycles == 0` 表示该核在等待。 */
-    r->a9_wait = (r->nds->cpu->step_cycles == 0);
-    r->a7_wait = (r->nds->cpu7 != NULL && r->nds->cpu7->step_cycles == 0);
+    /* 21-B9yi(续100)：优先用**存档里记的**等待标志（runner 的真实调度状态）；
+       没有存档信息时才退回「step_cycles==0」这个近似判据。 */
+    {
+        int w9 = 0, w7 = 0;
+        if (have_saved && state_get_host_wait(&w9, &w7)) {
+            r->a9_wait = w9;
+            r->a7_wait = w7;
+        } else {
+            r->a9_wait = (r->nds->cpu->step_cycles == 0);
+            r->a7_wait = (r->nds->cpu7 != NULL && r->nds->cpu7->step_cycles == 0);
+        }
+    }
     r->snd_done = now / 1024ull;
     r->rtc_done = now / 33513982ull;
     if (getenv("NDS_STATEDBG") != NULL)
@@ -1228,6 +1239,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         /* 21-B9yi(续96)：`--state-save-frame N` → 跑到第 N 帧时存一份（然后继续跑）。
            用途：做「存档 → 读档 → 后续输出逐字节一致」的端到端验证。 */
         state_set_host_time(r->tm.now, r->cost9, r->cost7);
+        state_set_host_wait(r->a9_wait, r->a7_wait);   /* 21-B9yi(续100)：等待标志一起存 */
         if (getenv("NDS_STATEDBG") != NULL)
             printf("runnerdbg[save]: fr=%llu now=%llu cost9=%llu cost7=%llu"
                    " wait9=%d wait7=%d\n",
@@ -1595,6 +1607,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     bios_mem_report();          /* 21-B9yi(续94)：大块 HLE 拷贝的规模统计 */
     /* 21-B9yi(续96)：退出时存档（若配置）——同样带上宿主时间戳 */
     state_set_host_time(r->tm.now, r->cost9, r->cost7);
+    state_set_host_wait(r->a9_wait, r->a7_wait);   /* 21-B9yi(续100)：等待标志一起存 */
     state_cli_save_at_exit(nds, runner_frame_index(r));
     runner_wav_close();   /* 21-B9yi(续85)：收尾回填 WAV 头（在此之前文件是流式写的） */
     runner_destroy(r);

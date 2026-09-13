@@ -53,7 +53,12 @@ int  state_take_pending_load(void);             /* 读档后取一次「需要�
    保存前调用 state_set_host_time() 记录，读档后用 state_get_host_time() 取回，
    让调度时间轴精确回到存档时刻（只靠 CPU 指令计数是不够的：时间轴的单位是
    系统时钟，而 cpu->cycles 是**指令条数**，两者不是一回事——实测差 346 次中断）。 */
+/* 21-B9yi(续100)：把 runner 的两个**等待标志**也一起存档（`a9_wait/a7_wait`）。
+   它们是「该核是否在 WFI/挂起」的调度状态，直接决定读档后**定时器是否继续走**
+   （runner 只在核处于等待时推进它那一侧的定时器）——靠 `step_cycles==0` 猜不准。 */
 void state_set_host_time(uint64_t now, uint64_t cost9, uint64_t cost7);
 int  state_get_host_time(uint64_t *now, uint64_t *cost9, uint64_t *cost7);
+void state_set_host_wait(int wait9, int wait7);
+int  state_get_host_wait(int *wait9, int *wait7);
 
 #endif /* NDS_EMU_STATE_H */

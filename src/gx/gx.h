@@ -2,6 +2,7 @@
 #define NDS_EMU_GX_H
 
 #include <stdint.h>
+#include <stddef.h>   /* 21-B9yi(续100)：size_t（gx_state_* 接口） */
 
 /* 阶段 19：NDS 3D 几何引擎（Geometry Engine）最小实现。
    吃「命令流」（矩阵/顶点/多边形属性），做矩阵变换 + 顶点变换 + 裁剪，
@@ -235,6 +236,14 @@ void gx_reset(gx_t *g);
 /* 21-B9yi(续32)：GX 命令直方图（NDS_GXHIST=1 时在无头摘要里打印）。
    用来回答「游戏到底有没有提交几何」——0x40 BEGIN_VTXS / 0x23-0x28 顶点。 */
 void gx_cmd_hist_dump(void);
+
+/* 21-B9yi(续100)：**GX 的静态状态**（命令队列 + 参数填充进度 + 解析后的条目流）。
+   它们不是 `gx_t` 的成员（是 gx.c 里的文件级静态量），此前没进即时存档 ⇒
+   读档后 GPU 侧状态与存档时刻不一致。这里给出「取大小 / 存 / 取」三个接口，
+   由 state 模块把它们一并写进存档（内部全是定长数组，无指针）。 */
+size_t gx_state_size(void);
+void   gx_state_save(void *dst);
+int    gx_state_load(const void *src, size_t len);
 
 /* 21-B9yi(续16)：按系统时钟消耗 3D 引擎工作周期（到 0 时清 GXSTAT bit27）。 */
 void gx_advance(gx_t *g, uint32_t cycles);

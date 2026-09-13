@@ -1788,3 +1788,43 @@ void gx_state(const gx_t *g, uint32_t *fifo_words, uint32_t *busy,
     if (qlen) *qlen = g_q_len;
     if (pending) *pending = g_pending;
 }
+
+/* 21-B9yi(续100)：**GX 静态状态的存档接口**（见 gx.h 的说明）。
+   打包内容：命令队列 g_q（含每条命令的参数填充进度）、队列指针与待填参数数、
+   解析后的条目流 g_ent 及其指针、以及「正在为哪条命令收集参数」的 g_need/g_ccmd。
+   全是定长数组/整数、无指针 ⇒ 直接 memcpy；尺寸不符则拒绝装载。 */
+size_t gx_state_size(void)
+{
+    return sizeof g_q + sizeof g_ent + sizeof(int) * 6 + sizeof(uint8_t);
+}
+
+void gx_state_save(void *dst)
+{
+    uint8_t *p = (uint8_t *)dst;
+    memcpy(p, g_q, sizeof g_q);            p += sizeof g_q;
+    memcpy(p, g_ent, sizeof g_ent);        p += sizeof g_ent;
+    memcpy(p, &g_q_head, sizeof(int));     p += sizeof(int);
+    memcpy(p, &g_q_len, sizeof(int));      p += sizeof(int);
+    memcpy(p, &g_pending, sizeof(int));    p += sizeof(int);
+    memcpy(p, &g_e_head, sizeof(int));     p += sizeof(int);
+    memcpy(p, &g_e_len, sizeof(int));      p += sizeof(int);
+    memcpy(p, &g_need, sizeof(int));       p += sizeof(int);
+    memcpy(p, &g_ccmd, sizeof(uint8_t));   p += sizeof(uint8_t);
+}
+
+int gx_state_load(const void *src, size_t len)
+{
+    if (len != gx_state_size())
+        return -1;
+    const uint8_t *p = (const uint8_t *)src;
+    memcpy(g_q, p, sizeof g_q);            p += sizeof g_q;
+    memcpy(g_ent, p, sizeof g_ent);        p += sizeof g_ent;
+    memcpy(&g_q_head, p, sizeof(int));     p += sizeof(int);
+    memcpy(&g_q_len, p, sizeof(int));      p += sizeof(int);
+    memcpy(&g_pending, p, sizeof(int));    p += sizeof(int);
+    memcpy(&g_e_head, p, sizeof(int));     p += sizeof(int);
+    memcpy(&g_e_len, p, sizeof(int));      p += sizeof(int);
+    memcpy(&g_need, p, sizeof(int));       p += sizeof(int);
+    memcpy(&g_ccmd, p, sizeof(uint8_t));   p += sizeof(uint8_t);
+    return 0;
+}

@@ -1,33 +1,49 @@
 diff --git a/src/ARM.cpp b/src/ARM.cpp
-index 3937a99..1e0769d 100644
+index 3937a99..8b66964 100644
 --- a/src/ARM.cpp
 +++ b/src/ARM.cpp
-@@ -158,6 +158,8 @@ void ARM::Reset()
+@@ -34,6 +34,13 @@ namespace melonDS
+ using Platform::Log;
+ using Platform::LogLevel;
+ 
++/* 21-B9yi(续108p) 诊断：PC 直方图（`REF_PCHOT=1` 时每条解释指令累加一次），
++   分桶与本模拟器 `NDS_PCHOT=1` 的 hot9/hot7 完全一致（桶 = (pc>>4)&0xFFFF）。
++   用途：直接回答「参考核这段时间在跑哪些代码、本地在跑哪些」，从而定位
++   「同一段游戏进度，为什么参考核要多跑 1.7 倍指令」。 */
++extern unsigned long long RefPcHist[2][1 << 16];
++extern int RefPcHistOn;
++
+ #ifdef GDBSTUB_ENABLED
+ void ARM::GdbCheckA()
+ {
+@@ -158,6 +165,8 @@ void ARM::Reset()
  {
      Cycles = 0;
      Halted = 0;
-+    InstrCount = 0;   /* 21-B9yi(xu108e) diagnostic counter */
++    InstrCount = 0;   /* 21-B9yi(续108e) 诊断计数器 */
 +    BiosInstrCount = 0;
  
      IRQ = 0;
  
-@@ -616,6 +618,9 @@ void ARMv5::Execute()
+@@ -616,6 +625,10 @@ void ARMv5::Execute()
  
      while (NDS.ARM9Timestamp < NDS.ARM9Target)
      {
-+        InstrCount++;   /* 21-B9yi(xu108e) diagnostic: one per interpreted instruction */
++        InstrCount++;   /* 21-B9yi(续108e) 诊断：每条解释指令记一次 */
++        if (RefPcHistOn) RefPcHist[0][(R[15] >> 4) & 0xFFFF]++;
 +        if (R[15] >= 0xFFFF0000u && R[15] < 0xFFFF4000u)
-+            BiosInstrCount++;   /* 21-B9yi(xu108h): executed inside ARM9 BIOS */
++            BiosInstrCount++;   /* 21-B9yi(续108h)：执行在 ARM9 BIOS 区 */
  #ifdef JIT_ENABLED
          if constexpr (mode == CPUExecuteMode::JIT)
          {
-@@ -756,6 +761,9 @@ void ARMv4::Execute()
+@@ -756,6 +769,10 @@ void ARMv4::Execute()
  
      while (NDS.ARM7Timestamp < NDS.ARM7Target)
      {
-+        InstrCount++;   /* 21-B9yi(xu108e) diagnostic: one per interpreted instruction */
++        InstrCount++;   /* 21-B9yi(续108e) 诊断：每条解释指令记一次 */
++        if (RefPcHistOn) RefPcHist[1][(R[15] >> 4) & 0xFFFF]++;
 +        if (R[15] < 0x4000u)
-+            BiosInstrCount++;   /* 21-B9yi(xu108h): executed inside ARM7 BIOS */
++            BiosInstrCount++;   /* 21-B9yi(续108h)：执行在 ARM7 BIOS 区 */
  #ifdef JIT_ENABLED
          if constexpr (mode == CPUExecuteMode::JIT)
          {
@@ -39,15 +55,13 @@ index 88f970b..2a9fd34 100644
      ARM(u32 num, bool jit, std::optional<GDBArgs> gdb, NDS& nds);
      virtual ~ARM(); // destroy shit
  
-+    /* 21-B9yi(xu108e) diagnostic: executed instruction count (incremented once
-+       per interpreted instruction in ARM::Execute).  Used together with our
-+       NDS_INSTRSTAT to compare "how many instructions each core runs per frame"
-+       against the reference core. */
++    /* 21-B9yi(续108e) 诊断：已执行指令条数（ARM::Execute 的解释器循环里每条 +1）。
++       用途：与本模拟器的 `NDS_INSTRSTAT` 对照「同一帧两核各跑了多少条指令」，
++       判断时序口径（每指令计费/访存等待）差异。 */
 +    u64 InstrCount = 0;
-+    /* 21-B9yi(xu108h): how many of those ran *inside the BIOS region*
-+       (ARM9: 0xFFFF0000+, ARM7: 0x0000-0x3FFF).  Used to quantify how much
-+       extra work the reference core spends executing FreeBIOS code instead of
-+       HLE-ing the SWIs like we do. */
++    /* 21-B9yi(续108h) 诊断：其中**执行在 BIOS 区**的条数（ARM9: 0xFFFF0000+，
++       ARM7: 0x0000-0x3FFF）。用来量化「参考核真跑 FreeBIOS 代码」相对
++       「本地 HLE 掉 SWI」多出来的工作量。 */
 +    u64 BiosInstrCount = 0;
 +
      void SetGdbArgs(std::optional<GDBArgs> gdb);

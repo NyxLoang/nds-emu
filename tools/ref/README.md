@@ -52,6 +52,7 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_FIFO_LOG=1` / `REF_FIFO_MAX=N` | **IPC 发送流日志**：每次写 0x04000188 打一行 `fifolog arm9 a=… v=… pc=… lr=… f=…`（默认上限 20000），与本地 `--watch 04000188-0400018C` 对齐，用来逐条对照两核消息流（21-B9yi 续108） |
 | `REF_PCHIT_LO=0200EE4C` / `REF_PCHIT_HI=0200EF00` / `REF_PCHIT_MAX=N` | 挂 `ARM9Read16/32` 的**地址命中**日志（`refpc arm9 …`）。**已知限制**：本版 melonDS 的**指令取指走 ARM.h 的内联 `CodeRead16/32→BusRead*`**，不进虚拟 `NDS::ARM9Read*` ⇒ 抓不到取指（实测对确定会执行的地址也是 0 命中），只对**数据读**有效；要追「执行了哪段代码」得给参考树打补丁（21-B9yi 续108 记录了这个负结果） |
 | `REF_INSTRSTAT=N` | 每 N 帧打一行 `refinstr: f=… i9=… i7=… b9=… b7=…`（两核**累计指令条数** + 其中**执行在 BIOS 区**的条数；与本模拟器的 `NDS_INSTRSTAT=N` 同口径）。需要先给参考树打 `melonds-armstat.patch`（见下） |
+| `REF_PCHOT=1` | 退出前打印两核的 **PC 热点前 16 名**（`refhot9:` / `refhot7:`，`pc=… cnt=… (%)` + `total=`），与本模拟器 `NDS_PCHOT=1` 的 `hot9:`/`hot7:` 同口径。同样需要 `melonds-armstat.patch`（21-B9yi 续108p） |
 | `REF_CARTSTAT=N` | 每 N 帧打一行 `refcart: f=… reads=…`（**0x04100010 ROM 数据口累计读次数**），与本地 `NDS_CARTSTAT=N` 的 `cartro:` 同口径；用来比较两边「从 ROM 取数」的时间线（21-B9yi 续108i） |
 | `REF_CARTLOG=1` | **卡带传输级日志**：`refcartlog: f=… START cmd=… len=… romcnt=…` / `… END pos=… len=… cnt=…`，与本地 `NDS_CARTLOG2=LO-HI` 的 `cartlog2:` 行字段对齐。需要先打 `melonds-cartlog.patch`（见下） |
 
@@ -78,6 +79,26 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 只执行了 ARM9 BIOS **3,341** 条、ARM7 BIOS **25,806** 条 —— 即 melonDS **也是 HLE**
 SWI 的，并不真跑 FreeBIOS 代码。所以「本地 HLE 掉 SWI ⇒ 工作量比参考核少」这条假设
 **被证伪**，开机段的指令数差异另有原因（下一步查「开机被哪个事件/IO 门控」）。
+
+同一个补丁里还带了 **PC 直方图**（`REF_PCHOT=1`，21-B9yi 续108p）：
+`ARM.cpp` 的解释器循环每条指令对 `RefPcHist[core][(R[15]>>4)&0xFFFF]++`，
+harness 退出前打印前 16 名。分桶与本模拟器 `NDS_PCHOT=1` 完全一致，
+于是「同一段游戏进度、两边各在跑哪些代码」可以直接逐行对照。
+
+**结论（f=50 同键脚本）**：两边的热点**是同一段代码**，只是 ARM9 的地址基数不同 ——
+本地在 `0x020119xx`（主存直连地址），参考核在 `0x000119xx`（ARM9 主存**镜像区**
+`0x00000000-0x003FFFFF`）：桶 `1191`/`1192`/`1193` 两边都进前三
+（本地 33.4%/19.8%/34.5%、参考核 11.5%/25.5%/25.5%）；ARM7 侧 `0x023801xx`
+↔ `0x000801xx`、`0x037FE3xx` ↔ `0x000FE3xx` 也一一对应。
+⇒ 开机段（f≤50）的指令数差（本地 ARM9 15.41M vs 参考核 12.77M、+20%）
+**不是「跑了不同的代码」**，而是**同一条循环上两边的计费/分支比例不同**
+（本地更集中在桶 `1191`/`1193`，参考核更集中在 `1192`），与
+`NDS_INSTRSTAT`/`NDS_MEMTIM`（续108e/g）的结论一致。
+
+**同时暴露一处待解释的 ARM7 差异**：参考核 ARM7 的第一热点是 `0x000FB82x`
+（6.1%，本次窗口内没有对应的本地热点），本地 ARM7 第一热点是 `0x023801xx`
+（12.0%，参考核对应桶 `0x000801xx` 也有 5.7%）⇒ ARM7 侧「跑的热点集合」
+比 ARM9 侧更像真有差异，留待下一轮（与「ARM7 消息条数多 ~19%」同一线索）。
 
 ### 可选补丁：`melonds-cartlog.patch`（卡带传输级日志，21-B9yi 续108j）
 

@@ -19,6 +19,13 @@ namespace melonDS { extern unsigned long long RefGxHist[256]; }
    GPU3D.cpp 在 namespace melonDS 里，符号必须定义在同一命名空间。 */
 namespace melonDS { int RefDbgFrame = -1; }
 
+/* 21-B9yi(续108p)：PC 直方图（`REF_PCHOT=1`）——ARM.cpp 的解释器循环往里累加，
+   本文件在退出前打印每核前 16 名（分桶 = (pc>>4)&0xFFFF，与本地 hot9/hot7 同口径）。 */
+namespace melonDS {
+unsigned long long RefPcHist[2][1 << 16];
+int RefPcHistOn = 0;
+}
+
 static int g_trace_frame = -1;
 static int g_fifo_trace_count = 0;
 
@@ -550,6 +557,9 @@ int main(int argc, char** argv)
     if (const char* ef = std::getenv("REF_FRAMES"))
         ref_frames = std::atoi(ef);
     std::printf("ref frames=%d\n", ref_frames);
+    /* 21-B9yi(续108p)：`REF_PCHOT=1` → 打开 ARM.cpp 的 PC 直方图 */
+    if (std::getenv("REF_PCHOT") != nullptr)
+        melonDS::RefPcHistOn = 1;
 
     /* 21-B9yi(续32)：按键注入 + 画面统计，使参考核与本地
        `--key-frame/--key-mask/--key-period`、`--stats-every` 逐帧同口径。
@@ -732,6 +742,27 @@ int main(int argc, char** argv)
             for (int c = 0; c < 256; c++)
                 if (RefGxHist[c]) std::printf(" %02X=%llu", c, RefGxHist[c]);
             std::printf("\n");
+        }
+    }
+    /* 21-B9yi(续108p)：PC 直方图前 16 名（与本地 `NDS_PCHOT=1` 的 hot9/hot7 同口径）。 */
+    if (melonDS::RefPcHistOn) {
+        for (int core = 0; core < 2; core++) {
+            unsigned long long total = 0;
+            for (unsigned i = 0; i < (1u << 16); i++)
+                total += melonDS::RefPcHist[core][i];
+            for (int rank = 0; rank < 16; rank++) {
+                unsigned best = 0; unsigned long long bc = 0;
+                for (unsigned i = 0; i < (1u << 16); i++)
+                    if (melonDS::RefPcHist[core][i] > bc) {
+                        bc = melonDS::RefPcHist[core][i]; best = i;
+                    }
+                if (bc == 0) break;
+                /* 桶里存的是「最后一条命中的 PC」不方便；这里只给桶号（×16 即地址范围起点） */
+                std::printf("refhot%d: pc=%08X cnt=%llu (%.1f%%)\n", core == 0 ? 9 : 7,
+                            best << 4, bc, total ? 100.0 * (double)bc / (double)total : 0.0);
+                melonDS::RefPcHist[core][best] = 0;
+            }
+            std::printf("refhot%d: total=%llu\n", core == 0 ? 9 : 7, total);
         }
     }
     return 0;

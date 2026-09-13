@@ -82,6 +82,15 @@ static int s_pending_load;
 static uint64_t s_host_now, s_host_cost9, s_host_cost7;
 static int s_host_valid;
 static int s_host_wait9, s_host_wait7;   /* 21-B9yi(续100)：runner 的等待标志 */
+static uint64_t s_host_last_now;         /* 21-B9yi(续101)：runner 的 last_now */
+
+void state_set_host_last_now(uint64_t last_now) { s_host_last_now = last_now; }
+
+int state_get_host_last_now(uint64_t *last_now)
+{
+    if (last_now != NULL) *last_now = s_host_last_now;
+    return 1;
+}
 
 void state_set_host_wait(int wait9, int wait7)
 {
@@ -286,6 +295,7 @@ int state_save(const nds_t *nds, uint64_t frame, const char *path)
     if (ok == 0 && wr(f, &s_host_cost7, 8) != 0) ok = -1;
     if (ok == 0 && wr(f, &s_host_wait9, 4) != 0) ok = -1;
     if (ok == 0 && wr(f, &s_host_wait7, 4) != 0) ok = -1;
+    if (ok == 0 && wr(f, &s_host_last_now, 8) != 0) ok = -1;
     /* 21-B9yi(续100)：GX 的**文件级静态状态**（命令队列 + 条目流）——
        它们不是 gx_t 的成员，此前没进存档，读档后 GPU 侧与存档时刻不一致。 */
     {
@@ -372,6 +382,8 @@ int state_load(nds_t *nds, const char *path)
     int host_wait9 = 0, host_wait7 = 0;
     if (ok == 0 && rd(f, &host_wait9, 4) != 0) ok = -1;
     if (ok == 0 && rd(f, &host_wait7, 4) != 0) ok = -1;
+    uint64_t host_last_now = 0;
+    if (ok == 0 && rd(f, &host_last_now, 8) != 0) ok = -1;
     /* GX 静态状态（续100）：长度不符就拒绝 */
     uint8_t gxblob[128 * 1024];
     size_t gn = 0;
@@ -440,6 +452,7 @@ int state_load(nds_t *nds, const char *path)
         s_host_valid = 1;
         s_host_wait9 = host_wait9;
         s_host_wait7 = host_wait7;
+        s_host_last_now = host_last_now;
         state_dbg_dump(nds, "load");
     }
     free(io_new);

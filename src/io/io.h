@@ -127,4 +127,9 @@ void io_advance_cart(io_t *io, int is_arm7, uint32_t cycles);
    （`addr` 后跟 r/w 标记哪个方向被访问过）。用来跟参考核寄存器表逐个核账。 */
 void io_unknown_report(void);
 
+/* 21-B9yi(续101)：定时器推进的累计统计（周期总量 / 每个定时器的溢出次数）。
+   用途：对照两条本该一致的时间线，diff 出「定时器推进量从哪一步开始不同」。 */
+unsigned long long io_timer_cycles_total(int is_arm7);
+unsigned long long io_timer_ovf_total(int is_arm7, int i);
+
 #endif /* NDS_EMU_IO_H */

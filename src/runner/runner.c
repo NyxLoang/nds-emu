@@ -264,7 +264,7 @@ static void trace_step(const char *who, const runner_t *r, const arm_cpu_t *cpu)
     printf("tr %s pc=%08X r0=%08X r1=%08X r2=%08X r3=%08X r7=%08X sp=%08X"
            " lr=%08X cpsr=%08X cyc=%llu if9=%08X if7=%08X now=%llu"
            " t70=%04X/%04X/%u t71=%04X/%04X/%u inst=%08X"
-           " dtcm=%d/%08X/%08X w9=%d w7=%d\n",
+           " dtcm=%d/%08X/%08X w9=%d w7=%d tc7=%llu ov70=%llu ov71=%llu\n",
            who, cpu->r[15], cpu->r[0], cpu->r[1], cpu->r[2], cpu->r[3],
            cpu->r[7], cpu->r[13], cpu->r[14], cpu->cpsr,
            (unsigned long long)cpu->cycles,
@@ -275,7 +275,9 @@ static void trace_step(const char *who, const runner_t *r, const arm_cpu_t *cpu)
            r->nds->io->timer[1][1].cnt_l, r->nds->io->timer[1][1].cnt_h,
            r->nds->io->timer[1][1].acc, inst,
            r->nds->bus->arm9_dtcm_on, r->nds->bus->arm9_dtcm_base,
-           r->nds->bus->arm9_dtcm_size, r->a9_wait, r->a7_wait);
+           r->nds->bus->arm9_dtcm_size, r->a9_wait, r->a7_wait,
+           io_timer_cycles_total(1), io_timer_ovf_total(1, 0),
+           io_timer_ovf_total(1, 1));
     s_trace_budget--;
 }
 
@@ -349,7 +351,16 @@ void runner_resync_time(runner_t *r)
         cost7 = r->nds->cpu7 != NULL ? r->nds->cpu7->cycles : 0;
     }
     r->tm.now = now;
-    r->last_now = now;
+    /* 21-B9yi(续101)：`last_now` 要用**存档里的值**（可能与 tm.now 差 1 个周期）。
+       它决定下一步 `delta = tm.now - last_now`，而定时器正是按 delta 计费——
+       直接令 last_now = now 会让之后每一步的计费都差 1 个周期（实测正是这个量级）。 */
+    {
+        uint64_t saved_last = 0;
+        if (have_saved && state_get_host_last_now(&saved_last) && saved_last != 0)
+            r->last_now = saved_last;
+        else
+            r->last_now = now;
+    }
     uint64_t fc = r->frame_cycles;
     r->ctx.next_line = (now / (fc / 263) + 1) * (fc / 263);
     r->ctx.next_frame = (now / fc + 1) * fc;
@@ -1254,6 +1265,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
            用途：做「存档 → 读档 → 后续输出逐字节一致」的端到端验证。 */
         state_set_host_time(r->tm.now, r->cost9, r->cost7);
         state_set_host_wait(r->a9_wait, r->a7_wait);   /* 21-B9yi(续100)：等待标志一起存 */
+        state_set_host_last_now(r->last_now);          /* 21-B9yi(续101)：last_now 一起存 */
         if (getenv("NDS_STATEDBG") != NULL)
             printf("runnerdbg[save]: fr=%llu now=%llu cost9=%llu cost7=%llu"
                    " wait9=%d wait7=%d\n",
@@ -1622,6 +1634,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
     /* 21-B9yi(续96)：退出时存档（若配置）——同样带上宿主时间戳 */
     state_set_host_time(r->tm.now, r->cost9, r->cost7);
     state_set_host_wait(r->a9_wait, r->a7_wait);   /* 21-B9yi(续100)：等待标志一起存 */
+    state_set_host_last_now(r->last_now);          /* 21-B9yi(续101)：last_now 一起存 */
     state_cli_save_at_exit(nds, runner_frame_index(r));
     runner_wav_close();   /* 21-B9yi(续85)：收尾回填 WAV 头（在此之前文件是流式写的） */
     runner_destroy(r);

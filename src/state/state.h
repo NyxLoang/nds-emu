@@ -60,5 +60,11 @@ void state_set_host_time(uint64_t now, uint64_t cost9, uint64_t cost7);
 int  state_get_host_time(uint64_t *now, uint64_t *cost9, uint64_t *cost7);
 void state_set_host_wait(int wait9, int wait7);
 int  state_get_host_wait(int *wait9, int *wait7);
+/* 21-B9yi(续101)：**上一次推进后的时间戳 `last_now`** —— 它决定下一步的
+   `delta = tm.now - last_now`（定时器就是按这个 delta 计费的）。存档点上
+   `last_now` 可能比 `tm.now` 少 1 个周期，读档时若直接令 `last_now = now`
+   就会让之后每一步的计费都差 1 个周期（实测正是这个量级）。 */
+void state_set_host_last_now(uint64_t last_now);
+int  state_get_host_last_now(uint64_t *last_now);
 
 #endif /* NDS_EMU_STATE_H */

@@ -89,6 +89,25 @@ static void io_card_dma_check(io_t *io, int is_arm7)
    每次最多 256 次比较。改成按地址偏移的位图（0x04000000-0x04001FFF = 8KB），O(1)。 */
 static uint8_t io_seen_map[0x2000];
 
+/* 21-B9yi(续101)：定时器推进累计量（对照「从哪一步开始不同」用）。
+   s_tmr_cycles[idx] = 传给 io_advance_timers 的周期总量；s_tmr_ovf[idx][i] = 溢出次数。 */
+static unsigned long long s_tmr_cycles[2];
+static unsigned long long s_tmr_ovf[2][4];
+static int s_tmr_trace = -1;          /* 21-B9yi(续101)：NDS_TRACE_TMR */
+static long s_tmr_trace_frame;
+
+unsigned long long io_timer_cycles_total(int is_arm7)
+{
+    return s_tmr_cycles[is_arm7 ? 1 : 0];
+}
+
+unsigned long long io_timer_ovf_total(int is_arm7, int i)
+{
+    if (i < 0 || i > 3)
+        return 0;
+    return s_tmr_ovf[is_arm7 ? 1 : 0][i];
+}
+
 /* 21-B9yi(续87)：把「未知 IO」按 读/写 分别记下来（bit0=读过、bit1=写过），
    供 `io_unknown_report()` 在跑完后一次性列出**全部**未知地址 ——
    这样才能拿这份清单去跟参考核的寄存器表逐个核账（此前只统计过「多少种」）。 */
@@ -640,15 +659,32 @@ void io_advance_timers(io_t *io, int is_arm7, uint32_t cycles)
 {
     /* 21-B9h：TM0-TM3 溢出对应 IF bit3-bit6，仅 cnt_h bit6（IRQ 使能）时置位 */
     int idx = is_arm7 ? 1 : 0;
+    /* 21-B9yi(续101)：`NDS_TRACE_TMR=1` 时逐次打印「哪一核、推进多少周期」，
+       用来 diff 两条时间线里**第一次出现差额的那次定时器推进**。
+       只在 `NDS_TRACE_FRAME` 指定的帧之后打印（与 runner 的指令 trace 对齐）。 */
+    if (s_tmr_trace < 0) {
+        const char *e = getenv("NDS_TRACE_TMR");
+        s_tmr_trace = (e != NULL && e[0] != '0') ? 1 : 0;
+        const char *f = getenv("NDS_TRACE_FRAME");
+        s_tmr_trace_frame = (f != NULL) ? (long)strtol(f, NULL, 10) : 0;
+    }
+    if (s_tmr_trace && (long)g_dbg_frame >= s_tmr_trace_frame)
+        printf("tmr idx=%d cyc=%u f=%llu\n", idx, cycles,
+               (unsigned long long)g_dbg_frame);
+    /* 21-B9yi(续101)：累计统计（供 trace 对照「定时器推进量从哪一步开始不同」） */
+    s_tmr_cycles[idx] += cycles;
     /* 21-B9yi(续55)：只遍历**开着的**定时器（位图由 io_write8 维护）。
        未开位图时（一个定时器都没开）这里就是一次读+判断即返回。 */
     unsigned mask = io->timer_on[idx];
     while (mask != 0) {
         int i = __builtin_ctz(mask);   /* 取最低置位：0..3 */
         mask &= mask - 1u;
-        if (timer_advance(&io->timer[idx][i], cycles) &&
-            (io->timer[idx][i].cnt_h & TIMER_CNT_IRQ))
-            io->irq[idx].ifl |= (uint32_t)(1u << (3 + i));
+        int ovf = timer_advance(&io->timer[idx][i], cycles);
+        if (ovf) {
+            s_tmr_ovf[idx][i]++;
+            if (io->timer[idx][i].cnt_h & TIMER_CNT_IRQ)
+                io->irq[idx].ifl |= (uint32_t)(1u << (3 + i));
+        }
     }
 }
 /* 21-B9yi(续56)：卡带总线上是否还有活要干。

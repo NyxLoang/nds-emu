@@ -725,6 +725,20 @@ static int runner_step(runner_t *r)
                也送不出去，游戏任务就此睡死（实测卡在空闲任务、IF bit19 不亮）。 */
             io_advance_cart(nds->io, 0, (uint32_t)delta);
         }
+        /* 21-B9yi(续100)：**这条分支以前没有 trace 打点**（两组 trace 看起来相同、
+           但盲区里仍可能不同）。这里补上：idle 步的落点/推进量/中断与定时器状态。 */
+        if (trace_enabled() && runner_frame_index(r) >= s_trace_frame &&
+            s_trace_budget > 0) {
+            printf("tr idle now=%llu delta=%llu if9=%08X if7=%08X"
+                   " t70=%04X/%04X/%u t71=%04X/%04X/%u\n",
+                   (unsigned long long)r->tm.now, (unsigned long long)delta,
+                   nds->io->irq[0].ifl, nds->io->irq[1].ifl,
+                   nds->io->timer[1][0].cnt_l, nds->io->timer[1][0].cnt_h,
+                   nds->io->timer[1][0].acc,
+                   nds->io->timer[1][1].cnt_l, nds->io->timer[1][1].cnt_h,
+                   nds->io->timer[1][1].acc);
+            s_trace_budget--;
+        }
         runner_keys(r);
         return 1;
     }

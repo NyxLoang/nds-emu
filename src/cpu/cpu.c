@@ -521,8 +521,10 @@ int cpu_step(arm_cpu_t *cpu)
     /* 21-B9yi(续52)：先把 bios_irq_tail9 自己的前置条件写在调用点上，
        绝大多数指令（ARM9 不在 IRQ 模式）因此连函数调用都省了。 */
     if (!cpu->is_arm7 && (cpu->cpsr & CPSR_MODE_MASK) == ARM_MODE_IRQ &&
-        cpu->r[15] == 0xFFFF06F0u && bios_irq_tail9(cpu))
+        cpu->r[15] == 0xFFFF06F0u && bios_irq_tail9(cpu)) {
+        cpu->cycles++;   /* 21-B9yi(续109j)：ARM9 IRQ 尾部同样是「逐条建模」的一步 */
         return 1;
+    }
     /* 6.5：按本步消耗的周期推进当前核定时器（分频在 timer.c 内处理）。
        21-B9yi：传上一条指令的**实际周期数**（此前固定 1/指令，ARM9 平均 ~1.2，
        定时器会系统性偏慢；melonDS 定时器是挂在系统时钟上的）。 */
@@ -690,8 +692,14 @@ int cpu_step(arm_cpu_t *cpu)
     /* 21-B9wt：ARM7 低地址 BIOS 路径（SWI 分发、等待、IRQ 出入口）按地址等价执行。
        放在 IRQ 检查之后：真机每步先看中断，再执行当前指令；Halt 暂停点因此在
        “写 HALTCNT 的下一条”处被 IRQ 打断，与参考核一致。 */
-    if (cpu->is_arm7 && cpu->r[15] < 0x4000u && bios7_low_step(cpu))
+    if (cpu->is_arm7 && cpu->r[15] < 0x4000u && bios7_low_step(cpu)) {
+        /* 21-B9yi(续109j)：低地址 BIOS 是**逐条地址建模**执行（不是 HLE 一步跳过），
+           所以它也必须计入指令数诊断 —— 否则 `NDS_INSTRSTAT` 的 i7 会漏掉 ARM7 在
+           BIOS 等待循环里的绝大部分指令（实测漏到只剩 1/25），与参考核的 `refinstr`
+           口径不一致，会得出错误结论。`cpu->cycles` 不参与调度（调度用 step_cycles）。 */
+        cpu->cycles++;
         return 1;
+    }
     /* 13.2：按 CPSR.T 位分发——Thumb 取 16 位半字，ARM 取 32 位字。 */
     uint32_t ipc = cpu->r[15];   /* 本步指令地址（取指区域计费用） */
     int is_thumb = (cpu->cpsr & CPSR_T) != 0;

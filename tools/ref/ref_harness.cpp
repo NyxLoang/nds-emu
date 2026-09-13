@@ -649,9 +649,11 @@ int main(int argc, char** argv)
                 if (instr_every < 1) instr_every = 0;
             }
             if (instr_every > 0 && (frame % instr_every) == 0)
-                std::printf("refinstr: f=%d i9=%llu i7=%llu\n", frame,
+                std::printf("refinstr: f=%d i9=%llu i7=%llu b9=%llu b7=%llu\n", frame,
                             (unsigned long long)nds->ARM9.InstrCount,
-                            (unsigned long long)nds->ARM7.InstrCount);
+                            (unsigned long long)nds->ARM7.InstrCount,
+                            (unsigned long long)nds->ARM9.BiosInstrCount,
+                            (unsigned long long)nds->ARM7.BiosInstrCount);
         }
         /* 21-B9yi(续91)：`REF_RAMDUMP_FRAME=N` → 额外在第 N 帧 dump 主内存，
            便于用二分法定位「本地与参考核从哪一帧开始分叉」（固定帧号只有 10 个，

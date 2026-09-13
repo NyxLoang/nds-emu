@@ -1,36 +1,41 @@
 diff --git a/src/ARM.cpp b/src/ARM.cpp
-index 3937a99..f144baf 100644
+index 3937a99..1e0769d 100644
 --- a/src/ARM.cpp
 +++ b/src/ARM.cpp
-@@ -158,6 +158,7 @@ void ARM::Reset()
+@@ -158,6 +158,8 @@ void ARM::Reset()
  {
      Cycles = 0;
      Halted = 0;
 +    InstrCount = 0;   /* 21-B9yi(xu108e) diagnostic counter */
++    BiosInstrCount = 0;
  
      IRQ = 0;
  
-@@ -616,6 +617,7 @@ void ARMv5::Execute()
+@@ -616,6 +618,9 @@ void ARMv5::Execute()
  
      while (NDS.ARM9Timestamp < NDS.ARM9Target)
      {
 +        InstrCount++;   /* 21-B9yi(xu108e) diagnostic: one per interpreted instruction */
++        if (R[15] >= 0xFFFF0000u && R[15] < 0xFFFF4000u)
++            BiosInstrCount++;   /* 21-B9yi(xu108h): executed inside ARM9 BIOS */
  #ifdef JIT_ENABLED
          if constexpr (mode == CPUExecuteMode::JIT)
          {
-@@ -756,6 +758,7 @@ void ARMv4::Execute()
+@@ -756,6 +761,9 @@ void ARMv4::Execute()
  
      while (NDS.ARM7Timestamp < NDS.ARM7Target)
      {
 +        InstrCount++;   /* 21-B9yi(xu108e) diagnostic: one per interpreted instruction */
++        if (R[15] < 0x4000u)
++            BiosInstrCount++;   /* 21-B9yi(xu108h): executed inside ARM7 BIOS */
  #ifdef JIT_ENABLED
          if constexpr (mode == CPUExecuteMode::JIT)
          {
 diff --git a/src/ARM.h b/src/ARM.h
-index 88f970b..0915cd3 100644
+index 88f970b..2a9fd34 100644
 --- a/src/ARM.h
 +++ b/src/ARM.h
-@@ -68,6 +68,11 @@ public:
+@@ -68,6 +68,15 @@ public:
      ARM(u32 num, bool jit, std::optional<GDBArgs> gdb, NDS& nds);
      virtual ~ARM(); // destroy shit
  
@@ -39,6 +44,11 @@ index 88f970b..0915cd3 100644
 +       NDS_INSTRSTAT to compare "how many instructions each core runs per frame"
 +       against the reference core. */
 +    u64 InstrCount = 0;
++    /* 21-B9yi(xu108h): how many of those ran *inside the BIOS region*
++       (ARM9: 0xFFFF0000+, ARM7: 0x0000-0x3FFF).  Used to quantify how much
++       extra work the reference core spends executing FreeBIOS code instead of
++       HLE-ing the SWIs like we do. */
++    u64 BiosInstrCount = 0;
 +
      void SetGdbArgs(std::optional<GDBArgs> gdb);
  

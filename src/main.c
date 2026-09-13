@@ -63,6 +63,45 @@ static void on_stop_signal(int sig)
     g_stop_requested = 1;
 }
 
+/* 21-B9yi(续104)：`--help` 用法说明（用户不必翻 README 就能知道怎么玩/怎么测）。
+   内容与 README 的开关表保持一致；新增开关时记得同步。 */
+static void usage(const char *exe)
+{
+    printf("nds-emu —— 一个学习用的 NDS 模拟器（C11 + SDL2）\n\n");
+    printf("用法： %s <ROM.nds> [选项]\n\n", exe != NULL ? exe : "nds-emu");
+    printf("怎么玩（窗口模式）：\n");
+    printf("  Z X S D          NDS 的 A / B / X / Y\n");
+    printf("  A F              L / R\n");
+    printf("  Enter Backspace  START / SELECT\n");
+    printf("  方向键           十字键\n");
+    printf("  鼠标按住底屏     触摸屏（按下=触点、拖动=笔移动、抬起=抬笔）\n");
+    printf("  按住 Tab         快进 ×4（跳过过场；快进时静音、SPU 跟随模拟时间）\n");
+    printf("  F5 / F8          即时存档 / 读档（默认文件 nds_quick.state0）\n");
+    printf("  点顶部菜单栏     切换缩放（1x–4x）/ 语言\n\n");
+    printf("常用选项：\n");
+    printf("  --frames N               窗口跑满 N 帧自动退出（退出时写回 .sav）\n");
+    printf("  --fps-every N            每 N 帧打印分段帧率 + phases/render/pace/drift\n");
+    printf("  --speed N                帧节奏倍速（1=真机 59.83fps，0=不限速）\n");
+    printf("  --snd-wav 文件.wav       无头模式把模拟音频导成 WAV（32768Hz/16bit/立体声）\n");
+    printf("  --load-state / --save-state 文件    即时存档读/写（--state-save-frame N 指定帧）\n");
+    printf("  --headless-frames N      无头跑 N 帧（长跑/对照用；配合下面的诊断）\n");
+    printf("  --key-random SEED [--key-period N]    随机按键浸泡\n");
+    printf("  --touch-random SEED [--touch-period N] 随机触摸浸泡\n");
+    printf("  --screen-hash-every N    每 N 帧打印双屏画面指纹（跑过多少张不同画面）\n");
+    printf("  --stats-every N          每 N 帧打印双屏统计（非黑像素数 + 均值 RGB）\n");
+    printf("  --shot 文件.bmp          结束时存双屏截图；--shot-every N --shot-prefix P 存时间线\n");
+    printf("  --dump 前缀              结束时导出内存镜像（mainram/arm7wram/vram/itcm/dtcm…）\n");
+    printf("  --watch LO-HI / --watch-r LO-HI        总线写/读监视（打印访问者 PC/LR/SP）\n\n");
+    printf("常用环境变量：\n");
+    printf("  NDS_NOSYNC=1        关闭帧节奏（测性能用）\n");
+    printf("  NDS_PACE_DEBT_MS=N  帧节奏欠账上限（默认 30000；100=不追帧）\n");
+    printf("  NDS_FF_MUL=N        快进倍数（默认 4）\n");
+    printf("  NDS_SNDSTAT=1       打印混音统计；NDS_UNKIOSUM=1 列出全部未知 IO 地址\n");
+    printf("  NDS_STATEDBG=1      存档/读档时打印中断与定时器状态\n");
+    printf("  NDS_TRACE_FRAME=N + NDS_TRACE_COUNT=K   指令级 trace（对照两条时间线用）\n");
+    printf("  NDS_NORENDER=1 / NDS_NOAUDIO=1          窗口跳过宿主渲染 / 不打开声卡\n");
+}
+
 /* 把卡带头信息写进 ARM9 主存 0x027FFxxx 系统表（对应 melonDS SetupDirectBoot）：
    0x027FFE00 起 0x170 字节 = 完整 ROM 头；0x027FF800/0x027FFC00 两组
    「卡带 ID + CRC + 装载器签名」表。FFXII 的 ARM9/ARM7 启动代码会读这些表，
@@ -337,6 +376,14 @@ int main(int argc, char *argv[])
         }
         else if (wcscmp(wargv[i], L"--state-save-frame") == 0 && i + 1 < wargc)
             g_cli_state_frame = _wcstoui64(wargv[i + 1], NULL, 10);
+        else if (wcscmp(wargv[i], L"--help") == 0 || wcscmp(wargv[i], L"-h") == 0) {
+            static char exe_buf[260];
+            WideCharToMultiByte(CP_UTF8, 0, wargv[0], -1, exe_buf,
+                                (int)sizeof exe_buf, NULL, NULL);
+            usage(exe_buf);
+            LocalFree(wargv);
+            return 0;
+        }
         else if (wcscmp(wargv[i], L"--speed") == 0 && i + 1 < wargc)
             g_cli_speed = wcstod(wargv[i + 1], NULL);
         else if (wcscmp(wargv[i], L"--snd-wav") == 0 && i + 1 < wargc) {
@@ -434,6 +481,10 @@ int main(int argc, char *argv[])
             g_cli_state_save = argv[i + 1];
         else if (strcmp(argv[i], "--state-save-frame") == 0 && i + 1 < argc)
             g_cli_state_frame = strtoull(argv[i + 1], NULL, 10);
+        else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            usage(argv[0]);
+            return 0;
+        }
         else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc)
             g_cli_speed = strtod(argv[i + 1], NULL);
         else if (strcmp(argv[i], "--snd-wav") == 0 && i + 1 < argc)
@@ -864,6 +915,11 @@ int main(int argc, char *argv[])
     signal(SIGINT, on_stop_signal);
     signal(SIGTERM, on_stop_signal);
 #endif
+    /* 21-B9yi(续104)：启动时打一遍按键/快捷键（省得翻文档；`--help` 有完整说明）。 */
+    printf("window: 按键 Z/X/S/D=A/B/X/Y  A/F=L/R  Enter/Backspace=START/SELECT  方向键=十字键\n");
+    printf("window: 鼠标按住底屏=触摸屏  Tab=快进  F5/F8=即时存档/读档  菜单栏=缩放/语言"
+           "（--help 看全部开关）\n");
+    fflush(stdout);
     while (!quit) {
         if (g_stop_requested) {
             printf("window: 收到停止请求，准备退出（写回存档）…\n");

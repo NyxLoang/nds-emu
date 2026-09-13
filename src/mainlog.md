@@ -626,3 +626,26 @@
   但换来的是「声音与画面长时间不再越拉越远」。仍保留上限 30 s，防止「进程被挂起几分钟后拼命追帧」。
 - **开关**：`NDS_PACE_DEBT_MS=N`（毫秒）可调上限；设成 100 可复现旧行为做 A/B。
 - **零回归**：锚点 2000 帧截图仍 `A72E11A2…CC513`、savechip 同值、单测 976 项 0 失败。
+
+## 2026-09-13 · 21-B9yi（续104）：`--help` 用法说明 + 窗口启动按键提示（上手体验）
+
+- **动机**：此前要玩/要测都得翻 README 找按键与开关；`--help` 和启动提示能省掉这一步
+  （对学习型项目也友好：所有开关、诊断环境变量一处可见）。
+- **做了什么**：
+  1. 新增 `usage()`：打印「怎么玩（按键/鼠标/Tab/F5/F8/菜单栏）」+ 常用选项
+     （`--frames` / `--fps-every` / `--speed` / `--snd-wav` / `--load-state` / `--save-state`
+     / `--headless-frames` / `--key-random` / `--touch-random` / `--screen-hash-every`
+     / `--stats-every` / `--shot` / `--dump` / `--watch`）+ 常用环境变量
+     （`NDS_NOSYNC` / `NDS_PACE_DEBT_MS` / `NDS_FF_MUL` / `NDS_SNDSTAT` / `NDS_UNKIOSUM`
+     / `NDS_STATEDBG` / `NDS_TRACE_FRAME`+`NDS_TRACE_COUNT` / `NDS_NORENDER` / `NDS_NOAUDIO`）；
+     窗口与无头两条参数解析路径都支持 `--help` / `-h`（Windows 侧把可执行名转 UTF-8 打印）。
+  2. 窗口启动时打两行按键提示（含「`--help` 看全部开关」）。
+- **怎么验证**：
+  ```
+  build\nds-emu.exe --help           → 打印完整用法（含按键表与开关/环境变量表）
+  build\nds-emu.exe <ROM> --frames 120
+      → window: 按键 Z/X/S/D=A/B/X/Y … / window: 鼠标按住底屏=触摸屏 Tab=快进 F5/F8=即时存档/读档 …
+      → summary frames=120 elapsed=2006 ms avg=59.8 fps
+  单测 976 项 0 失败
+  ```
+- **结果**：✅ 保留。（新增开关时记得同步 `usage()` 与 README 开关表。）

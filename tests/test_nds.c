@@ -1228,9 +1228,36 @@ static void test_main_ram_mirror(nds_t *nds)
     CHECK_EQ("mirror last word",
              bus_read32(nds->bus, BUS_MAIN_RAM_BASE + BUS_MAIN_RAM_SIZE - 4), 0x10203040u);
 
-    /* 越界：镜像上界 0x02800000 读 0 */
-    CHECK_EQ("mirror beyond",
-             bus_read8(nds->bus, BUS_MAIN_RAM_MIRROR_BASE + BUS_MAIN_RAM_SIZE), 0x00u);
+    /* 21-B9yi(续109)：**整个 0x02400000-0x02FFFFFF 窗口**都按 4MB 掩码解码到主存。
+       实际触发场景：Pokemon 黑2（NDS 商业 ROM）双核引导握手用 0x02FFFC24/26
+       （物理 = 0x023FFC24/26）；本地此前只映射到 0x027FFFFF ⇒ 读回 0、写被忽略，
+       ARM9/ARM7 各在自己的等待循环里死等，画面全白。 */
+    bus_write16(nds->bus, BUS_MAIN_RAM_BASE + 0x3FFC24, 0x1357u);
+    CHECK_EQ("handshake 02FFFC24 aliases main 023FFC24",
+             bus_read16(nds->bus, 0x02FFFC24u), 0x1357u);
+    bus_write16(nds->bus, 0x02FFFC26u, 0x2468u);
+    CHECK_EQ("handshake write 02FFFC26 lands in main",
+             bus_read16(nds->bus, BUS_MAIN_RAM_BASE + 0x3FFC26), 0x2468u);
+
+    /* 4MB 周期镜像：0x02A00000 在窗口里的下标 = 0xA00000 & 0x3FFFFF = 0x200000
+       ⇒ 与主存 0x02201234 同一字节（不是 0x02001234）。 */
+    bus_write32(nds->bus, 0x02A01234u, 0xC0FFEE01u);
+    CHECK_EQ("4MB periodic mirror aliases main 0x2201234",
+             bus_read32(nds->bus, BUS_MAIN_RAM_BASE + 0x201234u), 0xC0FFEE01u);
+    CHECK_EQ("4MB periodic mirror reads back",
+             bus_read32(nds->bus, 0x02A01234u), 0xC0FFEE01u);
+
+    /* ARM7 视角同口径（melonDS ARM7 命中 0x02000000/0x02800000 两个窗口） */
+    nds->bus->active_is_arm7 = 1;
+    bus_write16(nds->bus, 0x02FFFC24u, 0xBEEFu);
+    CHECK_EQ("arm7 02FFFC24 lands in main",
+             bus_read16(nds->bus, BUS_MAIN_RAM_BASE + 0x3FFC24), 0xBEEFu);
+    nds->bus->active_is_arm7 = 0;
+
+    /* 窗口末字节仍属主存（0x02FFFFFF = 主存最后一字节） */
+    bus_write8(nds->bus, 0x02FFFFFFu, 0x5Au);
+    CHECK_EQ("window last byte aliases main top",
+             bus_read8(nds->bus, BUS_MAIN_RAM_BASE + BUS_MAIN_RAM_SIZE - 1), 0x5Au);
 }
 
 /* ---- 阶段 21-B8 用例：ARM9 DTCM / ITCM 与 Main RAM 镜像互不覆盖 ---- */
@@ -4075,7 +4102,9 @@ static void test_thumb_branch(nds_t *nds)
     thumb_start(nds, base);
     cpu_step(cpu); cpu_step(cpu);
     CHECK_EQ("thumb BL PC", cpu->r[15], base + 0x20);
-    CHECK_EQ("thumb BL LR", cpu->r[14], (base + 6) | 1u);
+    /* 21-B9yi(续109c)：BL 的返回地址 = BL 之后那条指令（base+4）| 1。
+       此前断言的是 (base+6)|1（= 后缀地址 + 4），比规范大 2 ⇒ 返回时跳过一条指令。 */
+    CHECK_EQ("thumb BL LR", cpu->r[14], (base + 4) | 1u);
     CHECK_EQ("thumb BL T", (cpu->cpsr & CPSR_T) ? 1u : 0u, 1u);
     thumb_stop(nds);
 
@@ -4085,8 +4114,22 @@ static void test_thumb_branch(nds_t *nds)
     thumb_start(nds, base);
     cpu_step(cpu); cpu_step(cpu);
     CHECK_EQ("thumb BLX PC", cpu->r[15], base + 0x20);
-    CHECK_EQ("thumb BLX LR", cpu->r[14], (base + 6) | 1u);
+    CHECK_EQ("thumb BLX LR", cpu->r[14], (base + 4) | 1u);
     CHECK_EQ("thumb BLX T", (cpu->cpsr & CPSR_T) ? 1u : 0u, 0u);
+    thumb_stop(nds);
+
+    /* 21-B9yi(续109)：BLX 目标必须**字对齐**（清 bit0/bit1），不是只清 bit0。
+       第一半字 0xF000（LR=base+4），第二半字 0xE80F（off=30）⇒ 原始和 = base+0x22
+       （bit1=1），正确目标是 base+0x20。Pokemon 黑2 引导期就是踩到这一格：
+       本地跑成 0x0207BDC6（非字对齐）后按 ARM 译码执行 Thumb 字节 ⇒ 未定义指令
+       ⇒ 进未定义异常停死、画面全白；参考核落在 0x0207BDC4。 */
+    static const uint16_t blx_odd[] = { 0xF000, 0xE80F };
+    thumb_write(nds, base, blx_odd, 2);
+    thumb_start(nds, base);
+    cpu_step(cpu); cpu_step(cpu);
+    CHECK_EQ("thumb BLX word-aligns PC", cpu->r[15], base + 0x20);
+    CHECK_EQ("thumb BLX odd LR", cpu->r[14], (base + 4) | 1u);
+    CHECK_EQ("thumb BLX odd T", (cpu->cpsr & CPSR_T) ? 1u : 0u, 0u);
     thumb_stop(nds);
 
     /* SWI #0x09 Div：r0=20, r1=6 → r0=3, r1=2, r3=3 */

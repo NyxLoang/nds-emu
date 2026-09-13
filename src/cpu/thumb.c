@@ -352,15 +352,30 @@ int thumb_step(arm_cpu_t *cpu, uint16_t insn)
             cpu->r[15] += 2;
             return 1;
         } else if (top == 0x1Fu) {
-            /* BL 第二半字：PC = LR + (offset11 << 1)；LR = 第二半字 PC | 1；保持 Thumb */
+            /* BL 第二半字：PC = LR + (offset11 << 1)；LR = BL 下一条指令地址 | 1；保持 Thumb。
+               21-B9yi(续109c)：LR 必须是 `(pc - 2) | 1` —— 本步的 r[15] 是**第二半字**
+               地址 S（= BL 地址 A + 2），而流水线 pc = S + 4；规范/参考核要的是
+               「BL 之后那条指令」= A + 4 = S + 2 = pc - 2。此前写成 `pc | 1` ⇒ 返回地址
+               比正确值大 2 ⇒ 返回时**跳过紧邻的一条 2 字节指令**（Pokemon 黑2 的
+               0x0207C67E `subs r0,r5,#4` 就是这样被跳掉的，导致 IPCSYNC 指针变成 0、
+               引导期死循环）。对照 melonDS `T_BL_LONG_2`：`R[14] = (R[15]-2) | 1`
+               （其 R[15] 也是流水线值 = S + 4）。 */
             uint32_t target = cpu->r[14] + ((insn & 0x7FFu) << 1);
-            cpu->r[14] = (pc | 1u);
+            cpu->r[14] = ((pc - 2u) | 1u);
             cpu->r[15] = target;
             return 1;
         } else if (top == 0x1Du) {
-            /* BLX 第二半字：PC = LR + (offset11 << 1)；LR = 第二半字 PC | 1；切 ARM(T=0) */
-            uint32_t target = (cpu->r[14] + ((insn & 0x7FFu) << 1)) & ~1u;
-            cpu->r[14] = (pc | 1u);
+            /* BLX 第二半字：PC = (LR + (offset11 << 1)) **字对齐**；LR = 第二半字 PC | 1；
+               切 ARM(T=0)。
+               21-B9yi(续109)：这里必须是 `& ~3`（清 bit0/bit1），不是 `& ~1` ——
+               ARM ARM 对 Thumb `BLX <label>` 的规定是「H 位丢弃、目标按字对齐」，
+               因为目标是 ARM 指令（4 字节对齐）。本地此前只清 bit0 ⇒ 当
+               `LR + (offset11<<1)` 的 bit1 为 1 时，目标会**偏 +2**，于是在一个
+               非字对齐地址按 ARM 译码执行 Thumb 字节 ⇒ 取到未定义指令、
+               进未定义异常后停死（Pokemon 黑2 引导期 f≈11 就是这样卡住的：
+               正确目标 0x0207BDC4，本地跑成 0x0207BDC6）。 */
+            uint32_t target = (cpu->r[14] + ((insn & 0x7FFu) << 1)) & ~3u;
+            cpu->r[14] = ((pc - 2u) | 1u);
             cpu->cpsr &= ~CPSR_T;
             cpu->r[15] = target;
             return 1;

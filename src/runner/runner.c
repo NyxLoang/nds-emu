@@ -261,11 +261,12 @@ static void trace_step(const char *who, const runner_t *r, const arm_cpu_t *cpu)
     uint32_t inst = 0;
     if (cpu->r[15] >= 0x02000000u && cpu->r[15] < 0x03000000u)
         inst = bus_read32(r->nds->bus, cpu->r[15]);
-    printf("tr %s pc=%08X r0=%08X r1=%08X r2=%08X r3=%08X r7=%08X sp=%08X"
+    printf("tr %s pc=%08X r0=%08X r1=%08X r2=%08X r3=%08X r4=%08X r5=%08X r6=%08X r7=%08X sp=%08X"
            " lr=%08X cpsr=%08X cyc=%llu if9=%08X if7=%08X now=%llu"
            " t70=%04X/%04X/%u t71=%04X/%04X/%u inst=%08X"
            " dtcm=%d/%08X/%08X w9=%d w7=%d tc7=%llu ov70=%llu ov71=%llu\n",
            who, cpu->r[15], cpu->r[0], cpu->r[1], cpu->r[2], cpu->r[3],
+           cpu->r[4], cpu->r[5], cpu->r[6],
            cpu->r[7], cpu->r[13], cpu->r[14], cpu->cpsr,
            (unsigned long long)cpu->cycles,
            r->nds->io->irq[0].ifl, r->nds->io->irq[1].ifl,

@@ -61,6 +61,12 @@
 /* 地址区间基址（内存地图见 docs/03-memory-map.md） */
 #define BUS_MAIN_RAM_BASE 0x02000000u
 #define BUS_MAIN_RAM_MIRROR_BASE 0x02400000u /* Main RAM 无缓存镜像基址（别名） */
+/* 21-B9yi(续109)：真机/melonDS 对**整个 0x02000000-0x02FFFFFF（16MB）窗口**都按
+   4MB 掩码解码到同一块主存（`MainRAM[addr & 0x3FFFFF]`），所以镜像不是只到
+   0x02800000：0x023FFC24 / 0x027FFC24 / 0x02BFFC24 / 0x02FFFC24 是**同一个字节**。
+   窗口上界（不含）＝ Shared WRAM 主区基址。 */
+#define BUS_MAIN_RAM_WINDOW_END 0x03000000u
+#define BUS_MAIN_RAM_MASK (BUS_MAIN_RAM_SIZE - 1u)
 #define BUS_SHARED_WRAM_BASE 0x03000000u       /* Shared WRAM 主区基址 */
 #define BUS_SHARED_WRAM_MIRROR 0x037F8000u     /* Shared WRAM 镜像区基址（别名） */
 #define BUS_VRAM_BASE     0x06000000u

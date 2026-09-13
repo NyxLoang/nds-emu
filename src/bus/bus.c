@@ -528,17 +528,15 @@ static int bus_resolve(const bus_t *bus, uint32_t addr,
         *off = (size_t)(addr - bus->arm9_dtcm_base);
         return 1;
     }
-    /* Main RAM 无缓存镜像：0x02400000 起 4MB，与主区同一物理数组（别名，阶段 21-B3）。
-       换算规则与主区相同：区间内下标 = addr - 镜像基址。
-       21-B8：镜像本身只是 ARM9 的“绕过缓存”通道，但同一段 0x024-0x027 地址
-       在 ARM7 总线也解码到这块 4MB 主存（melonDS ARM7 也命中 0x02000000/
-       0x02800000 两个窗口）。之前把 ARM7 拦在镜像外是因为没实现 DTCM——ARM7
-       拷贝会覆盖“看似 ARM9 栈”的主存字节；真正原因是那些字节应属于 ARM9
-       DTCM，与主存镜像无关。 */
-    if (addr >= BUS_MAIN_RAM_MIRROR_BASE &&
-        addr - BUS_MAIN_RAM_MIRROR_BASE < BUS_MAIN_RAM_SIZE) {
+    /* Main RAM 无缓存镜像 + 4MB 反复镜像：0x02400000-0x02FFFFFF（别名，21-B3/B8）。
+       21-B9yi(续109) 修正解码口径：真机/melonDS 是把**整个 0x02xxxxxx 16MB 窗口**
+       按 4MB 掩码解码（`MainRAM[addr & 0x3FFFFF]`），而不是只到 0x027FFFFF。
+       触发这一条的实际案例：Pokemon 黑2 的双核引导握手用 0x02FFFC24/26（物理
+       0x023FFC24），本地此前读回 0、写被忽略 ⇒ 两核互等死锁、画面全白。
+       注意顺序：ARM9 DTCM 判定必须在前面（DTCM 常配在 0x027E0000，落在窗口内）。 */
+    if (addr >= BUS_MAIN_RAM_MIRROR_BASE && addr < BUS_MAIN_RAM_WINDOW_END) {
         *region = bus->main_ram;
-        *off = (size_t)(addr - BUS_MAIN_RAM_MIRROR_BASE);
+        *off = (size_t)(addr & BUS_MAIN_RAM_MASK);
         return 1;
     }
     /* 21-B9wd：Engine A/B 的 BG/OBJ 逻辑窗口先按 VRAMCNT 映射解析 */
@@ -701,8 +699,9 @@ static int bus_resolve_mem(const bus_t *bus, uint32_t addr,
             return 1;
         }
     }
-    if (addr >= BUS_MAIN_RAM_MIRROR_BASE) {
-        rel = (size_t)(addr - BUS_MAIN_RAM_MIRROR_BASE);
+    /* 21-B9yi(续109)：与 bus_resolve 同口径 —— 0x02400000-0x02FFFFFF 按 4MB 掩码。 */
+    if (addr >= BUS_MAIN_RAM_MIRROR_BASE && addr < BUS_MAIN_RAM_WINDOW_END) {
+        rel = (size_t)(addr & BUS_MAIN_RAM_MASK);
         if (rel < BUS_MAIN_RAM_SIZE) {
             *region = bus->main_ram;
             *off = rel;

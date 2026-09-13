@@ -287,6 +287,11 @@ static void trace_step(const char *who, const runner_t *r, const arm_cpu_t *cpu)
 static uint32_t s_h9_pc[1 << 16];
 static uint64_t s_h9_cnt[1 << 16];
 static uint64_t s_h9_total;
+/* 21-B9yi(续108)：ARM7 也来一份 —— 跨核热点对照要两边、两核都能比。
+   （原先只有 ARM9：查「与参考核分叉」时只能看到一半。） */
+static uint32_t s_h7_pc[1 << 16];
+static uint64_t s_h7_cnt[1 << 16];
+static uint64_t s_h7_total;
 /* 21-B9yi(续41)：热点 PC 直方图是**诊断**设施，此前**每条 ARM9 指令**都在更新
    （64KB 数组的随机写 + 计数，缓存局部性极差），是解释器最热的纯开销之一。
    改成只在 `NDS_PCHOT=1` 时统计（默认关闭）。 */
@@ -843,6 +848,13 @@ static int runner_step(runner_t *r)
         if (!r->a7_wait) r->cost7 += nds->cpu7->step_cycles;
         if (trace_enabled() && runner_frame_index(r) >= s_trace_frame)
             trace_step("7", r, nds->cpu7);
+        if (s_h9_on != 0) {   /* 21-B9yi(续108)：ARM7 热点（与 hot9 同口径） */
+            uint32_t pc = nds->cpu7->r[15];
+            uint32_t h = (pc >> 4) & 0xFFFFu;
+            s_h7_pc[h] = pc;
+            s_h7_cnt[h]++;
+            s_h7_total++;
+        }
     } else {
         cpu_step(nds->cpu);
         r->a9_wait = (nds->cpu->step_cycles == 0);
@@ -1641,6 +1653,18 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
             s_h9_cnt[bh] = 0;
         }
         printf("hot9: total=%llu\n", (unsigned long long)s_h9_total);
+        for (int hi = 0; hi < 16; hi++) {   /* 21-B9yi(续108)：ARM7 热点 */
+            uint32_t best = 0, bh = 0;
+            for (uint32_t h = 0; h < (1u << 16); h++)
+                if (s_h7_cnt[h] > best) { best = (uint32_t)s_h7_cnt[h]; bh = h; }
+            if (best == 0)
+                break;
+            printf("hot7: pc=%08X cnt=%llu (%.1f%%)\n", s_h7_pc[bh],
+                   (unsigned long long)s_h7_cnt[bh],
+                   s_h7_total ? 100.0 * (double)s_h7_cnt[bh] / (double)s_h7_total : 0.0);
+            s_h7_cnt[bh] = 0;
+        }
+        printf("hot7: total=%llu\n", (unsigned long long)s_h7_total);
         }
         const uint16_t *g3 = gx_framebuffer(&nds->io->gx);
         size_t n3 = 0;

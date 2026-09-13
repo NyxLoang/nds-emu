@@ -62,6 +62,59 @@ static void watch_write(int who, const char* op, u32 addr, u64 val,
     std::fflush(stdout);
 }
 
+/* 21-B9yi(续108)：**地址命中日志** `REF_PCHIT_LO/HI`（16 进制、半开区间）。
+   动机：查「参考核到底有没有执行这段代码」时，只看*内存写入*有盲区（函数可能只是
+   读/比较/调用），所以这里挂在 `ARM9Read16/32` 上，试图把「取指」也记下来
+   （取指特征 = 读地址等于当前指令地址）。
+
+   **负结果（重要）**：在本版 melonDS 上这个钩子**抓不到取指** —— 指令取指走的是
+   `ARM.h` 里的内联快路径 `CodeRead16/32() → BusRead16/32()`，根本不进虚拟的
+   `NDS::ARM9Read16/32`（实测：对「确定会被执行」的 0x0200B800-0x0200B840 也是 0 命中）。
+   ⇒ 它现在只对**数据读**有意义；要做真正的「执行了哪段代码」的对照，需要给参考树
+   打补丁（在 ARM.cpp 的 `JumpTo()`/取指处挂钩，`MonitorARM9Jump` 不是 virtual，
+   覆写不了）。这条记录留着，免得下一个人再踩一遍。 */
+static u32 g_pchit_lo = 0, g_pchit_hi = 0;
+static int g_pchit_on = -1, g_pchit_n = 0, g_pchit_max = 2000;
+
+static void pchit_init(void)
+{
+    if (g_pchit_on >= 0)
+        return;
+    g_pchit_on = 0;
+    const char* lo = std::getenv("REF_PCHIT_LO");
+    const char* hi = std::getenv("REF_PCHIT_HI");
+    if (lo && hi) {
+        g_pchit_lo = (u32)std::strtoul(lo, nullptr, 16);
+        g_pchit_hi = (u32)std::strtoul(hi, nullptr, 16);
+        if (g_pchit_lo < g_pchit_hi)
+            g_pchit_on = 1;
+    }
+    if (const char* m = std::getenv("REF_PCHIT_MAX"))
+        g_pchit_max = std::atoi(m);
+}
+
+static void pchit_check(int who, u32 addr, u32 pc, u32 cpsr)
+{
+    pchit_init();
+    if (!g_pchit_on || g_pchit_n >= g_pchit_max)
+        return;
+    // 取指 = 读地址落在当前指令处（ARM: pc-4 / pc-8；Thumb: pc-2 / pc-4）
+    bool isfetch = false;
+    if (!(cpsr & 0x20)) {   // ARM
+        if (addr == (pc - 4) || addr == (pc - 8)) isfetch = true;
+    } else {                // Thumb
+        if (addr == (pc - 2) || addr == (pc - 4)) isfetch = true;
+    }
+    if (!isfetch)
+        return;
+    if (addr < g_pchit_lo || addr >= g_pchit_hi)
+        return;
+    g_pchit_n++;
+    std::printf("refpc arm%d fetch=%08X pc=%08X cpsr=%08X f=%d\n",
+                who == 0 ? 9 : 7, addr, pc, cpsr, g_trace_frame);
+    std::fflush(stdout);
+}
+
 /* 21-B9yi(续86)：REF_WAV=路径 → 把参考核 SPU 的输出写成 WAV
    （32768Hz / 16bit / 立体声），与本地 `--snd-wav` 同口径对照「声音」。
    melonDS 的 RunFrame() 末尾会 SPU.BufferAudio()，所以无音频前端也会产样本。 */
@@ -396,6 +449,18 @@ public:
     {
         watch_write(0, "w8", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR);
         NDS::ARM9Write8(addr, val);
+    }
+
+    u16 ARM9Read16(u32 addr) override
+    {
+        pchit_check(0, addr & ~1u, ARM9.R[15], ARM9.CPSR);
+        return NDS::ARM9Read16(addr);
+    }
+
+    u32 ARM9Read32(u32 addr) override
+    {
+        pchit_check(0, addr & ~3u, ARM9.R[15], ARM9.CPSR);
+        return NDS::ARM9Read32(addr);
     }
 
     void ARM9Write16(u32 addr, u16 val) override

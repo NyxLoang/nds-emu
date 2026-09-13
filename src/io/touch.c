@@ -1,5 +1,6 @@
 #include "touch.h"
 #include <stdio.h>
+#include <stdlib.h>   /* 21-B9yi(续108)：getenv（NDS_FW_CAL 校准口径开关） */
 
 /* 触摸屏是否被选中：SPI 使能 且 设备选择 = 触摸(2)。 */
 static int touch_active(const touch_t *t)
@@ -69,9 +70,41 @@ static uint16_t fw_crc16(const uint8_t *p, int len)
 
 /* 用户设置镜像前 0x70 字节的默认内容（两个镜像共用；Update Counter 单独处理）。
    布局参考 DS 固件文档/开源模拟器默认设置：version=5、语言标志、触摸校准、
-   生日/昵称等字段。 */
+   生日/昵称等字段。
+
+   21-B9yi(续108)：**校准口径开关** `NDS_FW_CAL=flat`。
+   本机的默认用户区用的是「出厂默认」校准（ADC 0x200↔像素 33、0xE00↔225，
+   见下），窗口鼠标→ADC 的换算（`runner_touch_adc`/main.c 的鼠标触点）与它配套；
+   而参考核（melonDS 生成的固件）用的是「0↔0、0x0FF0↔255」的线性映射。
+   两者各自自洽，但**游戏会把用户区原样拷进主存 0x027FFC80 并按它决定触控行为**
+   —— 跨核对账时这是一处已知混杂项（实测会让游戏多发一条 IPC 消息、f≈285 起状态分叉）。
+   打开这个开关就把校准换成参考核那一套，便于「单变量」对照（默认关闭，不影响手感）。 */
+static int fw_cal_flat(void)
+{
+    static int st = -1;
+    if (st < 0) {
+        const char *e = getenv("NDS_FW_CAL");
+        st = (e != NULL && e[0] == 'f') ? 1 : 0;   /* flat */
+    }
+    return st;
+}
+
 static uint8_t fw_user_body(uint32_t off)
 {
+    if (fw_cal_flat()) {
+        /* 参考核口径：x1/y1 的 ADC 与像素都为 0，x2=0x0FF0→255、y2=0x0BF0→191 */
+        switch (off) {
+        case 0x58: case 0x59: case 0x5A: case 0x5B:
+        case 0x5C: case 0x5D: return 0x00;
+        case 0x5E: return 0xF0;   /* ADC x2 = 0x0FF0 */
+        case 0x5F: return 0x0F;
+        case 0x60: return 0xF0;   /* ADC y2 = 0x0BF0 */
+        case 0x61: return 0x0B;
+        case 0x62: return 0xFF;   /* 像素 x2 = 255 */
+        case 0x63: return 0xBF;   /* 像素 y2 = 191 */
+        default: break;
+        }
+    }
     switch (off) {
     case 0x00: return 0x05;                /* version（小端） */
     case 0x02: return 0x07;                /* favoriteColor */

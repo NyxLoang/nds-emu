@@ -40,4 +40,7 @@ typedef struct arm_cpu arm_cpu_t; /* 前向声明：bios 只操作寄存器/总�
 /* HLE 分发：按 SWI 函数号 n（= swi_num>>16）调用对应实现。 */
 int bios_dispatch(uint32_t n, arm_cpu_t *cpu);
 
+/* 21-B9yi(续94)：CpuSet/CpuFastSet 调用次数与拷贝总量（跑完打印一行，判断突发帧是否来自大块 HLE 拷贝） */
+void bios_mem_report(void);
+
 #endif /* NDS_EMU_BIOS_H */

@@ -908,7 +908,13 @@ int main(int argc, char *argv[])
             irq_logged = 1;
         }
 
-        if (!skip_render) {
+        /* 21-B9yi(续95)：**快进时隔帧渲染**。
+           快进时音频已静音（见续92），观众要的是速度不是画面 ⇒ 隔帧跳过宿主渲染
+           （ppu_render + Clear/menu/Present 实测 2.4~4.8 ms/帧），
+           让重场景的快进倍率更接近 4×（续92b 实测重场景只有 ~1.1×）。
+           注意：只跳过**宿主渲染**，模拟（runner_run_frame）与音频状态照常推进。 */
+        int ff_skip_frame = (ff_hold && ((frames_done & 1u) != 0));
+        if (!skip_render && !ff_skip_frame) {
             uint64_t r0 = (g_cli_fps_every != 0) ? SDL_GetPerformanceCounter() : 0;
             /* 清屏（物理坐标） */
             SDL_SetRenderDrawColor(renderer, 45, 45, 45, 255);

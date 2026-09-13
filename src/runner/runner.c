@@ -124,6 +124,7 @@ static void runner_apply_watch(nds_t *nds)
 #include "snd/snd.h"      /* snd_advance / snd_host_render_active（21-B9wu） */
 #include "io/rtc.h"       /* rtc_advance_seconds（21-B9wx） */
 #include "bios/bios7_low.h" /* bios7_low_dump_hist（21-B9ye） */
+#include "bios/bios.h"      /* bios_mem_report（21-B9yi 续94：CpuSet/CpuFastSet 统计） */
 #include "runner.h"
 #include "timing/timing.h"
 
@@ -1387,6 +1388,7 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
         free(fb_bot);
     }
     bios7_low_dump_hist("end"); /* 21-B9ye：低地址取指直方图（与参考核 hist7 对照） */
+    bios_mem_report();          /* 21-B9yi(续94)：大块 HLE 拷贝的规模统计 */
     runner_wav_close();   /* 21-B9yi(续85)：收尾回填 WAV 头（在此之前文件是流式写的） */
     runner_destroy(r);
     fflush(stdout);

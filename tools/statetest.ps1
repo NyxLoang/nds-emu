@@ -49,19 +49,37 @@ Get-ChildItem $Work -Filter "*.state" -ErrorAction SilentlyContinue | Remove-Ite
 
 $t0 = Get-Date
 
+# 21-B9yi(续107): the emulator now writes the battery save back to "<rom>.sav" on
+# exit -- in headless mode too.  For a *comparison* both runs must therefore start
+# from the same save content, so snapshot it once and restore it before every run.
+$savPath = [System.IO.Path]::ChangeExtension($Rom, ".sav")
+$savHad = Test-Path $savPath
+$savBackup = if ($savHad) { [System.IO.File]::ReadAllBytes($savPath) } else { $null }
+function Reset-Sav {
+    if ($savHad) {
+        [System.IO.File]::WriteAllBytes($savPath, $savBackup)
+    } elseif (Test-Path $savPath) {
+        Remove-Item $savPath -Force
+    }
+}
+
 Write-Host ("[1/3] continuous: run {0} frames (target frame {1})" -f ($Frame + $Run), ($Frame + $Run))
 $argvC = @($Rom, "--headless-frames", "$($Frame + $Run)") + $extraArgs + @("--dump", $prefixC)
+Reset-Sav
 $outC = & $Exe @argvC 2>&1
 
 Write-Host ("[2/3] save state at frame {0}" -f $Frame)
 $argvS = @($Rom, "--headless-frames", "$Frame",
            "--state-save-frame", "$Frame", "--save-state", $state) + $extraArgs
+Reset-Sav
 $outS = & $Exe @argvS 2>&1
 
 Write-Host ("[3/3] load state + run {0} frames" -f $Run)
 $argvL = @($Rom, "--load-state", $state, "--headless-frames", "$Run") + $extraArgs + @("--dump", $prefixL)
 if ($DebugCmd) { Write-Host ("  cmd: {0} {1}" -f $Exe, ($argvL -join " ")) }
+Reset-Sav
 $outL = & $Exe @argvL 2>&1
+Reset-Sav   # leave the caller's battery save exactly as we found it
 
 $fail = 0
 foreach ($p in $parts) {

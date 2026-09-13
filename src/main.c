@@ -39,6 +39,44 @@ static const char *utf8_path(const wchar_t *w)
     return buf;
 }
 #endif
+
+/* 21-B9yi(续107)：存档芯片写回 `<rom>.sav`，**窗口与无头两条退出路径共用**。
+   此前只有窗口路径写回 ⇒ 无头跑出来的「游戏内存档」一退出就丢，既不符合真机语义，
+   也让「游戏内存档」这一项在自动化里没法验证（跑完 2000 帧的游戏内保存会连文件都不生成）。 */
+static void save_writeback(nds_t *nds,
+#ifdef _WIN32
+                           const wchar_t *path)
+{
+    if (nds == NULL || path == NULL)
+        return;
+    if (save_save_file_w(io_get_save(nds->io), path) == 0)
+        printf("save : stored %s\n", utf8_path(path));
+    else
+        printf("save : failed to write %s\n", utf8_path(path));
+}
+static int save_file_exists(const wchar_t *path)
+{
+    return path != NULL && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
+}
+#else
+                           const char *path)
+{
+    if (nds == NULL || path == NULL)
+        return;
+    if (save_save_file(io_get_save(nds->io), path) == 0)
+        printf("save : stored %s\n", path);
+    else
+        printf("save : failed to write %s\n", path);
+}
+static int save_file_exists(const char *path)
+{
+    FILE *f = (path != NULL) ? fopen(path, "rb") : NULL;
+    if (f == NULL)
+        return 0;
+    fclose(f);
+    return 1;
+}
+#endif
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
@@ -673,19 +711,25 @@ int main(int argc, char *argv[])
 #ifdef _WIN32
         save_path = save_make_path_w(rom_path);
         if (save_path != NULL) {
+            int have = save_file_exists(save_path);
             save_load_file_w(io_get_save(nds->io), save_path);
             /* 21-B9yi(续42)：改成 UTF-8 打印路径。此前 `%ls` 在控制台
                （已切 UTF-8）遇到中文 ROM 名会在第一个中文处截断，
-               看起来像「路径被吃掉」。 */
-            printf("save : loaded %s (%zu bytes)\n",
+               看起来像「路径被吃掉」。
+               21-B9yi(续107)：`save_load_file*()` 对「文件不存在」也返回 0，
+               所以旧消息无论有没有存档都打 “loaded”（调试时极容易看错）；
+               这里先判存在性再决定措辞。 */
+            printf("save : %s %s (%zu bytes)\n", have ? "loaded" : "new   ",
                    utf8_path(save_path),
                    io_get_save(nds->io)->size);
         }
 #else
         save_path = save_make_path(rom_path);
         if (save_path != NULL) {
+            int have = save_file_exists(save_path);
             save_load_file(io_get_save(nds->io), save_path);
-            printf("save : loaded %s (%zu bytes)\n", save_path,
+            printf("save : %s %s (%zu bytes)\n", have ? "loaded" : "new   ",
+                   save_path,
                    io_get_save(nds->io)->size);
         }
 #endif
@@ -723,6 +767,9 @@ int main(int argc, char *argv[])
         if (dump_prefix != NULL)
             dump_state(nds, dump_prefix);
 #endif
+        /* 21-B9yi(续107)：无头路径也要把存档写回 `<rom>.sav`（此前只有窗口路径写，
+           于是无头跑出的游戏内存档一退出就丢，且「存档」这项无法自动化验证）。 */
+        save_writeback(nds, save_path);
         if (save_path != NULL)
             free(save_path);
         cart_free(cart);
@@ -1264,22 +1311,11 @@ int main(int argc, char *argv[])
         fflush(stdout);
     }
 
-    /* 阶段 16：退出前把存档写回 .sav（须在 nds_destroy 释放存档缓冲之前）。 */
-    if (save_path != NULL) {
-#ifdef _WIN32
-        if (save_save_file_w(io_get_save(nds->io), save_path) == 0)
-            printf("save : stored %s\n", utf8_path(save_path));
-        else
-            printf("save : failed to write %s\n", utf8_path(save_path));
+    /* 阶段 16：退出前把存档写回 .sav（须在 nds_destroy 释放存档缓冲之前）。
+       21-B9yi(续107)：与无头路径共用同一实现 `save_writeback()`。 */
+    save_writeback(nds, save_path);
+    if (save_path != NULL)
         free(save_path);
-#else
-        if (save_save_file(io_get_save(nds->io), save_path) == 0)
-            printf("save : stored %s\n", save_path);
-        else
-            printf("save : failed to write %s\n", save_path);
-        free(save_path);
-#endif
-    }
 
     menu_shutdown();
     audio_shutdown();

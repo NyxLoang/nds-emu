@@ -7110,6 +7110,50 @@ load+test 即返回。实测战斗场景 **55.6 fps / emulation 4504 ms**，改�
    （锚点、逐像素对照、逐帧统计），风险高于 PGO；
 3. 继续用 A/B 开关（不是加桶）逐项排除 `cpu_step` 里的每步判断。
 
+### 21-B9yi（续112）：**PGO 落地 —— 战斗场景达标 59.9 fps（-21.5% 墙钟）**
+
+**做法**（两阶段必须用**同一个构建目录**，gcc 是按对象路径找 `.gcda` 的）：
+
+```powershell
+# 1) 生成阶段
+cmake -S . -B build-pgo -DNDS_PROF=OFF -DCMAKE_C_FLAGS="-fprofile-generate"
+cmake --build build-pgo --target nds-emu
+# 2) 采集负载（战斗场景 2500 帧 + 自然输入开机 2500 帧；共 238 个 .gcda）
+build-pgo\nds-emu.exe tools\rom_ascii.nds --load-state build\battle.state --headless-frames 2500
+build-pgo\nds-emu.exe tools\rom_ascii.nds --headless-frames 2500 `
+    --key-random 12345 --key-period 40 --touch-random 999 --touch-period 100
+# 3) 使用阶段（同一目录重配 + 重编）
+cmake -S . -B build-pgo -DNDS_PROF=OFF -DCMAKE_C_FLAGS="-fprofile-use -fprofile-correction"
+cmake --build build-pgo --target nds-emu
+```
+
+**证据（同负载交替两轮，`--load-state build\battle.state --headless-frames 1200`）**：
+
+```text
+build（-O3+LTO）     21,021 / 21,255 ms
+build-pgo            16,571 / 16,588 ms      ⇒ **-21.5%**（两对几乎完全一致，无噪声）
+```
+
+**行为完全一致（零回归）**：PGO 构建跑 2000 帧锚点 —— 统计/截图 SHA-256
+`74D73A3D…58314`/savechip `3A361368EF684AD7` **与普通构建逐值相同**；
+`tools\statetest.ps1 -Exe build-pgo\nds-emu.exe` **PASS**（读档逐字节重放）。
+
+**用户可见结果（战斗场景，真机节奏 59.83 fps）**：
+
+```text
+改动前：55.6 fps   （emulation 4504 ms / 300 帧 = 15.0 ms/帧）
+改动后：59.9 fps   （emulation 3677 / 3711 ms / 300 帧 = **12.3 ms/帧**）
+        phases: render ppu≈942 ms、sdl≈94 ms
+⇒ 战斗场景**达到 60 fps 预算**（16.72 ms）
+```
+
+**怎么用**：`tools\build-pgo.ps1`（纯 ASCII、参数化）一键复现上述两阶段；
+**玩/做可玩性验收时用 `build-pgo\nds-emu.exe`**（普通 `build\` 仍保留，用作「无 PGO」对照
+与 CI 式快速构建）。
+
+> 后续若还想再快：PGO 之后剩的是「每步记账」（见续111 的教训：要按 A/B 开关量，不要加桶）
+> 与「GX/定时器按批推进」（需先过保真度）。当前 60 fps 已达标，可以转去做别的验收项。
+
 ### 21-B9yi（续109i/j）：ARM7 每帧指令数对照 —— 并更正一次**计数口径陷阱**
 
 用两边同口径的每帧指令数（本地 `NDS_INSTRSTAT` / 参考核 `REF_INSTRSTAT`）量同一 ROM 的

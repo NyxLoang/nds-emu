@@ -723,3 +723,15 @@
 - **测试工具相应加了一道保险**：`tools/statetest.ps1` 现在会在三趟运行前把
   `<rom>.sav` 还原成脚本启动时的样子（跑完再还原一次）——否则「连续跑」写回的存档
   会被「读档跑」当成起始条件，比较就不再单变量。
+
+## 2026-09-13 · 21-B9yi（续108）：直启表补一步 —— 把卡带头 logo 注入 ARM9 BIOS
+
+- **背景**：`direct_boot_tables()` 一直只写 0x027FFxxx 那几张表（ROM 头副本 + 卡带 ID/CRC），
+  而参考核 melonDS 的 `NDS::SetupDirectBoot()` 还多做一步：把 ROM 头里的任天堂 logo
+  （0xC0 起 0x9C 字节）**拷进 ARM9 BIOS 偏移 0x20**（原注释：Game 需要它做 DS<->GBA 通信）。
+  FFXII 启动时确实把它读回去（`memcpy(0x020798A4, 0xFFFF0020, 0x9C)`）。
+- **改法**：`direct_boot_tables()` 里加一行 `bios9_image_set_logo(cart->data + 0xC0)`，
+  与参考核等价（数据来自玩家自己的 ROM，不额外携带）。ARM9 BIOS 区读数的实现见
+  [`src/bios/bioslog.md`](bioslog.md) 续108。
+- **验证**：单测 982 项 0 失败；本机 f=51 主存 0x020798A4 = `0x51AEFF24` 与参考核一致；
+  锚点 2000 帧截图仍 `A72E11A2…CC513`、savechip 仍 `3A361368EF684AD7`。

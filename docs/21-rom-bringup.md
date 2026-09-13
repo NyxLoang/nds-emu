@@ -6177,3 +6177,78 @@ f=200  +  200 帧  拖拽脚本（手势之间存档）      f=230  +  200 帧  
 非 0xFF 字节（那是开机写的状态寄存器内容，不是存档数据）⇒ **自动化跑不出游戏内存档**，
 「游戏内存档菜单保存」继续是人工试玩验收项；但人工保存出来的 `.sav` 从此也能在无头模式复现，
 后续可以拿真实存档做自动化回归。
+
+---
+
+### 21-B9yi（续108）：与参考核的**第一处真分叉**找到 —— ARM9 BIOS 区读 0（缺 Nintendo logo 注入）
+
+**背景**：续91 只把跨核对账做到「f=50..250 只差约 238 字节」就停了（当时没有细分帧号的
+手段，也没有可配置的写监视）。本轮先把**工具补齐**，再用它们把这条线走到底。
+
+**新工具（都已入库）**：
+
+* `tools/ref/ramdiff.ps1`：两份内存镜像的差异报告（总差异/首处/差异区间列表 + 64KB 页分布
+  + 「run 起点间隔」直方图）。直方图很好用：出现规则步长基本就是「结构体数组里某个字段不同」。
+* 参考核 harness 新增 **可配置写监视** `REF_WATCH_LO/HI/MAX`（ARM9/ARM7 的 8/16/32 位写都挂），
+  输出格式对齐本地 `--watch`，于是「同一个地址谁来写、写什么」可以逐行对照——以前 harness 里
+  的地址是硬编码的（0x02076F18 那一批），换目标就得改代码重编。
+* 参考核 harness 新增 **IPC 发送流日志** `REF_FIFO_LOG=1`（`REF_FIFO_MAX` 限条数），
+  与本地的 `--watch 04000188-0400018C` 对齐，用来逐条对照两核消息流。
+* `tools/ndsdis.py`：用 capstone 反汇编 RAM dump（ARM/Thumb）——本项目此前一直**手工解码**
+  指令字，慢且容易错。安装：`python -m pip install --target build\pycap capstone`。
+
+**定位过程（全部可复现）**：
+
+```
+1) 用 REF_RAMDUMP_FRAME 逐帧二分：f=283 仍只差 238 B，f=284 仍对齐，**f=285 差 4380 B**
+   （首个差异 0x6C200：参考核 01 / 本地 05）
+2) ramdiff 看 f=50 那 236 字节：除了一堆小变量，还看到 0x020798A4 起 156 字节
+   **参考核有数据、本地全 0**，而那段数据 = ROM 头里的任天堂 logo
+3) 参考核写监视 REF_WATCH_LO=0206C200 与本地 --watch 对照：
+      参考核：f=25 写 1（pc=02000DC4）、f=398 再写 1（同一处）
+      本地：  f=14 写 1（同一处）、**f=285 写 5**（pc=02000DE4，同一个 switch 的另一个分支）
+4) ndsdis 反汇编 0x02000CF0..：`addls pc, pc, r4, lsl #2` = 按 r4（=0x02049AF0 的返回值）
+   跳表，各分支把常量 1/2/4/5 写进同一个全局（0x0206C200）⇒ **两核拿到的「消息类型」不同**
+5) 顺着 logo 那条线：反汇编 0x02012740 得
+      `ldr r0,[pc,#0x98]`(=0xFFFF0020) / `mov r2,#0x9C` / `bl 0x02009E5C`(memcpy)
+   ⇒ 游戏执行的是 **`memcpy(0x020798A4, 0xFFFF0020, 0x9C)`**，源地址是 **ARM9 BIOS**
+6) 参考核源码里找到出处（melonDS `NDS::SetupDirectBoot()`）：
+      // Copy the Nintendo logo from the NDS ROM header to the ARM9 BIOS if using FreeBIOS
+      // Games need this for DS<->GBA comm to work
+      memcpy(ARM9BIOS.data() + 0x20, header.NintendoLogo, 0x9C);
+```
+
+**根因**：本模拟器对 ARM9 BIOS 区（`0xFFFF0000-0xFFFF3FFF`）**一律读 0**
+（只把 `0xFFFF0018` 那几条异常向量用 HLE 特判掉），既没有 FreeBIOS 镜像、也没有
+「把卡带头 logo 拷进 BIOS 偏移 0x20」这一步 ⇒ 游戏读回的 156 字节全 0。
+
+**修法（对齐参考核口径）**：
+
+1. 新增 `src/bios/bios9_image.c/h`：提供 ARM9 BIOS 区可读字节 —— 偏移 0x20..0xBB 返回
+   **运行期注入的 Nintendo logo**（调用方给的就是 ROM 头那 156 字节，所以不额外携带数据），
+   其余偏移返回 FreeBIOS ARM9 镜像；
+2. `src/bios/bios9_rom.h` 由新脚本 `tools/gen_bios9_rom.py` 从参考核同一份 FreeBIOS
+   （`bios_ntr_arm9[]`，BSD-2，头部带版权声明，与已有的 ARM7 镜像同源）生成；
+3. `bus_read8_core()` 增加 ARM9 高地址 BIOS 分支（只有 ARM9 看得到）；
+4. `direct_boot_tables()` 里 `bios9_image_set_logo(cart->data + 0xC0)` —— 与
+   melonDS 的 `memcpy(ARM9BIOS + 0x20, header.NintendoLogo, 0x9C)` 等价。
+
+**验证**：
+
+```
+单测 976 → 982 项 0 失败（新增 6 项：logo 注入后读回一致、logo 尾后仍是 FreeBIOS 字节、
+                              BIOS 只读、ARM7 视角看不到高地址 BIOS）
+端到端：本地 f=51 的主存里 0x020798A4 现在是 0x51AEFF24（= logo 首字），与参考核 f=50 完全一致
+跨核对账：f=50 的差异 236 B → **82 B**（那 156 字节 logo 差整块消失）
+锚点零回归：2000 帧截图仍 A72E11A2…CC513、stats 逐值相同、savechip 仍 3A361368EF684AD7
+```
+
+**这条线的下一步（已定位方向，未完成）**：f≈285 那 4380 B 来自**两核 IPC 消息流不同**：
+
+```
+参考核 arm9 32 条 / arm7 990 条（0..290 帧）；本地 arm9 25 条 / arm7 1182 条
+本地比参考核**多发**一条 ARM9 消息 0x80004106（参考核全程没有这条）
+本地 0x0206C200 被写成 5（switch 分支）而参考核仍是 1
+```
+
+⇒ 下一轮从「ARM7→ARM9 消息流」入手（谁多发/漏发、消息内容为何不同）。

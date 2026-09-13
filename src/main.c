@@ -19,6 +19,7 @@
 #include "ppu/ppu.h"
 #include "cart/cart.h"
 #include "cart/save.h"
+#include "bios/bios9_image.h"   /* 21-B9yi(续108)：把卡带头 logo 注入 ARM9 BIOS */
 #include "audio/audio.h"
 #include "demo/demo.h"
 #include "runner/runner.h"
@@ -148,6 +149,12 @@ static void direct_boot_tables(cart_t *cart, bus_t *bus)
 {
     if (cart == NULL || cart->size < 0x170 || bus == NULL)
         return;
+    /* 21-B9yi(续108)：把卡带头里的 Nintendo logo（0xC0 起 0x9C 字节）注入
+       ARM9 BIOS 的偏移 0x20 —— 与参考核 melonDS 的 `NDS::SetupDirectBoot()`
+       （`memcpy(ARM9BIOS.data() + 0x20, header.NintendoLogo, 0x9C)`）同口径。
+       FFXII 启动时会把这段读回去（`memcpy(0x020798A4, 0xFFFF0020, 0x9C)`），
+       本地此前读 0 ⇒ 那 156 字节永远为 0、游戏状态从 f≈50 起与参考核分叉。 */
+    bios9_image_set_logo(cart->data + 0xC0);
     /* 21-B9w: cart ID is a melonDS NDSCart::ParseROM value derived from the
        power-of-two padded ROM size, not the ASCII game code at header 0x0C.
        FFXII compares the value read back from CARD_DATA against 0x027FFC00;

@@ -48,6 +48,8 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_IODUMP_FRAME=N` | 打印第 N 帧的 2D 显示寄存器 + VRAMCNT + 颜色特效寄存器（对应本地 `NDS_IODUMP_FRAME`） |
 | `REF_WAV=路径.wav` | **把参考核 SPU 输出录成 WAV**（32768Hz/16bit/立体声），与本地 `--snd-wav` 同口径对照「声音」（21-B9yi 续86） |
 | `REF_RAMDUMP_FRAME=N` | 额外在第 N 帧 dump 主内存（`%TEMP%\ref_f<N>_mainram.bin`）。固定帧号只有 10 个，这个用来**二分定位分叉帧**（21-B9yi 续91） |
+| `REF_WATCH_LO=0206C200` / `REF_WATCH_HI=0206C210` / `REF_WATCH_MAX=N` | **可配置写监视**（16 进制、半开区间）：ARM9/ARM7 的 8/16/32 位写都打一行 `refwatch arm9 w32 a=… v=… pc=… lr=… f=…`，格式对齐本地 `--watch`，于是「同一个地址谁来写、写什么」可以逐行对照（21-B9yi 续108） |
+| `REF_FIFO_LOG=1` / `REF_FIFO_MAX=N` | **IPC 发送流日志**：每次写 0x04000188 打一行 `fifolog arm9 a=… v=… pc=… lr=… f=…`（默认上限 20000），与本地 `--watch 04000188-0400018C` 对齐，用来逐条对照两核消息流（21-B9yi 续108） |
 
 ## 主内存逐字节对账（21-B9yi 续91）
 

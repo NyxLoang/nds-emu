@@ -3,6 +3,9 @@ build/
 build-prof/
 build-prof2/
 
+# Python 辅助脚本的字节码缓存（tools/*.py）
+__pycache__/
+
 # 真实卡带 ROM：体积大且受版权保护，不进入版本库（测试用假 ROM 见 homebrew/）
 tools/*.nds
 tools/*.sav

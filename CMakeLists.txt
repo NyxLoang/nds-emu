@@ -52,6 +52,7 @@ add_library(ndscore STATIC
     src/bios/bios_snd.c
     src/bios/bios7_low.c
     src/bios/bios7_image.c
+    src/bios/bios9_image.c
     src/io/io.c
     src/io/irq.c
     src/io/timer.c

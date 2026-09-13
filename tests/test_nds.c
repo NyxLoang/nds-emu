@@ -29,6 +29,7 @@
 #include "cart/key1.h"
 #include "cart/cartbus.h"
 #include "cart/save.h"
+#include "bios/bios9_image.h"   /* 21-B9yi(续108)：ARM9 BIOS 区读数 */
 
 /* 与 ppu.h 的 framebuffer 约定保持一致（此处不 include SDL 头，故重复定义）：
    顶屏 = VRAM 起始 256×192；底屏 = VRAM + 0x18000（见 docs/05-framebuffer.md）。 */
@@ -182,6 +183,57 @@ static void test_bus_rw(nds_t *nds)
     /* IO 桩（0x4000004 现为 DISPSTAT：低字节只接受 bit3-5 IRQ 使能） */
     bus_write8(bus, BUS_IO_BASE + 0x04, 0x11);
     CHECK_EQ("io stub read8", bus_read8(bus, BUS_IO_BASE + 0x04), 0x10);
+}
+
+/* ---- 21-B9yi(续108)：ARM9 BIOS 区（0xFFFF0000-0xFFFF3FFF）可读字节 ----
+   参考核用 FreeBIOS，并且 `NDS::SetupDirectBoot()` 会把卡带头里的 Nintendo logo
+   拷进 BIOS 偏移 0x20（melonDS 注释：Game 需要它做 DS<->GBA 通信）；FFXII 自己的
+   启动代码会把那 156 字节读回去（`memcpy(0x020798A4, 0xFFFF0020, 0x9C)`）。
+   本地此前对这段一律读 0 ⇒ 游戏状态从 f≈50 起与参考核分叉。 */
+static void test_bios9_image(void)
+{
+    nds_t *nds = nds_create();
+    if (nds == NULL)
+        return;
+    bus_t *bus = nds->bus;
+    uint8_t logo[BIOS9_LOGO_SIZE];
+    uint32_t w_before, w_after, w_rom_tail_before, w_rom_tail_after;
+    int arm7_seen;
+
+    for (unsigned i = 0; i < sizeof logo; i++)
+        logo[i] = (uint8_t)(0x40u + (i & 0x3Fu));
+
+    /* 注入前：读的是 FreeBIOS 镜像字节（只做「注入前后是否变化」的对照） */
+    w_before = bus_read32(bus, 0xFFFF0000u + BIOS9_LOGO_OFFSET);
+    w_rom_tail_before = bus_read32(bus, 0xFFFF0000u + BIOS9_LOGO_OFFSET
+                                        + BIOS9_LOGO_SIZE);
+
+    bios9_image_set_logo(logo);
+    w_after = bus_read32(bus, 0xFFFF0000u + BIOS9_LOGO_OFFSET);
+    CHECK_EQ("bios9 logo word0", w_after,
+             (uint32_t)logo[0] | ((uint32_t)logo[1] << 8)
+             | ((uint32_t)logo[2] << 16) | ((uint32_t)logo[3] << 24));
+    CHECK_EQ("bios9 logo last byte",
+             bus_read8(bus, 0xFFFF0000u + BIOS9_LOGO_OFFSET + BIOS9_LOGO_SIZE - 1u),
+             logo[BIOS9_LOGO_SIZE - 1]);
+    w_rom_tail_after = bus_read32(bus, 0xFFFF0000u + BIOS9_LOGO_OFFSET
+                                       + BIOS9_LOGO_SIZE);
+    CHECK_EQ("bios9 logo end = freebios", w_rom_tail_after, w_rom_tail_before);
+    CHECK_EQ("bios9 logo injected", w_after != w_before, 1);
+
+    /* BIOS 是只读 ROM：写它不该改变读回值 */
+    bus_write32(bus, 0xFFFF0000u + BIOS9_LOGO_OFFSET, 0xDEADBEEFu);
+    CHECK_EQ("bios9 read-only", bus_read32(bus, 0xFFFF0000u + BIOS9_LOGO_OFFSET),
+             w_after);
+
+    /* 只有 ARM9 看得到高地址 BIOS；ARM7 视角是未映射（读 0） */
+    bus->active_is_arm7 = 1;
+    arm7_seen = (int)bus_read32(bus, 0xFFFF0000u + BIOS9_LOGO_OFFSET);
+    bus->active_is_arm7 = 0;
+    CHECK_EQ("bios9 not visible to arm7", arm7_seen, 0);
+
+    bios9_image_set_logo(NULL);   /* 复位，避免影响后续用例 */
+    nds_destroy(nds);
 }
 
 /* ---- 阶段 3b 迁移：ARM 指令集（MOV/ADD/SUB/CMP/LDR/STR/B/BL/BX/AND/ORR/EOR） ---- */
@@ -6362,6 +6414,10 @@ int main(void)
         if (nds == NULL) return 1;
         test_window_render(nds);
         nds_destroy(nds);
+    }
+    printf("\n[case 21-B9yi xu108] ARM9 BIOS 区读数（FreeBIOS 镜像 + 注入的 logo）\n");
+    {
+        test_bios9_image();
     }
 
     printf("\n=== 共 %d 项检查，%d 项失败 ===\n", g_checks, g_failures);

@@ -330,3 +330,20 @@ ARM9 DTCM(动态基址, 仅 ARM9) → Main RAM 无缓存镜像(0x02400000, 同�
 
 **结果**：✅ 保留（默认开启，`NDS_NOFAST=1` 可关）。这是本项目第一个
 **可复现、且像素级零回归**的解释器核心性能优化。
+
+## 2026-09-13 · 21-B9yi（续108）：ARM9 高地址 BIOS（0xFFFF0000-0xFFFF3FFF）可读
+
+- **背景**：`bus_read8_core()` 一直只处理「ARM7 低地址 BIOS」（0x0000-0x3FFF →
+  FreeBIOS ARM7 镜像），ARM9 的高地址 BIOS 区**一律读 0**（异常向量由 `cpu.c` 里的
+  HLE 特判处理，所以此前没人注意）。
+- **为什么要补**：与参考核逐字节对账发现 f=50..250 恒有约 238 字节对不上，其中 156 字节
+  就是「游戏从 0xFFFF0020 拷到 0x020798A4」的任天堂 logo —— 参考核（FreeBIOS）在
+  `SetupDirectBoot()` 里把卡带头 logo 拷进 ARM9 BIOS 偏移 0x20，游戏再读回去用
+  （melonDS 原注释：Game 需要它做 DS<->GBA 通信）。详见
+  [`src/bios/bioslog.md`](../bios/bioslog.md) 续108。
+- **改法**：`bus_read8_core()` 增加分支——`!active_is_arm7 && 0xFFFF0000 <= addr < 0xFFFF4000`
+  时交给 `bios9_image_read8()`（`src/bios/bios9_image.c`：偏移 0x20..0xBB = 注入的 logo，
+  其余 = FreeBIOS ARM9 镜像）。写路径不变（BIOS 是只读 ROM，写被忽略）。
+- **验证**：单测 976 → 982 项 0 失败（含「ARM7 视角读不到高地址 BIOS」「BIOS 只读」）；
+  端到端本地 f=51 的 0x020798A4 与参考核 f=50 一致；f=50 跨核差异 236 B → 82 B；
+  锚点 2000 帧截图仍 `A72E11A2…CC513`。

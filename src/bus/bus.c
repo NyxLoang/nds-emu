@@ -3,6 +3,7 @@
 #include "bus.h"
 #include "io/io.h"
 #include "bios/bios7_image.h"
+#include "bios/bios9_image.h"
 
 bus_t *bus_create(void)
 {
@@ -692,6 +693,18 @@ static uint8_t bus_read8_core(const bus_t *bus, uint32_t addr)
     if (bus->active_is_arm7 && addr < 0x4000u) {
         uint8_t v;
         if (bios7_image_read8(addr, &v))
+            return v;
+    }
+    /* ARM9 高地址 0xFFFF0000-0xFFFF3FFF 是 ARM9 BIOS ROM（只有 ARM9 看得到）。
+       21-B9yi(续108)：此前这段一律读 0（只把 0xFFFF0018 那几条异常向量用 HLE
+       特判掉），而参考核用 FreeBIOS，并且 **`SetupDirectBoot()` 会把卡带头里的
+       Nintendo logo 拷进 BIOS 偏移 0x20**（melonDS 原注释：「Game 需要它做
+       DS<->GBA 通信」）。FFXII 启动时会 `memcpy(0x020798A4, 0xFFFF0020, 0x9C)`
+       把这 156 字节读回去，本地读 0 ⇒ 主存里那 156 字节永远是 0、状态从第 50 帧
+       起与参考核分叉（详见 src/bios/bios9_image.h）。 */
+    if (!bus->active_is_arm7 && addr >= 0xFFFF0000u && addr < 0xFFFF4000u) {
+        uint8_t v;
+        if (bios9_image_read8(addr - 0xFFFF0000u, &v))
             return v;
     }
     const uint8_t *region;

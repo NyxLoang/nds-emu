@@ -260,3 +260,38 @@ distinct ref=93 loc=93   (集合完全相同：only-ref/only-loc 均为空)
 - **结论**：❌ 排除该怀疑。重帧是**游戏自己的 CPU 循环**（解包/构建显示列表等）造成的，
   要进一步提速只能靠更快的 CPU 核心（JIT/重编译器），不属于本轮范围。
   保留统计诊断（很便宜，将来任何 ROM 出现「拷贝型尖峰」都能一眼看出）。
+
+## 2026-09-13 · 21-B9yi（续108）：**ARM9 BIOS 区可读**（FreeBIOS 镜像 + 注入 Nintendo logo）
+
+- **症状（跨核对账）**：与参考核逐字节对账时，f=50..250 恒有约 238 字节对不上，其中
+  **0x020798A4 起 156 字节**在参考核有数据、本地全 0；那 156 字节正是**任天堂 logo**。
+- **定位**：用参考核新加的可配置写监视（`REF_WATCH_LO/HI`）+ 本地 `--watch` 对照，
+  再 `tools/ndsdis.py` 反汇编 0x02012740 得
+  `ldr r0,[pc,#0x98]`(→0xFFFF0020) / `mov r2,#0x9C` / `bl 0x02009E5C`(memcpy)
+  ⇒ 游戏在做 **`memcpy(0x020798A4, 0xFFFF0020, 0x9C)`**：源地址是 **ARM9 BIOS**。
+  参考核源码里找到出处（melonDS `NDS::SetupDirectBoot()`）：
+  ```cpp
+  // Copy the Nintendo logo from the NDS ROM header to the ARM9 BIOS if using FreeBIOS
+  // Games need this for DS<->GBA comm to work
+  memcpy(ARM9BIOS.data() + 0x20, header.NintendoLogo, 0x9C);
+  ```
+- **根因**：本地对 ARM9 BIOS 区（0xFFFF0000-0xFFFF3FFF）**一律读 0**（只 HLE 特判了
+  0xFFFF0018 那几条异常向量），既没有 FreeBIOS ARM9 镜像，也没有「把卡带头 logo 拷进
+  BIOS 偏移 0x20」这一步 ⇒ 游戏读回全 0。
+- **做了什么**：
+  - 新增 `src/bios/bios9_image.{c,h}`：ARM9 BIOS 区可读字节。偏移 0x20..0xBB 返回
+    **运行期注入的 Nintendo logo**（调用方给的就是 ROM 头那 156 字节，与参考核
+    「从卡带头拷进 BIOS」等价，因此不额外携带任何 ROM 数据），其余偏移返回 FreeBIOS ARM9 镜像。
+  - `src/bios/bios9_rom.h` 由新脚本 `tools/gen_bios9_rom.py` 生成（来源与已有的
+    ARM7 镜像同源：melonDS `FreeBIOS_Data.h` 的 `bios_ntr_arm9[]`，BSD-2，头部保留版权声明；
+    有效 1876 字节，其余补 0）。
+  - `bus_read8_core()` 增加 ARM9 高地址 BIOS 分支（只有 ARM9 看得到，ARM7 视角仍未映射）。
+  - `direct_boot_tables()`：`bios9_image_set_logo(cart->data + 0xC0)`。
+- **怎么验证**：单测 976 → **982 项 0 失败**（新增 6 项：读回 logo 首字/末字节、logo 尾后
+  仍是 FreeBIOS 字节、BIOS 只读、ARM7 看不到）。端到端：本地 f=51 主存 0x020798A4 =
+  `0x51AEFF24`，与参考核 f=50 完全一致；f=50 的跨核差异 **236 B → 82 B**；锚点 2000 帧
+  截图仍 `A72E11A2…CC513`（行为无回归）。
+- **结论**：✅ 保留。剩下那 82 字节与 f≈285 的 4380 字节分叉已定位到**两核 IPC 消息流**
+  （本地多发一条 ARM9 消息 0x80004106，且 ARM9 的 switch 分支取到 5 而参考核是 1），
+  见 [`docs/21-rom-bringup.md`](../../docs/21-rom-bringup.md) 续108 与
+  [`src/bus/buslog.md`](../bus/buslog.md)。

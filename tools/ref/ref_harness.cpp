@@ -22,6 +22,46 @@ namespace melonDS { int RefDbgFrame = -1; }
 static int g_trace_frame = -1;
 static int g_fifo_trace_count = 0;
 
+/* 21-B9yi(续108)：**可配置写监视** `REF_WATCH_LO` / `REF_WATCH_HI`（16 进制，
+   半开区间）+ `REF_WATCH_MAX`（打印上限，默认 20000）。
+   起因：harness 里原有的地址是硬编码的（0x02076F18 那一批），想换一个地址就得
+   改代码重编；而查「同一帧两边对同一变量的写入序列」时需要反复换地址。
+   现在 ARM9/ARM7 的 8/16/32 位写都挂同一个钩子，输出格式对齐本地 `--watch`
+   （谁写、写什么、pc/lr/帧号），可以直接逐行 diff。 */
+static u32 g_watch_lo = 0, g_watch_hi = 0;
+static int g_watch_max = 20000, g_watch_count = 0, g_watch_state = 0;
+
+static void watch_init(void)
+{
+    if (g_watch_state != 0)
+        return;
+    g_watch_state = 1;
+    if (const char* lo = std::getenv("REF_WATCH_LO"))
+        g_watch_lo = (u32)std::strtoul(lo, nullptr, 16);
+    if (const char* hi = std::getenv("REF_WATCH_HI"))
+        g_watch_hi = (u32)std::strtoul(hi, nullptr, 16);
+    if (const char* m = std::getenv("REF_WATCH_MAX"))
+        g_watch_max = std::atoi(m);
+}
+
+static void watch_write(int who, const char* op, u32 addr, u64 val,
+                        u32 pc, u32 lr, u32 sp, u32 cpsr)
+{
+    watch_init();
+    if (g_watch_lo >= g_watch_hi)
+        return;
+    if (addr < g_watch_lo || addr >= g_watch_hi)
+        return;
+    if (g_watch_count >= g_watch_max)
+        return;
+    g_watch_count++;
+    std::printf("refwatch arm%d %s a=%08X v=%08llX pc=%08X lr=%08X sp=%08X"
+                " cpsr=%08X f=%d\n",
+                who == 0 ? 9 : 7, op, addr, (unsigned long long)val,
+                pc, lr, sp, cpsr, g_trace_frame);
+    std::fflush(stdout);
+}
+
 /* 21-B9yi(续86)：REF_WAV=路径 → 把参考核 SPU 的输出写成 WAV
    （32768Hz / 16bit / 立体声），与本地 `--snd-wav` 同口径对照「声音」。
    melonDS 的 RunFrame() 末尾会 SPU.BufferAudio()，所以无音频前端也会产样本。 */
@@ -208,6 +248,7 @@ public:
 
     void ARM7Write8(u32 addr, u8 val) override
     {
+        watch_write(1, "w8", addr, val, ARM7.R[15], ARM7.R[14], ARM7.R[13], ARM7.CPSR);
         u32 oldv = 0;
         bool interested = (addr & 0xFF800000) == 0x03800000;
         if (interested) {
@@ -226,6 +267,7 @@ public:
 
     void ARM7Write16(u32 addr, u16 val) override
     {
+        watch_write(1, "w16", addr, val, ARM7.R[15], ARM7.R[14], ARM7.R[13], ARM7.CPSR);
         u32 oldv = 0;
         bool interested = (addr & 0xFF800000) == 0x03800000;
         if (interested) {
@@ -244,6 +286,7 @@ public:
 
     void ARM7Write32(u32 addr, u32 val) override
     {
+        watch_write(1, "w32", addr, val, ARM7.R[15], ARM7.R[14], ARM7.R[13], ARM7.CPSR);
         u32 oldv = 0;
         bool interested = (addr & 0xFF800000) == 0x03800000;
         if (interested) {
@@ -265,6 +308,31 @@ public:
     void TraceFifoSend(int who, u32 addr, u32 val)
     {
         if (addr != 0x04000188u && addr != 0x04000180u) return;
+        /* 21-B9yi(续108)：**紧凑的 IPC 发送流**（REF_FIFO_LOG=1，上限 REF_FIFO_MAX，
+           默认 20000）。原来的 TraceFifoSend 每个事件打一行超长文本且只留 100 条，
+           用来做「两核 IPC 消息流逐条对照」既不够用也不好看。紧凑格式与本地的
+           `--watch 04000188-0400018C` 对齐（谁写、写什么、pc/lr/帧号）。 */
+        {
+            static int log_on = -1, log_max = 20000, log_n = 0;
+            if (log_on == -1) {
+                const char* e = std::getenv("REF_FIFO_LOG");
+                log_on = (e != nullptr && e[0] != '0') ? 1 : 0;
+                if (const char* m = std::getenv("REF_FIFO_MAX"))
+                    log_max = std::atoi(m);
+            }
+            if (log_on == 1) {
+                if (log_n < log_max) {
+                    log_n++;
+                    std::printf("fifolog arm%d a=%08X v=%08X pc=%08X lr=%08X f=%d\n",
+                                who == 0 ? 9 : 7, addr, val,
+                                who == 0 ? ARM9.R[15] : ARM7.R[15],
+                                who == 0 ? ARM9.R[14] : ARM7.R[14],
+                                g_trace_frame);
+                    std::fflush(stdout);
+                }
+                return;   /* 只要流，就不要每个事件那 20 个栈字的噪音 */
+            }
+        }
         if (g_fifo_trace_count >= 100) return;
         g_fifo_trace_count++;
         u32 pc = who == 0 ? ARM9.R[15] : ARM7.R[15];
@@ -324,8 +392,21 @@ public:
         std::fflush(stdout);
     }
 
+    void ARM9Write8(u32 addr, u8 val) override
+    {
+        watch_write(0, "w8", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR);
+        NDS::ARM9Write8(addr, val);
+    }
+
+    void ARM9Write16(u32 addr, u16 val) override
+    {
+        watch_write(0, "w16", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR);
+        NDS::ARM9Write16(addr, val);
+    }
+
     void ARM9Write32(u32 addr, u32 val) override
     {
+        watch_write(0, "w32", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR);
         if ((addr & ~3u) == 0x04000188u || (addr & ~3u) == 0x04000180u)
             TraceFifoSend(0, addr & ~3u, val);
         if (addr == 0x02079104u || addr == 0x02076F18u ||

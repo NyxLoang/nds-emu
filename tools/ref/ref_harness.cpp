@@ -53,7 +53,8 @@ static void watch_init(void)
 }
 
 static void watch_write(int who, const char* op, u32 addr, u64 val,
-                        u32 pc, u32 lr, u32 sp, u32 cpsr)
+                        u32 pc, u32 lr, u32 sp, u32 cpsr,
+                        u64 t9, u64 t7)   /* 21-B9yi(续109k)：加周期戳 */
 {
     watch_init();
     if (g_watch_lo >= g_watch_hi)
@@ -63,10 +64,14 @@ static void watch_write(int who, const char* op, u32 addr, u64 val,
     if (g_watch_count >= g_watch_max)
         return;
     g_watch_count++;
+    /* `t9/t7` = melonDS 的 ARM9/ARM7 时间戳（**同一系统时间轴**，单位 = ARM9 周期）。
+       用途：量「一轮握手 / 一次轮询」在参考核里到底耗多少系统时间，再和本地
+       `--watch` 的 `now=` 对齐（跨核节奏对照，见 docs/21 续109k）。 */
     std::printf("refwatch arm%d %s a=%08X v=%08llX pc=%08X lr=%08X sp=%08X"
-                " cpsr=%08X f=%d\n",
+                " cpsr=%08X f=%d t9=%llu t7=%llu\n",
                 who == 0 ? 9 : 7, op, addr, (unsigned long long)val,
-                pc, lr, sp, cpsr, g_trace_frame);
+                pc, lr, sp, cpsr, g_trace_frame,
+                (unsigned long long)t9, (unsigned long long)t7);
     std::fflush(stdout);
 }
 
@@ -313,7 +318,7 @@ public:
 
     void ARM7Write8(u32 addr, u8 val) override
     {
-        watch_write(1, "w8", addr, val, ARM7.R[15], ARM7.R[14], ARM7.R[13], ARM7.CPSR);
+        watch_write(1, "w8", addr, val, ARM7.R[15], ARM7.R[14], ARM7.R[13], ARM7.CPSR, ARM9Timestamp, ARM7Timestamp);
         u32 oldv = 0;
         bool interested = (addr & 0xFF800000) == 0x03800000;
         if (interested) {
@@ -332,7 +337,7 @@ public:
 
     void ARM7Write16(u32 addr, u16 val) override
     {
-        watch_write(1, "w16", addr, val, ARM7.R[15], ARM7.R[14], ARM7.R[13], ARM7.CPSR);
+        watch_write(1, "w16", addr, val, ARM7.R[15], ARM7.R[14], ARM7.R[13], ARM7.CPSR, ARM9Timestamp, ARM7Timestamp);
         u32 oldv = 0;
         bool interested = (addr & 0xFF800000) == 0x03800000;
         if (interested) {
@@ -351,7 +356,7 @@ public:
 
     void ARM7Write32(u32 addr, u32 val) override
     {
-        watch_write(1, "w32", addr, val, ARM7.R[15], ARM7.R[14], ARM7.R[13], ARM7.CPSR);
+        watch_write(1, "w32", addr, val, ARM7.R[15], ARM7.R[14], ARM7.R[13], ARM7.CPSR, ARM9Timestamp, ARM7Timestamp);
         u32 oldv = 0;
         bool interested = (addr & 0xFF800000) == 0x03800000;
         if (interested) {
@@ -459,7 +464,7 @@ public:
 
     void ARM9Write8(u32 addr, u8 val) override
     {
-        watch_write(0, "w8", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR);
+        watch_write(0, "w8", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR, ARM9Timestamp, ARM7Timestamp);
         NDS::ARM9Write8(addr, val);
     }
 
@@ -479,13 +484,13 @@ public:
 
     void ARM9Write16(u32 addr, u16 val) override
     {
-        watch_write(0, "w16", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR);
+        watch_write(0, "w16", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR, ARM9Timestamp, ARM7Timestamp);
         NDS::ARM9Write16(addr, val);
     }
 
     void ARM9Write32(u32 addr, u32 val) override
     {
-        watch_write(0, "w32", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR);
+        watch_write(0, "w32", addr, val, ARM9.R[15], ARM9.R[14], ARM9.R[13], ARM9.CPSR, ARM9Timestamp, ARM7Timestamp);
         if ((addr & ~3u) == 0x04000188u || (addr & ~3u) == 0x04000180u)
             TraceFifoSend(0, addr & ~3u, val);
         if (addr == 0x02079104u || addr == 0x02076F18u ||

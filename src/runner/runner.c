@@ -866,6 +866,19 @@ static int runner_step(runner_t *r)
         step7 = (RUNNER_SYS9(r->cost9) > r->cost7);
     if (step7) {
         cpu_step(nds->cpu7);
+        /* 21-B9yi(续109k)：ARM7 计费倍率（诊断/标定用）。默认 1（零改动）；
+           设成 N 就是把 ARM7 每步的 step_cycles 乘以 N —— 用来验证「ARM7 是否
+           算得太快」，再决定是否按 melonDS 的 ARM7MemTimings 做正式模型。 */
+        if (nds->cpu7->step_cycles != 0) {
+            static int arm7_mul = -1;
+            if (arm7_mul < 0) {
+                const char *e = getenv("NDS_ARM7_MUL");
+                int v = (e != NULL) ? atoi(e) : 1;
+                arm7_mul = (v < 1) ? 1 : (v > 64 ? 64 : v);
+            }
+            if (arm7_mul > 1)
+                nds->cpu7->step_cycles *= (uint32_t)arm7_mul;
+        }
         r->a7_wait = (nds->cpu7->step_cycles == 0);
         if (!r->a7_wait) r->cost7 += nds->cpu7->step_cycles;
         if (trace_enabled() && runner_frame_index(r) >= s_trace_frame)

@@ -25,6 +25,23 @@ static void cpu_diag_init(void);
    POP{pc} 还是 MSR 干的。默认关闭（零开销：只在开关为 1 时多一次比较）。 */
 static int s_twatch = -1;
 
+/* 21-B9yi(续109k)：**ARM7 计费倍率（诊断/标定用）** `NDS_ARM7_MUL=N`（默认 1）。
+   用途：先回答「ARM7 是不是算得太快」这个方向性问题 —— 跨核量到参考核的握手一轮
+   是 1650 系统单位（538 条指令 ≈ 3.07 单位/条），本地只有 803（≈1.49 单位/条），
+   正好差约一半。这个开关把 ARM7 每步的 `step_cycles` 乘以 N，用来验证「放慢 ARM7
+   能否让握手通过」，再决定是否按 melonDS 的 ARM7MemTimings 表做正式模型。 */
+static int s_arm7_mul = -1;
+
+static unsigned arm7_mul(void)
+{
+    if (s_arm7_mul < 0) {
+        const char *e = getenv("NDS_ARM7_MUL");
+        int v = (e != NULL) ? atoi(e) : 1;
+        s_arm7_mul = (v < 1) ? 1 : (v > 64 ? 64 : v);
+    }
+    return (unsigned)s_arm7_mul;
+}
+
 static int twatch_on(void)
 {
     if (s_twatch < 0) {

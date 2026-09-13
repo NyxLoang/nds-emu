@@ -48,7 +48,7 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_IODUMP_FRAME=N` | 打印第 N 帧的 2D 显示寄存器 + VRAMCNT + 颜色特效寄存器（对应本地 `NDS_IODUMP_FRAME`） |
 | `REF_WAV=路径.wav` | **把参考核 SPU 输出录成 WAV**（32768Hz/16bit/立体声），与本地 `--snd-wav` 同口径对照「声音」（21-B9yi 续86） |
 | `REF_RAMDUMP_FRAME=N` | 额外在第 N 帧 dump 主内存（`%TEMP%\ref_f<N>_mainram.bin`）。固定帧号只有 10 个，这个用来**二分定位分叉帧**（21-B9yi 续91） |
-| `REF_WATCH_LO=0206C200` / `REF_WATCH_HI=0206C210` / `REF_WATCH_MAX=N` | **可配置写监视**（16 进制、半开区间）：ARM9/ARM7 的 8/16/32 位写都打一行 `refwatch arm9 w32 a=… v=… pc=… lr=… f=…`，格式对齐本地 `--watch`，于是「同一个地址谁来写、写什么」可以逐行对照（21-B9yi 续108） |
+| `REF_WATCH_LO=0206C200` / `REF_WATCH_HI=0206C210` / `REF_WATCH_MAX=N` | **可配置写监视**（16 进制、半开区间）：ARM9/ARM7 的 8/16/32 位写都打一行 `refwatch arm9 w32 a=… v=… pc=… lr=… f=… t9=… t7=…`，格式对齐本地 `--watch`，于是「同一个地址谁来写、写什么」可以逐行对照（21-B9yi 续108）。**`t9`/`t7` 是 melonDS 的 ARM9/ARM7 时间戳（同一系统时间轴、单位 = ARM9 周期）**，用来量「一轮握手/一次轮询」在参考核里的真实耗时；本地对应值是 trace 的 `now=`（21-B9yi 续109k：参考核两核一轮 ≈1627/1650，本地握手段 ≈800/803 且锁步，握手后 ARM9 掉成 7000–8600/轮的纯超时） |
 | `REF_FIFO_LOG=1` / `REF_FIFO_MAX=N` | **IPC 发送流日志**：每次写 0x04000188 打一行 `fifolog arm9 a=… v=… pc=… lr=… f=…`（默认上限 20000），与本地 `--watch 04000188-0400018C` 对齐，用来逐条对照两核消息流（21-B9yi 续108） |
 | `REF_PCHIT_LO=0200EE4C` / `REF_PCHIT_HI=0200EF00` / `REF_PCHIT_MAX=N` | 挂 `ARM9Read16/32` 的**地址命中**日志（`refpc arm9 …`）。**已知限制**：本版 melonDS 的**指令取指走 ARM.h 的内联 `CodeRead16/32→BusRead*`**，不进虚拟 `NDS::ARM9Read*` ⇒ 抓不到取指（实测对确定会执行的地址也是 0 命中），只对**数据读**有效；要追「执行了哪段代码」得给参考树打补丁（21-B9yi 续108 记录了这个负结果） |
 | `REF_INSTRSTAT=N` | 每 N 帧打一行 `refinstr: f=… i9=… i7=… b9=… b7=…`（两核**累计指令条数** + 其中**执行在 BIOS 区**的条数；与本模拟器的 `NDS_INSTRSTAT=N` 同口径）。需要先给参考树打 `melonds-armstat.patch`（见下） |

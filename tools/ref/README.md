@@ -51,6 +51,26 @@ ninja -C "$env:TEMP\melonds-ref\build-core" refhead
 | `REF_WATCH_LO=0206C200` / `REF_WATCH_HI=0206C210` / `REF_WATCH_MAX=N` | **可配置写监视**（16 进制、半开区间）：ARM9/ARM7 的 8/16/32 位写都打一行 `refwatch arm9 w32 a=… v=… pc=… lr=… f=…`，格式对齐本地 `--watch`，于是「同一个地址谁来写、写什么」可以逐行对照（21-B9yi 续108） |
 | `REF_FIFO_LOG=1` / `REF_FIFO_MAX=N` | **IPC 发送流日志**：每次写 0x04000188 打一行 `fifolog arm9 a=… v=… pc=… lr=… f=…`（默认上限 20000），与本地 `--watch 04000188-0400018C` 对齐，用来逐条对照两核消息流（21-B9yi 续108） |
 | `REF_PCHIT_LO=0200EE4C` / `REF_PCHIT_HI=0200EF00` / `REF_PCHIT_MAX=N` | 挂 `ARM9Read16/32` 的**地址命中**日志（`refpc arm9 …`）。**已知限制**：本版 melonDS 的**指令取指走 ARM.h 的内联 `CodeRead16/32→BusRead*`**，不进虚拟 `NDS::ARM9Read*` ⇒ 抓不到取指（实测对确定会执行的地址也是 0 命中），只对**数据读**有效；要追「执行了哪段代码」得给参考树打补丁（21-B9yi 续108 记录了这个负结果） |
+| `REF_INSTRSTAT=N` | 每 N 帧打一行 `refinstr: f=… i9=… i7=…`（**累计指令条数**，与本模拟器的 `NDS_INSTRSTAT=N` 同口径）。需要先给参考树打 `melonds-armstat.patch`（见下） |
+
+### 可选补丁：`melonds-armstat.patch`（每帧指令数，21-B9yi 续108e）
+
+`REF_INSTRSTAT` 依赖 melonDS 的 ARM 核里一个诊断计数器（`ARM::InstrCount`，在
+`ARM::Execute` 的解释器循环里每条 +1）。这不是 melonDS 上游代码，应用方式：
+
+```powershell
+git -C "$env:TEMP\melonds-ref" apply <仓库路径>\tools\ref\melonds-armstat.patch
+ninja -C "$env:TEMP\melonds-ref\build-core" refhead
+```
+
+为什么值得打：这是判断「时序口径」差异最直接的量。实测（同键脚本）：
+
+```text
+稳定窗口 f=50..250 的每帧增量：本地 ARM9 3.63k / ARM7 14.5k，参考核 3.77k / 15.6k
+⇒ 稳态每帧指令量两边只差 4%~7%（**不是**「本机跑得飞快」那种量级）
+但累计到 f=50：本地 ARM9 15.41M vs 参考核 12.77M（+20%）、ARM7 1.01M vs 1.46M（-15%）
+⇒ 差异集中在**开机段**（两边开机进度本就差几帧），稳态并不偏。
+```
 
 ## 主内存逐字节对账（21-B9yi 续91）
 

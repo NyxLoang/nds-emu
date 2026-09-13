@@ -638,6 +638,21 @@ int main(int argc, char** argv)
         u32 disp = nds->ARM9IORead32(0x04000000);
         if (disp != 0 || frame < 100 || (frame % 50) == 0)
             std::printf("frame %d disp=%08X\n", frame, disp);
+        /* 21-B9yi(续108e)：**每帧指令数** `REF_INSTRSTAT=N`（每 N 帧一行），
+           与本模拟器的 `NDS_INSTRSTAT=N` 的 `instr: f=… i9=… i7=…` 同口径。
+           计数器加在 ARM.cpp 的解释器循环里（见 tools/ref/melonds-armstat.patch）。 */
+        {
+            static int instr_every = -1;
+            if (instr_every == -1) {
+                const char* e = std::getenv("REF_INSTRSTAT");
+                instr_every = e ? std::atoi(e) : 0;
+                if (instr_every < 1) instr_every = 0;
+            }
+            if (instr_every > 0 && (frame % instr_every) == 0)
+                std::printf("refinstr: f=%d i9=%llu i7=%llu\n", frame,
+                            (unsigned long long)nds->ARM9.InstrCount,
+                            (unsigned long long)nds->ARM7.InstrCount);
+        }
         /* 21-B9yi(续91)：`REF_RAMDUMP_FRAME=N` → 额外在第 N 帧 dump 主内存，
            便于用二分法定位「本地与参考核从哪一帧开始分叉」（固定帧号只有 10 个，
            不够细）。文件名与固定帧号的一致，本地用 ramcmp.ps1 对账。 */

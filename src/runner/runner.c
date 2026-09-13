@@ -1572,6 +1572,26 @@ void runner_headless_frames(nds_t *nds, uint64_t frames, const char *shot_path,
                    nds->cpu->r[13], nds->cpu->r[14]);
             fflush(stdout);
         }
+        /* 21-B9yi(续108e)：**每帧指令数**诊断 `NDS_INSTRSTAT=N`（每 N 帧一行）。
+           为什么需要：跨核对账时「同一帧里两核各执行了多少条指令」是判断时序口径
+           （每指令计费、访存等待）最直接的量。`cpu->cycles` 在这里就是**指令条数**
+           （每条 +1，见 cpu.c），与参考核 harness 的 `refinstr:` 同口径。 */
+        {
+            static uint64_t instr_every = 0;
+            if (instr_every == 0) {
+                const char *e = getenv("NDS_INSTRSTAT");
+                instr_every = (e != NULL) ? (uint64_t)atoll(e) : UINT64_MAX;
+                if (instr_every == 0)
+                    instr_every = 1;
+            }
+            if (fr % instr_every == 0) {
+                printf("instr: f=%llu i9=%llu i7=%llu\n",
+                       (unsigned long long)fr,
+                       (unsigned long long)nds->cpu->cycles,
+                       (unsigned long long)nds->cpu7->cycles);
+                fflush(stdout);
+            }
+        }
     }
 
     printf("headless-frames: done. frame=%llu now=%llu"

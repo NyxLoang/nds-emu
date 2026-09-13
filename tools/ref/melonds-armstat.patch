@@ -1,0 +1,45 @@
+diff --git a/src/ARM.cpp b/src/ARM.cpp
+index 3937a99..f144baf 100644
+--- a/src/ARM.cpp
++++ b/src/ARM.cpp
+@@ -158,6 +158,7 @@ void ARM::Reset()
+ {
+     Cycles = 0;
+     Halted = 0;
++    InstrCount = 0;   /* 21-B9yi(xu108e) diagnostic counter */
+ 
+     IRQ = 0;
+ 
+@@ -616,6 +617,7 @@ void ARMv5::Execute()
+ 
+     while (NDS.ARM9Timestamp < NDS.ARM9Target)
+     {
++        InstrCount++;   /* 21-B9yi(xu108e) diagnostic: one per interpreted instruction */
+ #ifdef JIT_ENABLED
+         if constexpr (mode == CPUExecuteMode::JIT)
+         {
+@@ -756,6 +758,7 @@ void ARMv4::Execute()
+ 
+     while (NDS.ARM7Timestamp < NDS.ARM7Target)
+     {
++        InstrCount++;   /* 21-B9yi(xu108e) diagnostic: one per interpreted instruction */
+ #ifdef JIT_ENABLED
+         if constexpr (mode == CPUExecuteMode::JIT)
+         {
+diff --git a/src/ARM.h b/src/ARM.h
+index 88f970b..0915cd3 100644
+--- a/src/ARM.h
++++ b/src/ARM.h
+@@ -68,6 +68,11 @@ public:
+     ARM(u32 num, bool jit, std::optional<GDBArgs> gdb, NDS& nds);
+     virtual ~ARM(); // destroy shit
+ 
++    /* 21-B9yi(xu108e) diagnostic: executed instruction count (incremented once
++       per interpreted instruction in ARM::Execute).  Used together with our
++       NDS_INSTRSTAT to compare "how many instructions each core runs per frame"
++       against the reference core. */
++    u64 InstrCount = 0;
++
+     void SetGdbArgs(std::optional<GDBArgs> gdb);
+ 
+     virtual void Reset();
